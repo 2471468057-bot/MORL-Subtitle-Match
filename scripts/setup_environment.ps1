@@ -158,12 +158,35 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 $Uv = (Get-Command uv).Source
 $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
+
+function New-UvVenv {
+    param(
+        [Parameter(Mandatory = $true)][string]$PythonVersion,
+        [Parameter(Mandatory = $true)][string]$VenvPath
+    )
+    # uv 的 Python 版本链接（junction）在中断安装后可能残留损坏条目，
+    # 触发 Windows “不受信任的装入点”（os error 448）；失败时清理 uv\python 后重试一次。
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try {
+            Invoke-External $Uv @("venv", "--python", $PythonVersion, "--allow-existing", $VenvPath)
+            return
+        } catch {
+            if ($attempt -ge 2 -or $_.Exception.Message -notmatch "minor version link|untrusted|os error 448") {
+                throw
+            }
+            Write-Warning "uv 创建 Python 版本链接失败，清理 uv\python 残留后重试..."
+            Remove-Item (Join-Path $env:LOCALAPPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $env:APPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Write-Host "[环境] 创建主流程 Python $($Lock.python.main) ..."
-Invoke-External $Uv @("venv", "--python", [string]$Lock.python.main, "--allow-existing", $MainEnv)
+New-UvVenv ([string]$Lock.python.main) $MainEnv
 Invoke-External $Uv @("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt"), "--torch-backend=auto")
 
 Write-Host "[环境] 创建 MOSS Python $($Lock.python.moss) ..."
-Invoke-External $Uv @("venv", "--python", [string]$Lock.python.moss, "--allow-existing", $MossEnv)
+New-UvVenv ([string]$Lock.python.moss) $MossEnv
 Invoke-External $Uv @("pip", "install", "--python", $MossPython, "-e", "$MossSource[torch-runtime]", "--torch-backend=auto")
 
 if (-not (Test-Path (Join-Path $MossEnv "Scripts\hf.exe"))) {
