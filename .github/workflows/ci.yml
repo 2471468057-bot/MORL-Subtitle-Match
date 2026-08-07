@@ -31,4 +31,5 @@ jobs:
           python -m pytest -q tests
       - name: Release hygiene (offline)
         run: |
+          $env:PYTHONUTF8 = "1"
           python scripts/check_release_hygiene.py
