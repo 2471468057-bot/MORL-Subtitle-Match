@@ -172,10 +172,20 @@ function New-UvVenv {
             Invoke-External $Uv @("venv", "--python", $PythonVersion, "--allow-existing", $VenvPath)
             return
         } catch {
-            if ($attempt -ge 2) { throw }
-            Write-Warning "uv 创建虚拟环境失败，清理 uv\python 残留后重试..."
-            Remove-Item (Join-Path $env:LOCALAPPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item (Join-Path $env:APPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
+            if ($attempt -ge 2) {
+                throw "uv 创建虚拟环境持续失败。请先关闭正在运行的 2ByteASR 窗口，再重新运行 setup_2byteasr.bat。"
+            }
+            Write-Warning "uv 创建虚拟环境失败，清理 uv\python 与目标 venv 残留后重试..."
+            foreach ($pythonRoot in @((Join-Path $env:LOCALAPPDATA "uv\python"), (Join-Path $env:APPDATA "uv\python"))) {
+                if (Test-Path $pythonRoot) {
+                    # cmd rmdir 只删除 junction 本身、不跟随目标，
+                    # 不会触发 Windows “不受信任的装入点”（os error 448）。
+                    & cmd /c "rmdir /s /q `"$pythonRoot`"" 2>$null | Out-Null
+                }
+            }
+            # venv 内的 python 链接指向已删除的 uv Python 安装，同样需要清理；
+            # 若被运行中的 2ByteASR 占用则删除失败，重试一次后会给出明确提示。
+            Remove-Item $VenvPath -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
