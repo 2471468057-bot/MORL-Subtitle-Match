@@ -193,6 +193,35 @@ RUNTIME_FORCE_REFRESH_POLISH_CACHE = _DEFAULT_RUNTIME_CONTEXT.force_refresh_poli
 RUNTIME_FORCE_REFRESH_GROUP_CACHE = _DEFAULT_RUNTIME_CONTEXT.force_refresh_group_cache
 
 
+def _supplement_tool_path():
+    """winget 等安装的 FFmpeg/ffprobe 可能不在当前进程 PATH（新装环境常见），
+    把常见安装位置补充进 PATH，避免“缺少 ffmpeg/ffprobe”误报。"""
+    candidates = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "FFmpeg", "bin"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages"),
+        os.path.join(os.environ.get("ProgramFiles", ""), "FFmpeg", "bin"),
+        r"C:\ffmpeg\bin",
+    ]
+    extra = [c for c in candidates if c and os.path.isdir(c)]
+    for base in candidates:
+        if not base or not os.path.isdir(base):
+            continue
+        if os.path.basename(base) == "Packages":
+            # winget portable 包实际解压在 WinGet\Packages\<包名>\...，递归定位 ffmpeg.exe
+            for root, dirs, files in os.walk(base):
+                if "ffmpeg.exe" in files:
+                    extra.append(root)
+                    dirs[:] = []
+    if extra:
+        os.environ["PATH"] = os.pathsep.join(
+            [*dict.fromkeys(extra), os.environ.get("PATH", "")]
+        )
+
+
+_supplement_tool_path()
+
+
 PARALLEL_CLOUD_BATCHES = RUNTIME_SETTINGS["performance"]["parallel_cloud_batches"]
 
 
@@ -742,6 +771,42 @@ def learned_mappings_for_game(game_name=None):
         for item in mappings
         if isinstance(item, dict) and item.get("from") and item.get("to")
     ]
+
+
+def add_learned_mapping(game_name, source, target):
+    """手动新增一条已学习映射；from==to 表示确认专名正确写法。返回是否新增。"""
+    game_name = canonicalize_runtime_game_name(game_name)
+    identity = runtime_game_identity(game_name)
+    source = content_only(source)
+    target = content_only(target)
+    if not source or not target:
+        return False
+    payload = load_learned_term_payload()
+    payload["schema"] = 1
+    entry = payload.setdefault("games", {}).setdefault(
+        identity, {"game": game_name, "mappings": []}
+    )
+    mappings = entry.setdefault("mappings", [])
+    for item in mappings:
+        if item.get("from") == source and item.get("to") == target:
+            return False
+    mappings.append(
+        {
+            "from": source,
+            "to": target,
+            "reason": "手动添加",
+            "sources": ["user_manual"],
+            "verification": "user_manual",
+            "confirmed": True,
+            "updated": time.strftime("%Y-%m-%d"),
+        }
+    )
+    try:
+        os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
+        atomic_write_json(LEARNED_TERMS_PATH, payload)
+    except OSError:
+        return False
+    return True
 
 
 def persist_learned_mappings(game_name, mappings):

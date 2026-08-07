@@ -1507,6 +1507,32 @@ class MainWindow(QWidget):
         title.setObjectName("sectionTitle")
         title.setMaximumWidth(245)
         layout.addWidget(title)
+        # 素材区放在最上方：用户应先放入素材，再配置内容设置。
+        self.media_frame = QFrame()
+        self.media_frame.setObjectName("mediaRow")
+        self.media_frame.setProperty("dropActive", False)
+        self.media_frame.setMinimumHeight(68)
+        media_row = QHBoxLayout(self.media_frame)
+        media_row.setContentsMargins(16, 11, 13, 11)
+        media_icon = QLabel()
+        media_icon.setPixmap(_icon("fa5s.file-audio").pixmap(QSize(20, 20)))
+        media_row.addWidget(media_icon)
+        media_row.addWidget(QLabel("本地素材"))
+        media_row.addSpacing(20)
+        media_text = QVBoxLayout()
+        media_text.setSpacing(1)
+        self.media_name = QLabel("")
+        self.media_name.setStyleSheet("font-weight: 700; color: #5d3e20;")
+        self.media_drop_hint = QLabel("可把视频 / 音频拖到窗口，或点击右侧选择")
+        self.media_drop_hint.setObjectName("dropHint")
+        media_text.addWidget(self.media_name)
+        media_text.addWidget(self.media_drop_hint)
+        media_row.addLayout(media_text, 1)
+        choose_media = AnimatedButton("选择素材")
+        choose_media.setIcon(_icon("fa5s.folder-open"))
+        choose_media.clicked.connect(self._choose_media)
+        media_row.addWidget(choose_media)
+        layout.addWidget(self.media_frame)
         surface = QFrame()
         surface.setObjectName("settingsSurface")
         surface_layout = QHBoxLayout(surface)
@@ -1540,6 +1566,23 @@ class MainWindow(QWidget):
         terms_note.setObjectName("muted")
         terms_note.setWordWrap(True)
         left.addWidget(terms_note)
+        # 手动添加术语：输入角色名 / 技能名等专名，立即写入该游戏的术语表
+        term_row = QHBoxLayout()
+        self.term_input = QLineEdit()
+        self.term_input.setPlaceholderText("添加专名（角色名 / 技能名 / 物品名），回车确认")
+        self.term_input.setToolTip("手动确认的专名会作为强参考参与本地校对，也会进入联网复核候选")
+        self.term_input.returnPressed.connect(self._add_custom_term)
+        add_term = AnimatedButton("添加术语")
+        add_term.setIcon(_icon("fa5s.plus"))
+        add_term.setMaximumWidth(120)
+        add_term.clicked.connect(self._add_custom_term)
+        term_row.addWidget(self.term_input, 1)
+        term_row.addWidget(add_term)
+        left.addLayout(term_row)
+        term_hint = QLabel("内置词表（角色 / 技能名）可在“管理已学习术语”中查看")
+        term_hint.setObjectName("muted")
+        left.addWidget(term_hint)
+        self.term_hint = term_hint
         left.addStretch(1)
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -1640,32 +1683,6 @@ class MainWindow(QWidget):
         advanced_row.addWidget(self.overwrite)
         self.advanced_panel.content_layout.addLayout(advanced_row)
         layout.addWidget(self.advanced_panel)
-
-        self.media_frame = QFrame()
-        self.media_frame.setObjectName("mediaRow")
-        self.media_frame.setProperty("dropActive", False)
-        self.media_frame.setMinimumHeight(68)
-        media_row = QHBoxLayout(self.media_frame)
-        media_row.setContentsMargins(16, 11, 13, 11)
-        media_icon = QLabel()
-        media_icon.setPixmap(_icon("fa5s.file-audio").pixmap(QSize(20, 20)))
-        media_row.addWidget(media_icon)
-        media_row.addWidget(QLabel("本批素材"))
-        media_row.addSpacing(20)
-        media_text = QVBoxLayout()
-        media_text.setSpacing(1)
-        self.media_name = QLabel("")
-        self.media_name.setStyleSheet("font-weight: 700; color: #5d3e20;")
-        self.media_drop_hint = QLabel("可把视频 / 音频拖到窗口，或点击右侧重新选择")
-        self.media_drop_hint.setObjectName("dropHint")
-        media_text.addWidget(self.media_name)
-        media_text.addWidget(self.media_drop_hint)
-        media_row.addLayout(media_text, 1)
-        choose_media = AnimatedButton("选择素材")
-        choose_media.setIcon(_icon("fa5s.folder-open"))
-        choose_media.clicked.connect(self._choose_media)
-        media_row.addWidget(choose_media)
-        layout.addWidget(self.media_frame)
 
         action_row = QHBoxLayout()
         action_row.addStretch(1)
@@ -2083,6 +2100,20 @@ class MainWindow(QWidget):
         )
         self._refresh_ai_summary()
 
+    def _add_custom_term(self):
+        game_name = self.legacy.canonicalize_runtime_game_name(self.game_box.currentText())
+        if not game_name:
+            QMessageBox.information(self, "添加术语", "请先输入或选择游戏 / 内容名称。")
+            return
+        value = self.term_input.text().strip()
+        if not value:
+            return
+        if self.legacy.add_learned_mapping(game_name, value, value):
+            self.term_input.clear()
+            self.term_hint.setText(f"已添加术语：{value}（可在“管理已学习术语”中删除）")
+        else:
+            QMessageBox.information(self, "添加术语", "该术语已存在或内容为空。")
+
     def _manage_terms(self):
         game_name = self.legacy.canonicalize_runtime_game_name(self.game_box.currentText())
         if not game_name:
@@ -2091,14 +2122,32 @@ class MainWindow(QWidget):
         mappings = self.legacy.learned_mappings_for_game(game_name)
         dialog = QDialog(self)
         dialog.setWindowTitle(f"已学习术语｜{game_name}")
-        dialog.resize(640, 420)
+        dialog.resize(680, 480)
         layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("●  已学习 / 手动添加的术语"))
         listing = QListWidget()
         listing.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         for item in mappings:
             marker = "已确认" if item.get("confirmed") else "联网核验"
             listing.addItem(f"{item.get('from')} → {item.get('to')}  [{marker}]")
         layout.addWidget(listing)
+        # 内置图鉴词条（角色名 / 技能名等），按当前所选游戏读取
+        saved_game = self.legacy.RUNTIME_GAME_NAME
+        self.legacy.RUNTIME_GAME_NAME = game_name
+        try:
+            builtin_names, loaded = self.legacy.load_active_game_lexicon_names()
+        finally:
+            self.legacy.RUNTIME_GAME_NAME = saved_game
+        if loaded:
+            summary = "、".join(
+                f"{label} {count} 条" for label, count, _ in loaded
+            )
+            layout.addWidget(QLabel(f"●  内置图鉴（{summary}）"))
+            builtin = QListWidget()
+            builtin.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+            for name in builtin_names[:300]:
+                builtin.addItem(name)
+            layout.addWidget(builtin)
         row = QHBoxLayout()
         remove = AnimatedButton("删除所选")
         close = AnimatedButton("关闭")
