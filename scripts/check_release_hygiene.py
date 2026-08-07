@@ -126,6 +126,9 @@ def main() -> int:
         except UnicodeDecodeError:
             errors.append(f"不是有效 UTF-8：{relative}")
             continue
+        except FileNotFoundError:
+            # 已从磁盘删除但仍留在 git 索引中的文件（待 git add -A 提交删除）
+            continue
         for pattern in SECRET_PATTERNS:
             if pattern.search(text):
                 errors.append(f"疑似真实密钥：{relative}")

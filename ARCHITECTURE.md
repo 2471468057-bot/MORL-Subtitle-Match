@@ -3,7 +3,7 @@
 ## 运行入口
 
 ```text
-sdewa.bat / 2ByteASR.bat
+2ByteASR.bat
   → quick_start.py
   → twobyteasr.ui.MainWindow
   → twobyteasr.service.run_media_queue

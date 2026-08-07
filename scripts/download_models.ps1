@@ -165,4 +165,4 @@ foreach ($entry in $modelSpecs) {
 }
 
 Write-Host ""
-Write-Host "[完成] 必需模型已准备好，可以运行 sdewa.bat。" -ForegroundColor Green
+Write-Host "[完成] 必需模型已准备好，可以运行 2ByteASR.bat。" -ForegroundColor Green

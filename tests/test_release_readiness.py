@@ -1,14 +1,12 @@
 ﻿import json
 from pathlib import Path
 
-from twobyteasr.preflight import load_dependency_lock, run_preflight
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_dependency_lock_has_pinned_public_components():
-    lock = load_dependency_lock(ROOT)
+    lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
     assert lock["python"] == {"main": "3.10", "moss": "3.12"}
     assert set(lock["sources"]) == {"moss", "firered"}
     assert set(lock["models"]) == {
@@ -25,26 +23,10 @@ def test_dependency_lock_has_pinned_public_components():
             assert item["license"] == "Apache-2.0"
 
 
-def test_preflight_reports_wrong_python_and_missing_runtime(tmp_path):
-    lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
-    (tmp_path / "dependencies.lock.json").write_text(
-        json.dumps(lock, ensure_ascii=False), encoding="utf-8"
-    )
-    report = run_preflight(tmp_path, python_version=(3, 12), which=lambda name: None)
-    codes = {issue.code for issue in report.issues}
-    assert "wrong_python" in codes
-    assert "missing_ffmpeg" in codes
-    assert "missing_ffprobe" in codes
-    assert "missing_nvidia-smi" in codes
-    assert "missing_moss_env" in codes
-    assert "missing_model_qwen_asr" in codes
-    assert not report.ok
-
-
 def test_launcher_never_falls_back_to_path_python():
-    launcher = (ROOT / "sdewa.bat").read_text(encoding="utf-8")
-    assert 'set "MAIN_PY=python"' not in launcher
-    assert "twobyteasr.preflight" in launcher
+    launcher = (ROOT / "2ByteASR.bat").read_text(encoding="utf-8")
+    assert "MAIN_PY" not in launcher
+    assert ".venv-main" in launcher
     assert "setup_environment.bat" in launcher
 
 

@@ -2605,4 +2605,4 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
 if __name__ == "__main__":
     if len(sys.argv) in {3, 4} and sys.argv[1] == "--screenshot":
         raise SystemExit(_preview(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else "settings"))
-    raise SystemExit("请通过 sdewa.bat 或 2ByteASR.bat 启动 2ByteASR。")
+    raise SystemExit("请通过 2ByteASR.bat 启动 2ByteASR。")

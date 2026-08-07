@@ -1,6 +1,6 @@
 ﻿# 运行配置与任务报告
 
-可编辑的非敏感设置在项目根目录的 `twobyteasr_settings.json`。`sdewa.bat` 每次启动都会重新读取它，因此修改后直接重新运行即可，不需要改 Python 文件。
+可编辑的非敏感设置在项目根目录的 `twobyteasr_settings.json`。程序每次启动都会重新读取它，因此修改后直接重新运行即可，不需要改 Python 文件。
 
 该文件只放模型名称、OpenAI 兼容地址和功能开关，绝对不要填写大模型或 Hugging Face 密钥；密钥由运行界面写到本机用户目录，或按 [SECRETS_SETUP.md](SECRETS_SETUP.md) 配置环境变量。
 
