@@ -165,16 +165,15 @@ function New-UvVenv {
         [Parameter(Mandatory = $true)][string]$VenvPath
     )
     # uv 的 Python 版本链接（junction）在中断安装后可能残留损坏条目，
-    # 触发 Windows “不受信任的装入点”（os error 448）；失败时清理 uv\python 后重试一次。
+    # 触发 Windows “不受信任的装入点”（os error 448）；venv 创建失败时
+    # 一律清理 uv\python 残留后重试一次（Invoke-External 异常不包含 uv 明细）。
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         try {
             Invoke-External $Uv @("venv", "--python", $PythonVersion, "--allow-existing", $VenvPath)
             return
         } catch {
-            if ($attempt -ge 2 -or $_.Exception.Message -notmatch "minor version link|untrusted|os error 448") {
-                throw
-            }
-            Write-Warning "uv 创建 Python 版本链接失败，清理 uv\python 残留后重试..."
+            if ($attempt -ge 2) { throw }
+            Write-Warning "uv 创建虚拟环境失败，清理 uv\python 残留后重试..."
             Remove-Item (Join-Path $env:LOCALAPPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item (Join-Path $env:APPDATA "uv\python") -Recurse -Force -ErrorAction SilentlyContinue
         }
