@@ -1003,6 +1003,20 @@ def _merge_moss_chunks(payload, audio_seconds, legacy, shared_audio=None):
 
 
 def transcribe_moss_global(media_path, shared_audio, legacy, cache_context):
+    # MOSS 转写必须在主进程预检 CUDA：子进程内报错只会显示为“MOSS 子进程失败”，
+    # 无法给出明确原因。
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "本机未检测到 NVIDIA CUDA GPU，无法运行 MOSS 转写——"
+                "生成字幕需要 CUDA 显卡（MOSS/FireRed/Qwen 均为 GPU 模型）。"
+            )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"MOSS CUDA 预检失败：{exc}") from exc
     paths = _script_paths(legacy)
     with tempfile.TemporaryDirectory(prefix="moss_bridge_") as temp_dir:
         output_path = os.path.join(temp_dir, "moss.json")

@@ -40,12 +40,16 @@ function Install-WinGetPackage {
         [Parameter(Mandatory = $true)][string]$Id,
         [Parameter(Mandatory = $true)][string]$Label
     )
-    Write-Host "[Prerequisite] Installing $Label ..." -ForegroundColor Cyan
-    & winget install --id $Id --exact --silent --disable-interactivity `
-        --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Label installation failed (winget exit code $LASTEXITCODE)."
+    # 下载可能因网络瞬断失败（如 0x80072f78 超时），重试最多 3 次。
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host "[Prerequisite] Installing $Label ... (第 $attempt 次尝试)" -ForegroundColor Cyan
+        & winget install --id $Id --exact --silent --disable-interactivity `
+            --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Warning "$Label 安装失败（winget 退出码 $LASTEXITCODE），正在重试..."
+        Start-Sleep -Seconds 5
     }
+    throw "$Label installation failed (winget exit code $LASTEXITCODE).`n请手动重试：winget install --id $Id -e"
 }
 
 Refresh-ProcessPath
