@@ -91,7 +91,12 @@ function Ensure-PinnedSource {
 
     if (-not (Test-Path $gitDir)) {
         Write-Host "[源码] 正在获取 $Label ..."
-        Invoke-External "git" @("clone", "--filter=blob:none", "--no-checkout", [string]$Spec.repository, $destination)
+        # 强制 autocrlf=true：FireRed 加固补丁的 Upstream/Hardened SHA-256 按 CRLF 工作区设计，
+        # 全新机器 git 默认检出 LF 会导致补丁哈希校验失败（首次安装必现）。
+        Invoke-External "git" @("-c", "core.autocrlf=true", "clone", "--filter=blob:none", "--no-checkout", [string]$Spec.repository, $destination)
+        # 新克隆没有工作区文件，git status 会把全部文件报告为已删除（D），
+        # 必须先检出固定版本，再做本地修改检查，否则首次安装会误报“本地修改”。
+        Invoke-External "git" @("-c", "safe.directory=$destination", "-c", "core.autocrlf=true", "-C", $destination, "checkout", "--detach", [string]$Spec.revision)
     }
 
     $gitPrefix = @("-c", "safe.directory=$destination", "-C", $destination)
@@ -108,7 +113,9 @@ function Ensure-PinnedSource {
         $onlySecurityPatch = $Label -eq "FireRedASR2S" -and
             @($dirtyPaths | Where-Object { $_ -notin $allowedFireRedChanges }).Count -eq 0
         if ($onlySecurityPatch) {
-            & (Join-Path $PSScriptRoot "harden_firered_source.ps1") -CheckOnly
+            # 目录只有允许的安全补丁修改时，执行完整补丁补齐（含上次中断未完成的文件），
+            # 而不是仅 CheckOnly——部分补丁状态会让 CheckOnly 误报缺失。
+            & (Join-Path $PSScriptRoot "harden_firered_source.ps1")
         } else {
             throw "$Label 存在本地修改，安装器不会覆盖：$destination"
         }
@@ -118,9 +125,9 @@ function Ensure-PinnedSource {
     if ($ForceSourceRefresh -or $current -ne [string]$Spec.revision) {
         & git @gitPrefix cat-file -e "$($Spec.revision)^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            Invoke-External "git" @("-c", "safe.directory=$destination", "-C", $destination, "fetch", "--depth", "1", "origin", [string]$Spec.revision)
+            Invoke-External "git" @("-c", "safe.directory=$destination", "-c", "core.autocrlf=true", "-C", $destination, "fetch", "--depth", "1", "origin", [string]$Spec.revision)
         }
-        Invoke-External "git" @("-c", "safe.directory=$destination", "-C", $destination, "checkout", "--detach", [string]$Spec.revision)
+        Invoke-External "git" @("-c", "safe.directory=$destination", "-c", "core.autocrlf=true", "-C", $destination, "checkout", "--detach", "--force", [string]$Spec.revision)
     }
 
     $resolved = (& git @gitPrefix rev-parse HEAD).Trim()

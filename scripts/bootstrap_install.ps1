@@ -83,6 +83,9 @@ if ($InstallPrerequisites) {
 }
 
 $remaining = @(Get-MissingCommands)
+if ($skipGpuCheck) {
+    $remaining = @($remaining | Where-Object { $_ -ne "nvidia-smi" })
+}
 if ($remaining.Count -gt 0) {
     throw "Prerequisites are still missing: $($remaining -join ', ')."
 }
