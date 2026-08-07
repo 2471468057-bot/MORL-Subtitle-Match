@@ -121,6 +121,11 @@ def main() -> int:
             errors.append(f"不应发布的大文件类型：{relative}")
         if path.suffix.lower() not in TEXT_SUFFIXES and path.name not in TEXT_NAMES:
             continue
+        if path.suffix.lower() == ".bat":
+            # cmd 对 LF 换行的 bat 会拆散 if/else 多行块（"exe 不是内部或外部命令"），必须 CRLF。
+            if b"\r\n" not in path.read_bytes():
+                errors.append(f"bat 必须使用 CRLF 换行：{relative}")
+                continue
         try:
             text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
