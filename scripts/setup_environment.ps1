@@ -27,7 +27,9 @@ function Show-RecoveryHint {
 
 function Assert-Prerequisites {
     $missing = @()
+    $skipGpu = [bool]$env:2BYTEASR_SKIP_GPU_CHECK
     foreach ($name in @("uv", "git", "ffmpeg", "ffprobe", "nvidia-smi")) {
+        if ($skipGpu -and $name -eq "nvidia-smi") { continue }
         if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
             $missing += $name
         }
@@ -38,6 +40,10 @@ function Assert-Prerequisites {
         throw "请安装以上组件并重新运行 setup_environment.bat。"
     }
 
+    if ($skipGpu) {
+        Write-Warning "2BYTEASR_SKIP_GPU_CHECK=1：跳过 NVIDIA GPU 检查（流水线仍需要 CUDA 才能实际运行）。"
+        return
+    }
     $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
     $memoryMb = 0
     [void][int]::TryParse(($memoryText -replace '[^0-9]', ''), [ref]$memoryMb)
