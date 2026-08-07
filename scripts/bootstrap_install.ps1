@@ -60,7 +60,7 @@ if ($CheckOnly) {
     exit 0
 }
 
-$skipGpuCheck = [bool]$env:2BYTEASR_SKIP_GPU_CHECK
+$skipGpuCheck = [bool]${env:2BYTEASR_SKIP_GPU_CHECK}
 if ($missing -contains "nvidia-smi") {
     if ($skipGpuCheck) {
         Write-Warning "未检测到 NVIDIA GPU，已通过 2BYTEASR_SKIP_GPU_CHECK=1 跳过 GPU 检查（MOSS/FireRed/Qwen 流水线仍需要 CUDA 才能实际运行）。"

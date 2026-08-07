@@ -27,7 +27,7 @@ function Show-RecoveryHint {
 
 function Assert-Prerequisites {
     $missing = @()
-    $skipGpu = [bool]$env:2BYTEASR_SKIP_GPU_CHECK
+    $skipGpu = [bool]${env:2BYTEASR_SKIP_GPU_CHECK}
     foreach ($name in @("uv", "git", "ffmpeg", "ffprobe", "nvidia-smi")) {
         if ($skipGpu -and $name -eq "nvidia-smi") { continue }
         if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
