@@ -60,14 +60,11 @@ if ($CheckOnly) {
     exit 0
 }
 
-$skipGpuCheck = [bool]${env:2BYTEASR_SKIP_GPU_CHECK}
+$gpuWarned = $false
 if ($missing -contains "nvidia-smi") {
-    if ($skipGpuCheck) {
-        Write-Warning "未检测到 NVIDIA GPU，已通过 2BYTEASR_SKIP_GPU_CHECK=1 跳过 GPU 检查（MOSS/FireRed/Qwen 流水线仍需要 CUDA 才能实际运行）。"
-        $missing = @($missing | Where-Object { $_ -ne "nvidia-smi" })
-    } else {
-        throw "No supported NVIDIA GPU driver was detected. Install the NVIDIA driver and retry."
-    }
+    $gpuWarned = $true
+    Write-Warning "未检测到 NVIDIA GPU 驱动（nvidia-smi 不可用）。环境与模型仍会安装，但 MOSS/FireRed/Qwen 实际转写需要 CUDA 显卡；如确认无 GPU 环境可忽略此提示。"
+    $missing = @($missing | Where-Object { $_ -ne "nvidia-smi" })
 }
 
 if ($InstallPrerequisites) {
@@ -83,7 +80,7 @@ if ($InstallPrerequisites) {
 }
 
 $remaining = @(Get-MissingCommands)
-if ($skipGpuCheck) {
+if ($gpuWarned) {
     $remaining = @($remaining | Where-Object { $_ -ne "nvidia-smi" })
 }
 if ($remaining.Count -gt 0) {
