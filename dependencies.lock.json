@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "python": {
+    "main": "3.10",
+    "moss": "3.12"
+  },
+  "sources": {
+    "moss": {
+      "repository": "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git",
+      "revision": "eda4b9f13f1574765a80438c9797780a9bd48112",
+      "path": "third_party/MOSS-Transcribe-Diarize",
+      "license": "Apache-2.0"
+    },
+    "firered": {
+      "repository": "https://github.com/FireRedTeam/FireRedASR2S.git",
+      "revision": "4e7d9aaf4482a47cec1724807026b9b151926eb5",
+      "path": "third_party/FireRedASR2S",
+      "license": "Apache-2.0"
+    }
+  },
+  "models": {
+    "moss": {
+      "repository": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+      "revision": "e6d68cdfcddbdad1a7e8454f0cb859cad76e2502",
+      "path": "models/MOSS-Transcribe-Diarize",
+      "required_files": ["config.json", "model-00000-of-00001.safetensors"],
+      "sha256": {
+        "config.json": "2b2b7a6e61334152bdd7ecf8a4da3073b4940a097e193d1d2b22093e77535234",
+        "model-00000-of-00001.safetensors": "9a0ceb4ab7330357db3ff583dba8d83625d5b733b00e1d55d6970e11b07026c4",
+        "configuration_moss_transcribe_diarize.py": "b4d12b0f4609af69b61c2fe3aa5fbaf476af22278369e4540745bc47d1d37892",
+        "modeling_moss_transcribe_diarize.py": "1a6f1ea11e187f04ab20d94f44c261dbfa65a17d670dcbb8b552e4a20c52877b",
+        "processing_moss_transcribe_diarize.py": "6f228d22d9379e2f6a6830b18ce7336b22da8267547e96e65545d871d7f48766"
+      },
+      "license": "Apache-2.0"
+    },
+    "firered_vad": {
+      "repository": "FireRedTeam/FireRedVAD",
+      "revision": "7990aaccc6b7aec1e527743bd30201f2c4a03b8c",
+      "path": "models/FireRedVAD",
+      "required_files": ["VAD/model.pth.tar", "config.yaml"],
+      "sha256": {
+        "VAD/model.pth.tar": "63f4fb1b00a6b8607c118dd48efc18d5e40d67d99b7bf9aa7a8d61540cf23d71",
+        "config.yaml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "license": "Apache-2.0"
+    },
+    "firered_aed": {
+      "repository": "FireRedTeam/FireRedASR2-AED",
+      "revision": "2304afed56eacfee6256dee5937ed22ffa0b64ec",
+      "path": "models/FireRedASR2-AED",
+      "required_files": ["model.pth.tar", "config.yaml"],
+      "sha256": {
+        "model.pth.tar": "4677cbd30988d63ed3e777f6a42a1e5260a3865317f6e15e488bef40954f7054",
+        "config.yaml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "license": "Apache-2.0"
+    },
+    "qwen_asr": {
+      "repository": "Qwen/Qwen3-ASR-1.7B",
+      "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+      "path": "models/Qwen3-ASR-1.7B",
+      "required_files": [
+        "config.json",
+        "model.safetensors.index.json",
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors"
+      ],
+      "sha256": {
+        "config.json": "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f",
+        "model.safetensors.index.json": "f994739fe38e5210b9e3e8ce6c6307315e2ceac3cb630e7b7414d69dce520f60",
+        "model-00001-of-00002.safetensors": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6",
+        "model-00002-of-00002.safetensors": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc"
+      },
+      "license": "Apache-2.0"
+    },
+    "speaker_embedding": {
+      "repository": "speechbrain/spkrec-ecapa-voxceleb",
+      "revision": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+      "path": "models/spkrec-ecapa-voxceleb",
+      "required_files": ["hyperparams.yaml", "embedding_model.ckpt"],
+      "sha256": {
+        "hyperparams.yaml": "6f78854fa04ba59e761437b76a2575d3aba5e5016de3e9b69f0c9a5077fb1a41",
+        "embedding_model.ckpt": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
+      },
+      "license": "Apache-2.0"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "models": {
+    "qwen_asr_model": "Qwen/Qwen3-ASR-1.7B",
+    "polish_provider": "bailian",
+    "polish_model": "qwen3.7-flash",
+    "polish_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "group_provider": "bailian",
+    "group_model": "qwen3.7-flash",
+    "group_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  },
+  "switches": {
+    "enable_qwen_asr_reference": true,
+    "enable_firered_boundary_refinement": true,
+    "show_speaker_labels_in_srt": false,
+    "output_review_track": false,
+    "unified_glm_processing": true
+  },
+  "cache": {
+    "force_refresh_polish": false,
+    "force_refresh_group": false
+  },
+  "performance": {
+    "parallel_cloud_batches": true,
+    "cloud_batch_workers": 4,
+    "parallel_cpu_vad": true,
+    "moss_parallel_workers": 2,
+    "moss_parallel_min_vram_gb": 14,
+    "qwen_asr_batch_size": 8,
+    "parallel_gpu_asr": true,
+    "parallel_gpu_asr_min_vram_gb": 14
+  }
+}

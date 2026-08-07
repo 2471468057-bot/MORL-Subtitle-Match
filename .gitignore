@@ -1,0 +1,77 @@
+# Local runtimes and generated Python state
+.venv-main/
+.venv-moss/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+
+# Reproducible Windows build outputs
+2ByteASR.exe
+scripts/ShortcutIdentity.exe
+
+# Runtime-downloaded third-party sources (see dependencies.lock.json)
+third_party/MOSS-Transcribe-Diarize/
+third_party/FireRedASR2S/
+
+# Local history and generated project state
+archive/
+backups/
+models/
+outputs/
+output/
+tmp/
+reports/
+review_tracks/
+artifacts/
+design-qa.md
+
+# Local security-scan tool state (never publish)
+.mimosa/
+
+# ZCode agent session state (never publish)
+.zcode/
+
+# Never commit local credentials or voiceprints
+.env
+.env.*
+!env.example
+secrets.json
+secrets.dat
+host_voiceprints/
+*.pem
+*.key
+
+# Model weights and large binary checkpoints
+*.safetensors
+*.pth
+*.pth.tar
+*.ckpt
+*.onnx
+
+# User media
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.aac
+
+# Generated subtitle files
+*_剪映文稿.txt
+*_剪映文稿.srt
+*_主播*.srt
+*_疑似吞字幕复核.srt
+
+# Editor and OS noise
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

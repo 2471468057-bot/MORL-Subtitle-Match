@@ -1,0 +1,14 @@
+# Primary (Python 3.10) runtime for auto_asr.py.
+# GPU Torch is installed by setup_moss_firered.bat with uv's CUDA-aware backend.
+qwen-asr==0.0.6
+pypinyin==0.55.0
+requests==2.33.0
+jieba==0.42.1
+speechbrain==1.0.3
+kaldiio==2.18.1
+kaldi-native-fbank==1.22.3
+PySide6==6.9.2
+QtAwesome==1.4.0
+
+# Test/runtime tooling used by run_tests.bat and CI.
+pytest==9.1.1
