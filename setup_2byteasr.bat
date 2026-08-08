@@ -11,5 +11,9 @@ if "%EXIT_CODE%"=="0" (
 ) else (
   echo [失败] 首次配置没有完成。修复上方提示后可重新运行 setup_2byteasr.bat。
 )
+rem 由 2ByteASR.exe 启动器触发的配置不等待按键（环境变量或 nopause 参数）
+if "%2BYTEASR_NO_PAUSE%"=="1" goto :done
+if /i "%~1"=="nopause" goto :done
 pause
+:done
 exit /b %EXIT_CODE%
