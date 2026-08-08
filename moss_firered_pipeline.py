@@ -149,9 +149,15 @@ def check_runtime(legacy):
         (paths["moss_worker"], "MOSS 子进程桥接脚本"),
         (paths["speaker_embedding"], "ECAPA 说话人嵌入模型"),
     )
-    missing = [label for path, label in required if not os.path.exists(path)]
+    missing = []
+    for path, label in required:
+        if not os.path.exists(path):
+            missing.append(f"{label}（{os.path.normcase(os.path.abspath(path))}）")
     if missing:
-        raise RuntimeError("缺少新流水线组件：" + "、".join(missing) + "。请运行 setup_moss_firered.bat。")
+        raise RuntimeError(
+            "缺少新流水线组件：" + "、".join(missing)
+            + "。\n请运行 setup_2byteasr.bat 重新配置，或直接运行 download_models.bat 下载模型。"
+        )
     verify_model_files("moss", os.path.join(legacy.SCRIPT_DIR, "models", "MOSS-Transcribe-Diarize"))
     verify_model_files("firered_vad", os.path.join(legacy.SCRIPT_DIR, "models", "FireRedVAD"))
     verify_model_files("firered_aed", legacy.FIRERED_MODEL_DIR)
