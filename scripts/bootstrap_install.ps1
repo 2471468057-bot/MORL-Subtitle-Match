@@ -19,6 +19,17 @@ $SetupEnvironment = Join-Path $PSScriptRoot "setup_environment.ps1"
 $DownloadModelScript = Join-Path $PSScriptRoot "download_models.ps1"
 $Launcher = Join-Path $ProjectRoot "2ByteASR.exe"
 
+function Add-BundledToolsToPath {
+    # 便携版内置工具（tools/）优先：ffmpeg/git/uv 无需联网下载。
+    # Refresh-ProcessPath 会重建整个 PATH，必须在这里一并恢复——
+    # 否则便携包首次检查通过、刷新 PATH 后 tools 条目丢失，
+    # 会误报“缺少系统依赖 uv, git, ffmpeg, ffprobe”。
+    $tools = Join-Path $ProjectRoot "tools"
+    foreach ($extra in @($tools, (Join-Path $tools "ffmpeg\bin"), (Join-Path $tools "git\cmd"), (Join-Path $tools "git\bin"))) {
+        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
+    }
+}
+
 function Refresh-ProcessPath {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -29,6 +40,7 @@ function Refresh-ProcessPath {
         (Join-Path $env:ProgramFiles "Git\cmd")
     )
     $env:Path = (@($machinePath, $userPath) + $extraPaths | Where-Object { $_ }) -join ";"
+    Add-BundledToolsToPath
 }
 
 function Get-MissingCommands {
@@ -182,13 +194,6 @@ function Install-DirectPrerequisites {
 }
 
 Refresh-ProcessPath
-# 便携版内置工具（tools/）优先：ffmpeg/git/uv 无需联网下载
-$ToolsDir = Join-Path $ProjectRoot "tools"
-if (Test-Path $ToolsDir) {
-    foreach ($extra in @($ToolsDir, (Join-Path $ToolsDir "ffmpeg\bin"), (Join-Path $ToolsDir "git\cmd"), (Join-Path $ToolsDir "git\bin"))) {
-        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
-    }
-}
 $missing = @(Get-MissingCommands)
 
 if ($CheckOnly) {
@@ -226,6 +231,16 @@ if ($gpuWarned) {
     $remaining = @($remaining | Where-Object { $_ -ne "nvidia-smi" })
 }
 if ($remaining.Count -gt 0) {
+    $tools = Join-Path $ProjectRoot "tools"
+    if (Test-Path $tools) {
+        Write-Host "tools/ 目录存在（$tools），但以下命令仍不可用。tools 内文件（前 25 项）：" -ForegroundColor Yellow
+        Get-ChildItem $tools -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 25 | ForEach-Object {
+                Write-Host "  $($_.FullName.Substring($tools.Length + 1))" -ForegroundColor DarkGray
+            }
+    } else {
+        Write-Host "便携版应自带 tools/ 目录（$tools），当前缺失。请确认解压完整，或改用 Setup 安装版。" -ForegroundColor Yellow
+    }
     throw "Prerequisites are still missing: $($remaining -join ', ')."
 }
 

@@ -157,6 +157,16 @@ if ($Lock.schema_version -ne 1) {
 }
 
 Write-Host "2ByteASR 环境安装（不下载约 11 GB 模型）" -ForegroundColor Cyan
+
+# 便携版内置工具（tools/）优先加入 PATH：ffmpeg、git、uv 无需联网下载。
+# 必须在系统依赖检查之前执行，否则仅带内置工具（未全局安装）的环境会误报缺少依赖。
+$ToolsDir = Join-Path $ProjectRoot "tools"
+if (Test-Path $ToolsDir) {
+    foreach ($extra in @($ToolsDir, (Join-Path $ToolsDir "ffmpeg\bin"), (Join-Path $ToolsDir "git\cmd"), (Join-Path $ToolsDir "git\bin"))) {
+        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
+    }
+}
+
 Assert-Prerequisites
 if ($CheckOnly) {
     Write-Host "[完成] 系统依赖检查通过。"
@@ -168,22 +178,14 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 & (Join-Path $PSScriptRoot "harden_firered_source.ps1")
 
 $Uv = (Get-Command uv).Source
-$MossSource = Resolve-ProjectPath $Lock.sources.moss.path
-
-# 便携版内置工具（tools/）优先加入 PATH：ffmpeg、git、uv 无需联网下载
-$ToolsDir = Join-Path $ProjectRoot "tools"
-if (Test-Path $ToolsDir) {
-    foreach ($extra in @($ToolsDir, (Join-Path $ToolsDir "ffmpeg\bin"), (Join-Path $ToolsDir "git\cmd"), (Join-Path $ToolsDir "git\bin"))) {
-        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
-    }
-    if (-not $Uv) {
-        $localUv = Join-Path $ToolsDir "uv.exe"
-        if (Test-Path $localUv) {
-            $env:Path = "$ToolsDir;$env:Path"
-            $Uv = (Get-Command uv).Source
-        }
+if (-not $Uv) {
+    $localUv = Join-Path $ToolsDir "uv.exe"
+    if (Test-Path $localUv) {
+        $env:Path = "$ToolsDir;$env:Path"
+        $Uv = (Get-Command uv).Source
     }
 }
+$MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
 # 国内网络默认使用清华 PyPI 镜像安装依赖；
 # 需要官方 PyPI 时设置环境变量 UV_DEFAULT_INDEX=https://pypi.org/simple 覆盖。

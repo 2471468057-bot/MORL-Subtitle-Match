@@ -1,14 +1,19 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [switch]$Lite
 )
 
 # 打包便携版 2ByteASR：程序文件 + models/（模型）+ third_party/（固定版本源码）。
 # 解压到任意目录即可作为完整程序使用（首次运行 setup_2byteasr.bat 安装 Python 环境）。
 # 适合国内网络下载模型困难的环境：一次性下载，解压即用。
 #
-# 用法：powershell -ExecutionPolicy Bypass -File scripts/build_offline_bundle.ps1
-# 产物：dist/2ByteASR-portable-<日期>.7z（约 9-12 GB，需要 7-Zip）
+# -Lite：精简版（用于 GitHub Releases，<2GB）——不含模型，只带程序 + 源码 + 内置工具；
+# 首次配置时模型自动下载（约 7 GB 默认 / 11.7 GB 含 Qwen，可断点续传）。
+#
+# 用法：powershell -ExecutionPolicy Bypass -File scripts/build_offline_bundle.ps1 [-Lite]
+# 产物：dist/2ByteASR-portable-<日期>.7z（完整版，约 9-12 GB）
+#       或 dist/2ByteASR-lite-<日期>.7z（精简版，约 300-500 MB；需要 7-Zip）
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -17,16 +22,21 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
 $models = Join-Path $ProjectRoot "models"
 $thirdParty = Join-Path $ProjectRoot "third_party"
-foreach ($required in @($models, (Join-Path $thirdParty "MOSS-Transcribe-Diarize"), (Join-Path $thirdParty "FireRedASR2S"))) {
+foreach ($required in @((Join-Path $thirdParty "MOSS-Transcribe-Diarize"), (Join-Path $thirdParty "FireRedASR2S"))) {
     if (-not (Test-Path $required)) {
-        throw "缺少打包内容：$required（请先运行 setup_environment.bat 与 download_models.bat）"
+        throw "缺少打包内容：$required（请先运行 setup_environment.bat）"
     }
 }
+if (-not $Lite -and -not (Test-Path $models)) {
+    throw "缺少打包内容：$models（请先运行 download_models.bat）"
+}
 
-# 校验模型完整性（与 download_models.bat -VerifyOnly 相同口径）
-& (Join-Path $PSScriptRoot "download_models.ps1") -VerifyOnly
-if ($LASTEXITCODE -ne 0) {
-    throw "模型完整性校验未通过，请先修复模型再打包。"
+# 校验模型完整性（与 download_models.bat -VerifyOnly 相同口径）；精简版不含模型
+if (-not $Lite) {
+    & (Join-Path $PSScriptRoot "download_models.ps1") -VerifyOnly
+    if ($LASTEXITCODE -ne 0) {
+        throw "模型完整性校验未通过，请先修复模型再打包。"
+    }
 }
 
 $sevenZipPath = ""
@@ -54,7 +64,9 @@ $excludeDirs = @(
 )
 Get-ChildItem $ProjectRoot -Force | Where-Object { $_.Name -notin $excludeDirs } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $staging $_.Name) -Recurse -Force }
-Copy-Item $models (Join-Path $staging "models") -Recurse -Force
+if (-not $Lite) {
+    Copy-Item $models (Join-Path $staging "models") -Recurse -Force
+}
 Copy-Item $thirdParty (Join-Path $staging "third_party") -Recurse -Force
 Write-Host "[打包] 便携目录已组装：$staging" -ForegroundColor Cyan
 
@@ -126,9 +138,11 @@ Remove-Item $tmpDownload -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "[工具] 内置工具收集完成：$tools" -ForegroundColor Green
 
 $stamp = Get-Date -Format "yyyyMMdd"
-$output = Join-Path $OutputDir "2ByteASR-portable-$stamp.7z"
+$baseName = if ($Lite) { "2ByteASR-lite" } else { "2ByteASR-portable" }
+$output = Join-Path $OutputDir "$baseName-$stamp.7z"
 Remove-Item $output -Force -ErrorAction SilentlyContinue
-Write-Host "[打包] 正在压缩（约 9-12 GB，可能需要一段时间）..." -ForegroundColor Cyan
+$label = if ($Lite) { "精简版（不含模型，约 300-500 MB）" } else { "完整版（约 9-12 GB）" }
+Write-Host "[打包] 正在压缩（$label，可能需要一段时间）..." -ForegroundColor Cyan
 $logOut = Join-Path $OutputDir "portable-bundle.log"
 $logErr = Join-Path $OutputDir "portable-bundle.err.log"
 $p = Start-Process -FilePath $sevenZipPath -ArgumentList @(
@@ -143,4 +157,8 @@ Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $logOut, $logErr -Force -ErrorAction SilentlyContinue
 
 Write-Host "[OK] 便携包已生成：$output" -ForegroundColor Green
-Write-Host "用法：解压到任意目录（如 D:\2ByteASR），双击 setup_2byteasr.bat 完成环境配置后即可使用。" -ForegroundColor Yellow
+if ($Lite) {
+    Write-Host "用法：解压到任意目录，双击 setup_2byteasr.bat —— 内置 git/ffmpeg/python/uv 无需联网安装，模型会自动下载（约 7 GB，可续传）。" -ForegroundColor Yellow
+} else {
+    Write-Host "用法：解压到任意目录（如 D:\2ByteASR），双击 setup_2byteasr.bat 完成环境配置后即可使用。" -ForegroundColor Yellow
+}
