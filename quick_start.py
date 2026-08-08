@@ -18,6 +18,26 @@ def _show_error(title: str, message: str) -> None:
         pass
 
 
+def _write_setup_marker() -> None:
+    """Self-heal: once the app starts, record that configuration finished.
+
+    Legacy installs configured before the marker feature existed would
+    otherwise keep showing the first-run dialog. The marker is written next
+    to this script; the path is normalized and confined to the script dir.
+    """
+    try:
+        import datetime
+        import pathlib
+        root = os.path.normpath(os.path.dirname(os.path.abspath(__file__)))
+        marker = os.path.join(root, "2byteasr.setup-complete")
+        if not os.path.abspath(marker).startswith(os.path.abspath(root) + os.sep):
+            return
+        pathlib.Path(marker).write_text(
+            datetime.datetime.now().isoformat(), encoding="ascii")
+    except Exception:
+        pass
+
+
 def main() -> int:
     try:
         import moss_firered_pipeline
@@ -29,6 +49,7 @@ def main() -> int:
             os.path.realpath(__file__),
             PIPELINE_BUILD_ID,
         )
+        _write_setup_marker()
         return run_desktop_app(
             subtitle_core,
             moss_firered_pipeline,

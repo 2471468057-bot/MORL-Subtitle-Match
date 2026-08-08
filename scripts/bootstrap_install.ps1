@@ -14,15 +14,16 @@ $TranscriptPath = Join-Path $env:TEMP "2byteasr-setup.log"
 Start-Transcript -Path $TranscriptPath -Append -ErrorAction SilentlyContinue | Out-Null
 Write-Host "[日志] 安装过程已记录到 $TranscriptPath" -ForegroundColor DarkGray
 
-# 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
-# 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
-$SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
-Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
-
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $SetupEnvironment = Join-Path $PSScriptRoot "setup_environment.ps1"
 $DownloadModelScript = Join-Path $PSScriptRoot "download_models.ps1"
 $Launcher = Join-Path $ProjectRoot "2ByteASR.exe"
+
+# 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
+# 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
+# 注意：必须放在 $ProjectRoot 赋值之后（Join-Path 不接受 null 路径）。
+$SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
+Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
 
 function Add-BundledToolsToPath {
     # 便携版内置工具（tools/）优先：ffmpeg/git/uv 无需联网下载。

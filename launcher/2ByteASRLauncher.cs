@@ -145,11 +145,15 @@ internal static class TwoByteAsrLauncher
         {
             return true;
         }
-        // Legacy installs configured before the marker was introduced: a venv
-        // that already has the app package installed counts as ready. A setup
-        // interrupted mid-download leaves no site-packages\twobyteasr.
-        return Directory.Exists(Path.Combine(
-            root, ".venv-main", "Lib", "site-packages", "twobyteasr"));
+        // Legacy installs configured before the marker was introduced. The
+        // app package itself lives at the project root, so probe for the two
+        // heavy dependencies that only a completed pip install produces:
+        // torch (inference) and the Qt binding (workbench UI), plus the
+        // separate MOSS venv. An interrupted setup has none of these.
+        string sitePackages = Path.Combine(root, ".venv-main", "Lib", "site-packages");
+        return Directory.Exists(Path.Combine(sitePackages, "torch"))
+            && Directory.Exists(Path.Combine(sitePackages, "PySide6"))
+            && File.Exists(Path.Combine(root, ".venv-moss", "Scripts", "python.exe"));
     }
 
     private static bool HasBundledModels(string root)
