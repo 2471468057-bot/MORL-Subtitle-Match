@@ -231,8 +231,11 @@ if ($LASTEXITCODE -ne 0) {
 if ($DownloadModels) {
     Write-Host "[2/2] 下载固定版本模型（默认约 7 GB：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
     $includeQwen = $false
-    if ($env:2BYTEASR_INCLUDE_QWEN) { $includeQwen = $true }
-    elseif (-not $env:2BYTEASR_NO_QWEN) {
+    $qwenConfig = Join-Path $ProjectRoot "models\Qwen3-ASR-1.7B\config.json"
+    if ($env:2BYTEASR_INCLUDE_QWEN -or (Test-Path $qwenConfig)) {
+        $includeQwen = $true
+        if (Test-Path $qwenConfig) { Write-Host "[2/2] 检测到 Qwen3-ASR 模型已存在。" -ForegroundColor Green }
+    } elseif (-not $env:2BYTEASR_NO_QWEN) {
         $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
         if ($answer -match "^[yY]") { $includeQwen = $true }
     }

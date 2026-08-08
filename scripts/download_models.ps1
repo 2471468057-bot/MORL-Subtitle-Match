@@ -105,8 +105,14 @@ foreach ($property in $Lock.models.PSObject.Properties) {
 
 # Qwen3-ASR 复核模型（约 4.7 GB）为可选附加：默认方案为
 # MOSS/说话人/FireRed 字级时间轴（约 7 GB）。交互确认、-IncludeQwen
-# 参数或环境变量 2BYTEASR_INCLUDE_QWEN=1 时包含。
+# 参数或环境变量 2BYTEASR_INCLUDE_QWEN=1 时包含；
+# 模型已存在时自动纳入校验，不再提问。
 if (-not $IncludeQwen -and $env:2BYTEASR_INCLUDE_QWEN) { $IncludeQwen = $true }
+$qwenSpec = $Lock.models.qwen_asr
+if (-not $IncludeQwen -and $qwenSpec -and (Test-ModelFiles $qwenSpec)) {
+    $IncludeQwen = $true
+    Write-Host "[跳过] 检测到 Qwen3-ASR 模型已存在，纳入校验。" -ForegroundColor Green
+}
 if (-not $IncludeQwen -and -not $Yes -and -not $VerifyOnly) {
     $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
     if ($answer -match "^[yY]") { $IncludeQwen = $true }
