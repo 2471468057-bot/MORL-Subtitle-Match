@@ -51,13 +51,22 @@ flowchart LR
 
 ## 🚀 快速开始
 
-### 方式一：下载安装包（推荐）
+### 方式一：便携精简版（推荐，国内网络友好）
+
+1. 从 [Releases](https://github.com/NOTBAD314/2ByteASR/releases) 下载 `2ByteASR-lite-<日期>.7z`（约 160 MB）并解压到任意目录（如 `D:\2ByteASR`）
+2. 双击 `setup_2byteasr.bat` —— 内置 git/ffmpeg/python/uv，**无需联网安装任何工具**
+3. 自动完成：Python 环境（本地安装）→ 依赖包（清华镜像）→ 模型下载（hf-mirror 国内镜像，约 7 GB，可断点续传）
+4. 双击 `2ByteASR.exe`，把视频或音频**拖进窗口**，点击开始
+
+> 完整离线便携包（约 9.7 GB，**含全部模型、零下载解压即用**）因超过 GitHub 单文件限制，走网盘等渠道分发（见 Releases 说明）。
+
+### 方式二：安装包
 
 1. 从 [Releases](https://github.com/NOTBAD314/2ByteASR/releases) 下载 `2ByteASR-Setup-<版本>.exe` 并安装
 2. 保持勾选「首次配置环境并下载模型」，等待约 11GB 模型下载完成（可断点续传）
 3. 双击桌面「2ByteASR」，把视频或音频**拖进窗口**，点击开始
 
-### 方式二：从源码运行
+### 方式三：从源码运行
 
 ```bat
 setup_environment.bat    :: 创建 Python 环境并获取固定版本依赖
@@ -81,7 +90,7 @@ install_shortcut.bat     :: 安装桌面快捷方式
 - **模型组合**：默认约 7GB（MOSS 转写/说话人、FireRed 字级时间轴、声纹）；安装时提示可选附加 Qwen3-ASR 复核模型（+4.7GB，提升准确度）——不选也能正常出字幕，可后续用 `download_models.bat` 补下（或设置 `2BYTEASR_INCLUDE_QWEN=1` 跳过提示）
 - **Python 依赖**：默认走清华 PyPI 镜像；可用 `UV_DEFAULT_INDEX` 覆盖
 - **Python 本体**：python.org 官方与华为云镜像自动切换
-- **离线安装**：网络确实很差的机器，可下载离线素材包（`models/` + `third_party/`，约 12GB，见 Releases 附件说明）。用法：解压后把 `models` 和 `third_party` 两个文件夹复制到安装目录（`%LOCALAPPDATA%\ProgramsByteASR\`），再运行 `setup_2byteasr.bat` 会自动跳过模型与源码下载（首次仍会安装 Python 环境，约几分钟）
+- **离线安装**：网络确实很差的机器，可下载离线素材包（`models/` + `third_party/`，约 12GB，见 Releases 附件说明）。用法：解压后把 `models` 和 `third_party` 两个文件夹复制到安装目录（`%LOCALAPPDATA%\Programs\2ByteASR\`），再运行 `setup_2byteasr.bat` 会自动跳过模型与源码下载（首次仍会安装 Python 环境，约几分钟）
 
 ## 🗣️ 主播声纹（可选）
 
