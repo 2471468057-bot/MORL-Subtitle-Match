@@ -77,13 +77,25 @@ function Invoke-Download {
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][string]$OutFile
     )
+    # 部分站点（download.pytorch.org）会拒绝 PowerShell 默认 UA，先试
+    # Invoke-WebRequest，失败改用 curl 回退；多次尝试以对抗网络抖动。
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
-            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
-            if ((Get-Item $OutFile).Length -gt 1MB) { return }
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 `
+                -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -ErrorAction Stop
+            if ((Get-Item $OutFile).Length -gt 50KB) { return }
             Write-Warning "文件不完整（$Url），重试..."
         } catch {
-            Write-Warning "下载失败（$Url）：$($_.Exception.Message)"
+            Write-Warning "下载失败（$Url）：$($_.Exception.Message)，改用 curl ..."
+        }
+        if (-not ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 50KB)) {
+            Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+            & curl.exe -L --fail --silent --show-error `
+                -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $OutFile $Url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 50KB) {
+                return
+            }
+            Write-Warning "curl 下载失败（$Url），重试（$attempt/3）..."
         }
         Start-Sleep -Seconds 5
     }
@@ -155,9 +167,15 @@ foreach ($spec in $wheelSpecs) {
     }
     Write-Host "[依赖] 冻结 $($spec.Label) 版本清单 ..." -ForegroundColor Cyan
     $freezeFile = Join-Path $tmpDownload "freeze-$($spec.Label).txt"
-    & $uvExe pip freeze --python $spec.Py 2>$null |
+    # uv 会向 stderr 打印解释器提示，PS 5.1 在 EAP=Stop 下会把它当 NativeCommandError，
+    # 调用期间临时降级为 Continue 并丢弃 stderr。
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $freezeLines = & $uvExe pip freeze --python $spec.Py 2>$null
+    $ErrorActionPreference = $previousEap
+    $freezeLines |
         Where-Object {
-            $_ -and $_ -notmatch '^(torch|torchaudio|torchvision|nvidia-|pip==|setuptools==|wheel==)' `
+            $_ -and $_ -notmatch '^(torch|torchaudio|torchvision|nvidia-|pip==)' `
                 -and $_ -notmatch '^-e '
         } |
         Set-Content $freezeFile -Encoding ascii
@@ -165,17 +183,26 @@ foreach ($spec in $wheelSpecs) {
         throw "冻结 $($spec.Label) 版本清单为空，请先运行 setup_environment.bat。"
     }
     Write-Host "[依赖] 下载 $($spec.Label) 依赖 wheel（本地 pip 缓存命中，无需网络）..." -ForegroundColor Cyan
-    & $spec.Py -m pip download -r $freezeFile --only-binary=:all: --no-deps `
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    # uv 创建的 venv 可能不带 pip；ensurepip 离线补装
+    & $spec.Py -m ensurepip --upgrade --default-pip 2>$null | Out-Null
+    # 不用 --only-binary：jieba / sox 等包在 PyPI 只有 sdist（pip download 只下载归档、
+    # 不构建）；保留 setuptools/wheel 以便离线安装时构建这些 sdist。
+    & $spec.Py -m pip download -r $freezeFile --no-deps `
         -d $WheelsDir --quiet --disable-pip-version-check
-    if ($LASTEXITCODE -ne 0) {
-        throw "pip download 失败（$($spec.Label)）。"
+    $pipExit = $LASTEXITCODE
+    $ErrorActionPreference = $previousEap
+    if ($pipExit -ne 0) {
+        throw "pip download 失败（$($spec.Label)，退出码 $pipExit）。"
     }
 }
-# CPU torch / torchaudio（cp310 + cp312），离线安装用；GPU 机器安装后自动升级 CUDA 版
+# CPU torch / torchaudio（cp310 + cp312），离线安装用；GPU 机器安装后自动升级 CUDA 版。
+# 注意：PyTorch 索引对路径中的字面 '+' 返回 403，必须用 %2B 编码。
 foreach ($tag in @("cp310", "cp312")) {
-    foreach ($pkg in @("torch-2.13.0+cpu", "torchaudio-2.11.0+cpu")) {
+    foreach ($pkg in @("torch-2.13.0%2Bcpu", "torchaudio-2.11.0%2Bcpu")) {
         $url = "https://download.pytorch.org/whl/cpu/$pkg-$tag-$tag-win_amd64.whl"
-        $out = Join-Path $WheelsDir "$pkg-$tag-$tag-win_amd64.whl"
+        $out = Join-Path $WheelsDir ($pkg.Replace("%2B", "+") + "-$tag-$tag-win_amd64.whl")
         Invoke-Download $url $out
     }
 }
