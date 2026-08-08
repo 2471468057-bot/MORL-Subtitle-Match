@@ -182,10 +182,14 @@ foreach ($entry in $modelSpecs) {
         & $HfExe download ([string]$spec.repository) --revision ([string]$spec.revision) --local-dir $destination --max-workers 2
         if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
         Write-Warning "模型下载中断（第 $attempt 次），10 秒后重试续传..."
+        if ($attempt -eq 3 -and $env:HF_ENDPOINT -eq "https://hf-mirror.com") {
+            Write-Warning "国内镜像连续失败，自动尝试官方 HuggingFace 源（如无代理可能更慢；开代理时更快）..."
+            $env:HF_ENDPOINT = "https://huggingface.co"
+        }
         Start-Sleep -Seconds 10
     }
     if (-not $downloaded) {
-        throw "模型下载失败：$($spec.repository)。重新运行可续传。"
+        throw "模型下载失败：$($spec.repository)。请检查网络后重试，或设置 HF_ENDPOINT 环境变量切换下载源（如 HF_ENDPOINT=https://huggingface.co）。"
     }
     if (-not (Test-ModelFiles $spec -VerifyHashes)) {
         throw "模型下载结束但关键文件缺失或 SHA-256 不匹配：$($spec.repository)"
