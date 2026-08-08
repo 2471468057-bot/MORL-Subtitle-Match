@@ -199,7 +199,8 @@ function Ensure-SystemPython {
     $exe = Resolve-SystemPython $MajorMinor
     if ($exe) { return $exe }
     Write-Host "[环境] 未找到系统 Python $MajorMinor，尝试通过 winget 安装..." -ForegroundColor Cyan
-    & winget install --id "Python.Python.$MajorMinor" --exact --silent --accept-package-agreements --accept-source-agreements
+    # winget 的进度输出会污染函数返回值，必须全部吞掉
+    & winget install --id "Python.Python.$MajorMinor" --exact --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "$Label 需要 Python $MajorMinor。winget 安装失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
     }
