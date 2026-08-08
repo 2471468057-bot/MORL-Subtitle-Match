@@ -100,7 +100,19 @@ function Ensure-PinnedSource {
 
     $gitPrefix = @("-c", "safe.directory=$destination", "-C", $destination)
     $dirty = & git @gitPrefix status --porcelain
-    if ($LASTEXITCODE -ne 0) { throw "无法检查 $Label 工作区。" }
+    if ($LASTEXITCODE -ne 0) {
+        # git 元数据损坏（如虚拟机快照回滚后 .git 不完整），删除目录后重新获取。
+        Write-Warning "$Label git 元数据异常（退出码 $LASTEXITCODE），删除后重新获取..."
+        & cmd /c "rmdir /s /q `"$destination`"" 2>$null | Out-Null
+        if (Test-Path $destination) {
+            throw "无法清理 $Label 目录（可能被占用）：$destination"
+        }
+        Invoke-External "git" @("-c", "core.autocrlf=true", "clone", "--filter=blob:none", "--no-checkout", [string]$Spec.repository, $destination)
+        Invoke-External "git" @("-c", "safe.directory=$destination", "-c", "core.autocrlf=true", "-C", $destination, "checkout", "--detach", [string]$Spec.revision)
+        $gitPrefix = @("-c", "safe.directory=$destination", "-C", $destination)
+        $dirty = & git @gitPrefix status --porcelain
+        if ($LASTEXITCODE -ne 0) { throw "无法检查 $Label 工作区。" }
+    }
     if ($dirty) {
         $allowedFireRedChanges = @(
             "fireredasr2s/fireredasr2/asr.py",
@@ -177,7 +189,11 @@ function New-UvVenv {
             return
         } catch {
             if ($attempt -ge 2) {
-                throw "uv 创建虚拟环境持续失败。请先关闭正在运行的 2ByteASR 窗口，再重新运行 setup_2byteasr.bat。"
+                throw "uv 创建虚拟环境持续失败（os error 448：不受信任的装入点）。`n" +
+                      "请开启 Windows「开发人员模式」后重启电脑再试：`n" +
+                      "设置 → 系统 → 开发者选项 → 开发人员模式（开）`n" +
+                      "或管理员 PowerShell 执行：`n" +
+                      'reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f'
             }
             Write-Warning "uv 创建虚拟环境失败，清理 uv Python 与目标 venv 残留后重试..."
             foreach ($pythonRoot in @($env:UV_PYTHON_INSTALL_DIR, (Join-Path $env:LOCALAPPDATA "uv\python"), (Join-Path $env:APPDATA "uv\python"))) {
