@@ -45,10 +45,17 @@ $stamp = Get-Date -Format "yyyyMMdd"
 $output = Join-Path $OutputDir "2ByteASR-offline-models-$stamp.7z"
 Remove-Item $output -Force -ErrorAction SilentlyContinue
 Write-Host "[打包] 正在压缩 models 与 third_party（约 12 GB，可能需要一段时间）..." -ForegroundColor Cyan
-& $sevenZipPath a -t7z -mx=1 -mmt=on $output `
-    (Join-Path $ProjectRoot "models\*") (Join-Path $ProjectRoot "third_party\*")
-if ($LASTEXITCODE -ne 0) {
-    throw "7-Zip 打包失败（退出码 $LASTEXITCODE）。"
+# 用 Start-Process 重定向输出：PS 5.1 的 & 管道无法处理 7z 的大量进度输出（会中断）
+$logOut = Join-Path $OutputDir "offline-bundle.log"
+$logErr = Join-Path $OutputDir "offline-bundle.err.log"
+$p = Start-Process -FilePath $sevenZipPath -ArgumentList @(
+    "a", "-t7z", "-mx=1", "-mmt=on", $output,
+    (Join-Path $ProjectRoot "models\*"), (Join-Path $ProjectRoot "third_party\*")
+) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $logOut -RedirectStandardError $logErr
+if ($p.ExitCode -ne 0) {
+    $tail = ""
+    if (Test-Path $logErr) { $tail = "`n" + ((Get-Content $logErr -Tail 10) -join "`n") }
+    throw "7-Zip 打包失败（退出码 $($p.ExitCode)）。$tail"
 }
 
 Write-Host "[OK] 离线包已生成：$output" -ForegroundColor Green
