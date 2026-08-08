@@ -158,6 +158,10 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 $Uv = (Get-Command uv).Source
 $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
+# 把 uv 的 Python 安装目录固定到项目内，避免默认 %APPDATA%\uv\python
+# 里快照回滚/中断安装残留的失效 junction（Windows “不受信任的装入点” os error 448）。
+$env:UV_PYTHON_INSTALL_DIR = Join-Path $ProjectRoot ".uv-python"
+
 
 function New-UvVenv {
     param(
@@ -175,9 +179,9 @@ function New-UvVenv {
             if ($attempt -ge 2) {
                 throw "uv 创建虚拟环境持续失败。请先关闭正在运行的 2ByteASR 窗口，再重新运行 setup_2byteasr.bat。"
             }
-            Write-Warning "uv 创建虚拟环境失败，清理 uv\python 与目标 venv 残留后重试..."
-            foreach ($pythonRoot in @((Join-Path $env:LOCALAPPDATA "uv\python"), (Join-Path $env:APPDATA "uv\python"))) {
-                if (Test-Path $pythonRoot) {
+            Write-Warning "uv 创建虚拟环境失败，清理 uv Python 与目标 venv 残留后重试..."
+            foreach ($pythonRoot in @($env:UV_PYTHON_INSTALL_DIR, (Join-Path $env:LOCALAPPDATA "uv\python"), (Join-Path $env:APPDATA "uv\python"))) {
+                if ($pythonRoot -and (Test-Path $pythonRoot)) {
                     # cmd rmdir 只删除 junction 本身、不跟随目标，
                     # 不会触发 Windows “不受信任的装入点”（os error 448）。
                     & cmd /c "rmdir /s /q `"$pythonRoot`"" 2>$null | Out-Null
