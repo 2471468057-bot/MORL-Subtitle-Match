@@ -18,6 +18,9 @@ if (-not $env:HF_ENDPOINT) {
     $env:HF_ENDPOINT = "https://hf-mirror.com"
     Write-Host "[网络] HuggingFace 走国内镜像：$env:HF_ENDPOINT（可用 HF_ENDPOINT 环境变量覆盖）" -ForegroundColor Cyan
 }
+# 镜像下载大文件较慢，放宽读/连接超时（默认值会导致大文件中途 ReadTimeout）
+if (-not $env:HF_HUB_DOWNLOAD_TIMEOUT) { $env:HF_HUB_DOWNLOAD_TIMEOUT = "300" }
+if (-not $env:HF_HUB_ETAG_TIMEOUT) { $env:HF_HUB_ETAG_TIMEOUT = "60" }
 
 function Resolve-ProjectPath {
     param([string]$RelativePath)
@@ -156,8 +159,15 @@ foreach ($entry in $modelSpecs) {
     $destination = Resolve-ProjectPath $spec.path
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     Write-Host "[下载] $($spec.repository) @ $($spec.revision)"
-    & $HfExe download ([string]$spec.repository) --revision ([string]$spec.revision) --local-dir $destination
-    if ($LASTEXITCODE -ne 0) {
+    # 国内镜像下载大文件较慢：放宽读超时、降低并发，失败自动重试（可续传）
+    $downloaded = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & $HfExe download ([string]$spec.repository) --revision ([string]$spec.revision) --local-dir $destination --max-workers 2
+        if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+        Write-Warning "模型下载中断（第 $attempt 次），10 秒后重试续传..."
+        Start-Sleep -Seconds 10
+    }
+    if (-not $downloaded) {
         throw "模型下载失败：$($spec.repository)。重新运行可续传。"
     }
     if (-not (Test-ModelFiles $spec -VerifyHashes)) {
