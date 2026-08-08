@@ -173,19 +173,19 @@ $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
 function Resolve-SystemPython {
     param([Parameter(Mandatory = $true)][string]$MajorMinor)
-    # 依次查找：py 启动器 → 注册表/常见安装路径
-    $pyCommand = Get-Command py -ErrorAction SilentlyContinue
-    if ($pyCommand) {
-        $out = & py -$MajorMinor -c "import sys; print(sys.executable)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $out) {
-            $exe = (($out | Select-Object -Last 1) -as [string]).Trim()
-            if ($exe -and (Test-Path $exe)) { return $exe }
-        }
-    }
+    # 依次查找：常见安装路径（winget/官方安装器）→ 注册表。
+    # 不用 py 启动器：找不到版本时它会把横幅写到 stderr，在
+    # ErrorActionPreference=Stop 下触发 NativeCommandError。
     $short = $MajorMinor -replace '\.', ''
     foreach ($base in @((Join-Path $env:LOCALAPPDATA "Programs\Python"), (Join-Path $env:ProgramFiles "Python"))) {
         $candidate = Join-Path (Join-Path $base "Python$short") "python.exe"
         if (Test-Path $candidate) { return $candidate }
+    }
+    foreach ($root in @("HKLM:\SOFTWARE\Python\PythonCore\$MajorMinor\InstallPath", "HKCU:\SOFTWARE\Python\PythonCore\$MajorMinor\InstallPath")) {
+        $reg = Get-ItemProperty $root -ErrorAction SilentlyContinue
+        if ($reg -and $reg.'(default)' -and (Test-Path (Join-Path $reg.'(default)' "python.exe"))) {
+            return (Join-Path $reg.'(default)' "python.exe")
+        }
     }
     return ""
 }
