@@ -201,6 +201,11 @@ if (-not $env:UV_CACHE_DIR) {
     Write-Host "[网络] uv 依赖缓存：$env:UV_CACHE_DIR（可用 UV_CACHE_DIR 覆盖）" -ForegroundColor Cyan
 }
 
+# torch 等大依赖在镜像上下载较慢，放宽 uv 的 HTTP 超时（默认 30 秒偏短，
+# 容易导致大文件中途失败）；中断后重新运行会从缓存/断点继续。
+if (-not $env:UV_HTTP_TIMEOUT) { $env:UV_HTTP_TIMEOUT = "300" }
+if (-not $env:UV_CONCURRENT_DOWNLOADS) { $env:UV_CONCURRENT_DOWNLOADS = "8" }
+
 
 function Resolve-SystemPython {
     param([Parameter(Mandatory = $true)][string]$MajorMinor)

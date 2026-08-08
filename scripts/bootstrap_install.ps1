@@ -14,6 +14,11 @@ $TranscriptPath = Join-Path $env:TEMP "2byteasr-setup.log"
 Start-Transcript -Path $TranscriptPath -Append -ErrorAction SilentlyContinue | Out-Null
 Write-Host "[日志] 安装过程已记录到 $TranscriptPath" -ForegroundColor DarkGray
 
+# 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
+# 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
+$SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
+Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $SetupEnvironment = Join-Path $PSScriptRoot "setup_environment.ps1"
 $DownloadModelScript = Join-Path $PSScriptRoot "download_models.ps1"
@@ -276,5 +281,8 @@ if ($DownloadModels) {
 if (-not $NoLaunch -and (Test-Path -LiteralPath $Launcher)) {
     Start-Process -FilePath $Launcher -WorkingDirectory $ProjectRoot
 }
+
+# 全部成功后才写完成标记：2ByteASR.exe 启动器据此判断环境是否完整。
+Set-Content -LiteralPath $SetupMarker -Value (Get-Date).ToString("o") -Encoding ascii
 
 Write-Host "[OK] 2ByteASR is ready." -ForegroundColor Green

@@ -37,6 +37,9 @@ design-qa.md
 # ZCode agent session state (never publish)
 .zcode/
 
+# First-run setup completion marker (written by bootstrap_install.ps1)
+2byteasr.setup-complete
+
 # Never commit local credentials or voiceprints
 .env
 .env.*

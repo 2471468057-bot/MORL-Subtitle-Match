@@ -60,7 +60,7 @@ $excludeDirs = @(
     ".venv-main", ".venv-moss", ".venv", ".uv-python", ".uv-cache",
     "tmp", "dist", "backups", "archive", "outputs", "output", "reports",
     "review_tracks", "__pycache__", ".pytest_cache", ".git", ".mimosa", ".zcode",
-    "models", "third_party"
+    "models", "third_party", "2byteasr.setup-complete"
 )
 Get-ChildItem $ProjectRoot -Force | Where-Object { $_.Name -notin $excludeDirs } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $staging $_.Name) -Recurse -Force }
