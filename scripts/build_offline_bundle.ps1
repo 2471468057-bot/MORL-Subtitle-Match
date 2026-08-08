@@ -43,9 +43,10 @@ if (-not $sevenZipPath) {
 
 $stamp = Get-Date -Format "yyyyMMdd"
 $output = Join-Path $OutputDir "2ByteASR-offline-models-$stamp.7z"
+Remove-Item $output -Force -ErrorAction SilentlyContinue
 Write-Host "[打包] 正在压缩 models 与 third_party（约 12 GB，可能需要一段时间）..." -ForegroundColor Cyan
 & $sevenZipPath a -t7z -mx=1 -mmt=on $output `
-    (Join-Path $ProjectRoot "models\*") (Join-Path $ProjectRoot "third_party\*") | Out-Null
+    (Join-Path $ProjectRoot "models\*") (Join-Path $ProjectRoot "third_party\*")
 if ($LASTEXITCODE -ne 0) {
     throw "7-Zip 打包失败（退出码 $LASTEXITCODE）。"
 }
