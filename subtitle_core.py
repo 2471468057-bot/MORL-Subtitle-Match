@@ -195,13 +195,21 @@ RUNTIME_FORCE_REFRESH_GROUP_CACHE = _DEFAULT_RUNTIME_CONTEXT.force_refresh_group
 
 def _supplement_tool_path():
     """winget 等安装的 FFmpeg/ffprobe 可能不在当前进程 PATH（新装环境常见），
-    把常见安装位置补充进 PATH，避免“缺少 ffmpeg/ffprobe”误报。"""
+    把常见安装位置补充进 PATH，避免“缺少 ffmpeg/ffprobe”误报。
+    便携包内置工具（tools/）也在此补齐：setup 只改安装进程的 PATH，
+    从桌面启动的应用不会继承，运行前必须自愈。"""
+    project_root = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links"),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "FFmpeg", "bin"),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages"),
         os.path.join(os.environ.get("ProgramFiles", ""), "FFmpeg", "bin"),
         r"C:\ffmpeg\bin",
+        # 便携包内置工具
+        os.path.join(project_root, "tools", "ffmpeg", "bin"),
+        os.path.join(project_root, "tools"),
+        os.path.join(project_root, "tools", "git", "cmd"),
+        os.path.join(project_root, "tools", "git", "bin"),
     ]
     extra = [c for c in candidates if c and os.path.isdir(c)]
     for base in candidates:

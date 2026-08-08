@@ -283,24 +283,85 @@ QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus {{
     border: 1px solid {GREEN};
 }}
 QComboBox {{
+    color: {INK};
+    background-color: #ffffff;
     background: #ffffff;
     border: 1px solid #bdb8ae;
     border-radius: 8px;
-    padding: 7px 30px 7px 10px;
-    min-height: 0;
-    selection-background-color: {GREEN};
+    padding: 4px 28px 4px 10px;
+    min-height: 20px;
+    outline: none;
+    selection-background-color: #e5eee2;
+    selection-color: {INK};
 }}
-QComboBox:focus {{ border: 1px solid {GREEN}; }}
+/* 非可编辑组合框走 CC_ComboBox：锁死不透明白底，否则上下露出 Fusion
+   默认面板（Win11 上表现为大块黑带） */
+QComboBox:!editable,
+QComboBox:!editable:on,
+QComboBox:!editable:hover,
+QComboBox:!editable:focus {{
+    color: {INK};
+    background-color: #ffffff;
+    background: #ffffff;
+}}
+QComboBox:hover {{
+    border: 1px solid #9a948a;
+    background-color: #ffffff;
+}}
+QComboBox:focus,
+QComboBox:on {{
+    border: 1px solid {GREEN};
+    background-color: #ffffff;
+}}
+QComboBox:disabled {{
+    color: #99958d;
+    background-color: #ece7de;
+    border: 1px solid #d2cbc0;
+}}
+/* 关键：origin 用 border（与主框同高），杜绝上下黑带 */
 QComboBox::drop-down {{
-    subcontrol-origin: padding;
+    subcontrol-origin: border;
     subcontrol-position: center right;
-    border: 0;
-    width: 28px;
+    width: 24px;
+    border: none;
     background: transparent;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}}
+QComboBox::drop-down:hover,
+QComboBox::drop-down:on {{
+    background: transparent;
+    border: none;
+}}
+QComboBox::down-arrow {{
+    width: 12px;
+    height: 12px;
+    image: url(assets/ui-chevron-down.png);
+}}
+QComboBox::down-arrow:on {{
+    image: url(assets/ui-chevron-down.png);
 }}
 QComboBox QAbstractItemView {{
-    background: {SURFACE}; border: 1px solid {LINE}; border-radius: 8px;
-    padding: 5px; selection-background-color: #e5eee2; selection-color: {INK};
+    color: {INK};
+    background-color: #ffffff;
+    background: #ffffff;
+    border: 1px solid {LINE};
+    border-radius: 8px;
+    outline: none;
+    padding: 4px;
+    selection-background-color: #e5eee2;
+    selection-color: {INK};
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 28px;
+    padding: 4px 8px;
+    border: none;
+    background-color: #ffffff;
+    color: {INK};
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background-color: #f0fdf4;
+    color: {INK};
 }}
 QPushButton {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fffefa, stop:1 #f2ede4);
@@ -1082,7 +1143,8 @@ class CollapsibleFrame(QFrame):
 
     def set_expanded(self, expanded: bool, animate: bool = True):
         self._expanded = bool(expanded)
-        target = self.content.sizeHint().height() if expanded else 0
+        # 留 6px 余量：不同系统字体度量差异会导致 sizeHint 低估、内容被截
+        target = self.content.sizeHint().height() + 6 if expanded else 0
         self.content.setVisible(True)
         self.content.setMinimumHeight(0)
         if animate:
@@ -1094,6 +1156,12 @@ class CollapsibleFrame(QFrame):
             self.content.setMaximumHeight(target)
         self._refresh_header()
         self.toggled.emit(bool(expanded))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 首次显示后字体/布局已定型，重算展开高度，防止内容被截
+        if self._expanded:
+            self.content.setMaximumHeight(self.content.sizeHint().height() + 6)
 
 
 class EndpointEditor(QFrame):

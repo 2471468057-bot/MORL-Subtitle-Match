@@ -1,0 +1,632 @@
+=== APP_QSS (157-303) ===
+157: APP_QSS = f"""
+158: QWidget {{
+159:     color: {INK};
+160:     font-family: "Microsoft YaHei UI";
+161:     font-size: 14px;
+162: }}
+163: QMainWindow, QWidget#appRoot {{ background: {IVORY}; }}
+164: QFrame#workflow, QFrame#accordion, QFrame#mediaRow {{
+165:     background: {SURFACE};
+166:     border: 1px solid {LINE};
+167:     border-radius: 12px;
+168: }}
+169: QFrame#settingsSurface {{
+170:     background: {PARCHMENT};
+171:     border: 1px solid #d6c5aa;
+172:     border-radius: 14px;
+173: }}
+174: QFrame#mediaRow[dropActive="true"] {{
+175:     background: #eef6ea;
+176:     border: 2px dashed {GREEN};
+177: }}
+178: QFrame#mediaRow[empty="true"] {{
+179:     background: #fffaf1;
+180:     border: 2px dashed #c7ad84;
+181: }}
+182: QFrame#dropOverlay {{
+183:     background: rgba(248, 245, 238, 238);
+184:     border: 3px dashed {GREEN};
+185:     border-radius: 24px;
+186: }}
+187: QLabel#dropOverlayTitle {{
+188:     color: {INK}; font-size: 28px; font-weight: 800;
+189: }}
+190: QLabel#dropOverlayHint {{
+191:     color: {MUTED}; font-size: 14px;
+192: }}
+193: QLabel#dropHint {{ color: {MUTED}; font-size: 12px; }}
+194: QFrame#endpointCard {{
+195:     background: rgba(255, 253, 248, 0.82);
+196:     border: 1px solid {LINE};
+197:     border-radius: 10px;
+198: }}
+199: QFrame#progressHero {{
+200:     background: #f0e7d8;
+201:     border: 1px solid #d6c5aa;
+202:     border-radius: 16px;
+203: }}
+204: QFrame#phaseCard, QFrame#currentStageCard, QFrame#eventFeedCard, QFrame#consoleCard,
+205: QFrame#resultSummaryCard, QFrame#resultFilesCard, QFrame#resultLogCard {{
+206:     background: {SURFACE};
+207:     border: 1px solid {LINE};
+208:     border-radius: 13px;
+209: }}
+210: QLabel#progressPercent {{
+211:     background: {CHARCOAL}; color: white; border-radius: 16px;
+212:     font-size: 17px; font-weight: 800; padding: 7px 13px;
+213: }}
+214: QLabel#stageEyebrow {{ color: {AMBER}; font-size: 12px; font-weight: 800; }}
+215: QLabel#stageLarge {{ font-size: 21px; font-weight: 800; }}
+216: QLabel#consoleBadge {{
+217:     background: #e9dfcf; color: #5b4a36; border-radius: 9px;
+218:     padding: 4px 9px; font-size: 11px; font-weight: 700;
+219: }}
+220: QListWidget#eventFeed {{
+221:     background: #fffaf1; border: 0; border-radius: 11px; padding: 5px;
+222:     outline: 0;
+223: }}
+224: QListWidget#eventFeed::item {{
+225:     border: 0; margin: 3px 1px; padding: 0;
+226: }}
+227: QTextEdit#consoleLog {{
+228:     background: #30332f; color: #edf0e9; border: 0; border-radius: 9px;
+229:     padding: 9px; font-family: "Cascadia Mono", "Microsoft YaHei UI"; font-size: 12px;
+230:     selection-background-color: #6d8d67;
+231: }}
+232: QTextEdit#resultFiles {{
+233:     background: #fffaf1; border: 0; border-radius: 9px; padding: 9px;
+234: }}
+235: QTextEdit#resultConsole {{
+236:     background: #30332f; color: #edf0e9; border: 0; border-radius: 9px;
+237:     padding: 9px; font-family: "Cascadia Mono", "Microsoft YaHei UI"; font-size: 12px;
+238: }}
+239: QLineEdit, QComboBox, QPlainTextEdit, QListWidget {{
+240:     background: #ffffff;
+241:     border: 1px solid #bdb8ae;
+242:     border-radius: 7px;
+243:     padding: 8px 10px;
+244:     selection-background-color: {GREEN};
+245: }}
+246: QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QListWidget:focus {{
+247:     border: 1px solid {GREEN};
+248: }}
+249: QComboBox::drop-down {{ border: 0; width: 24px; }}
+250: QComboBox QAbstractItemView {{
+251:     background: {SURFACE}; border: 1px solid {LINE}; border-radius: 7px;
+252:     padding: 5px; selection-background-color: #e5eee2; selection-color: {INK};
+253: }}
+254: QPushButton {{
+255:     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fffefa, stop:1 #f2ede4);
+256:     border: 1px solid #beb8ad;
+257:     border-radius: 7px;
+258:     padding: 8px 16px;
+259: }}
+260: QPushButton:hover {{ background: #fffaf0; border-color: {AMBER}; }}
+261: QPushButton:pressed {{ background: #e8e0d2; border-color: #9e7a45; }}
+262: QPushButton#primary {{
+263:     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #618f5f, stop:1 #416f45);
+264:     color: white; border: 1px solid #365f3a; border-radius: 9px;
+265:     font-size: 17px; font-weight: 700; padding: 13px 26px;
+266: }}
+267: QPushButton#primary:hover {{
+268:     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6b9b68, stop:1 #497b4c);
+269:     border-color: #294e2c;
+270: }}
+271: QPushButton:disabled {{ color: #99958d; background: #ece7de; border-color: #d2cbc0; }}
+272: QPushButton#danger {{ color: #8a6524; }}
+273: QPushButton#flat {{ border: 0; background: transparent; padding: 5px; }}
+274: QPushButton#accordionButton {{
+275:     border: 0; background: transparent; text-align: left; padding: 11px 14px;
+276:     font-size: 15px; font-weight: 600;
+277: }}
+278: QPushButton#accordionButton:hover {{ background: rgba(196, 171, 131, 0.12); }}
+279: QLabel#brand {{ font-size: 27px; font-weight: 800; padding: 4px 7px; border-radius: 8px; }}
+280: QLabel#brand:hover {{ background: #eee7d9; color: #365f3a; }}
+281: QLabel#title {{ font-size: 18px; font-weight: 700; }}
+282: QLabel#sectionTitle {{
+283:     background: {CHARCOAL}; color: white; border-radius: 8px;
+284:     font-size: 17px; font-weight: 700; padding: 10px 18px;
+285: }}
+286: QLabel#muted {{ color: {MUTED}; font-size: 12px; }}
+287: QLabel#statusGood {{ color: {GREEN}; font-weight: 600; }}
+288: QLabel#statusWarn {{ color: {AMBER}; font-weight: 600; }}
+289: QProgressBar {{
+290:     background: #e4dccf; border: 0; border-radius: 7px; height: 14px; text-align: center;
+291: }}
+292: QProgressBar::chunk {{ background: {GREEN}; border-radius: 7px; }}
+293: QScrollArea, QWidget#qt_scrollarea_viewport, QWidget#settingsPage {{
+294:     border: 0; background: {IVORY};
+295: }}
+296: QScrollBar:vertical {{
+297:     background: #eee7dc; width: 10px; margin: 0; border-radius: 5px;
+298: }}
+299: QScrollBar::handle:vertical {{
+300:     background: #b9ad9d; min-height: 36px; border-radius: 5px;
+301: }}
+302: QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+303: """
+
+=== _header (1435-1485) ===
+1435:             pixmap = QPixmap(str(APP_ICON_SOURCE_PATH)).scaled(
+1436:                 QSize(50, 50),
+1437:                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+1438:                 Qt.TransformationMode.SmoothTransformation,
+1439:             )
+1440:             mascot.setPixmap(pixmap)
+1441:         elif APP_ICON_FALLBACK_PATH.is_file():
+1442:             mascot.setPixmap(
+1443:                 QPixmap(str(APP_ICON_FALLBACK_PATH)).scaled(
+1444:                     QSize(50, 50),
+1445:                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+1446:                     Qt.TransformationMode.SmoothTransformation,
+1447:                 )
+1448:             )
+1449:         mascot.setStyleSheet("border: 0; background: transparent;")
+1450:         mascot.setToolTip("2ByteASR")
+1451:         self.brand = BrandLabel("2ByteASR")
+1452:         self.brand.setObjectName("brand")
+1453:         self.brand.setCursor(Qt.CursorShape.PointingHandCursor)
+1454:         self.brand.setToolTip("悬停查看字幕生成流程")
+1455:         subtitle = QLabel("智能游戏字幕工作台")
+1456:         subtitle.setStyleSheet("font-size: 16px;")
+1457:         self.header_status = QLabel("")
+1458:         self.header_status.setObjectName("statusGood")
+1459:         row.addWidget(mascot)
+1460:         row.addWidget(self.brand)
+1461:         separator = QFrame()
+1462:         separator.setFrameShape(QFrame.Shape.VLine)
+1463:         separator.setStyleSheet(f"color: {LINE};")
+1464:         row.addWidget(separator)
+1465:         row.addWidget(subtitle)
+1466:         row.addSpacing(10)
+1467:         row.addWidget(self.header_status)
+1468:         row.addStretch(1)
+1469:         self.language_combo = QComboBox()
+1470:         self.language_combo.addItem("中文", "zh")
+1471:         self.language_combo.addItem("English", "en")
+1472:         self.language_combo.addItem("日本語", "ja")
+1473:         self.language_combo.setCurrentIndex(
+1474:             max(0, self.language_combo.findData(current_language()))
+1475:         )
+1476:         self.language_combo.currentIndexChanged.connect(self._change_language)
+1477:         row.addWidget(self.language_combo)
+1478:         return row
+1479: 
+1480:     def _queue_workflow_show(self):
+1481:         self._workflow_hide_timer.stop()
+1482:         self._workflow_show_timer.start()
+1483: 
+1484:     def _queue_workflow_hide(self):
+1485:         self._workflow_show_timer.stop()
+
+=== CollapsibleFrame (950-1027) ===
+950: class CollapsibleFrame(QFrame):
+951:     toggled = Signal(bool)
+952: 
+953:     def __init__(
+954:         self,
+955:         title: str,
+956:         icon_name: str,
+957:         summary: str = "",
+958:         expanded: bool = False,
+959:         action_text: str = "",
+960:     ):
+961:         super().__init__()
+962:         self.setObjectName("accordion")
+963:         self._expanded = bool(expanded)
+964:         self.header = QWidget()
+965:         header_layout = QHBoxLayout(self.header)
+966:         header_layout.setContentsMargins(10, 4, 10, 4)
+967:         header_layout.setSpacing(10)
+968:         self.title_button = AnimatedButton(title)
+969:         self.title_button.setObjectName("accordionButton")
+970:         self.title_button.setIcon(_icon(icon_name))
+971:         self.title_button.setIconSize(QSize(21, 21))
+972:         self.title_button.clicked.connect(lambda: self.set_expanded(not self._expanded))
+973:         header_layout.addWidget(self.title_button)
+974:         self.summary_label = QLabel(summary)
+975:         self.summary_label.setObjectName("muted")
+976:         header_layout.addWidget(self.summary_label, 1)
+977:         if action_text:
+978:             self.action_button = AnimatedButton(action_text)
+979:             self.action_button.clicked.connect(lambda: self.set_expanded(True))
+980:             header_layout.addWidget(self.action_button)
+981:         else:
+982:             self.action_button = None
+983:         self.chevron = AnimatedButton()
+984:         self.chevron.setObjectName("flat")
+985:         self.chevron.setFixedSize(34, 34)
+986:         self.chevron.clicked.connect(lambda: self.set_expanded(not self._expanded))
+987:         header_layout.addWidget(self.chevron)
+988:         self._title = title
+989:         self._summary = summary
+990:         self.content = QWidget()
+991:         self.content_layout = QVBoxLayout(self.content)
+992:         self.content_layout.setContentsMargins(16, 3, 16, 15)
+993:         self.content_layout.setSpacing(10)
+994:         layout = QVBoxLayout(self)
+995:         layout.setContentsMargins(0, 0, 0, 0)
+996:         layout.setSpacing(0)
+997:         layout.addWidget(self.header)
+998:         layout.addWidget(self.content)
+999:         self.animation = QPropertyAnimation(self.content, b"maximumHeight", self)
+1000:         self.animation.setDuration(180)
+1001:         self.animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+1002:         self.set_expanded(expanded, animate=False)
+1003: 
+1004:     def set_summary(self, summary: str):
+1005:         self._summary = summary
+1006:         self._refresh_header()
+1007: 
+1008:     def _refresh_header(self):
+1009:         self.summary_label.setText(self._summary)
+1010:         icon_name = "fa5s.chevron-up" if self._expanded else "fa5s.chevron-down"
+1011:         self.chevron.setIcon(_icon(icon_name))
+1012:         self.chevron.setIconSize(QSize(14, 14))
+1013: 
+1014:     def set_expanded(self, expanded: bool, animate: bool = True):
+1015:         self._expanded = bool(expanded)
+1016:         target = self.content.sizeHint().height() if expanded else 0
+1017:         self.content.setVisible(True)
+1018:         self.content.setMinimumHeight(0)
+1019:         if animate:
+1020:             self.animation.stop()
+1021:             self.animation.setStartValue(self.content.maximumHeight())
+1022:             self.animation.setEndValue(target)
+1023:             self.animation.start()
+1024:         else:
+1025:             self.content.setMaximumHeight(target)
+1026:         self._refresh_header()
+1027:         self.toggled.emit(bool(expanded))
+
+=== EndpointEditor (1028-1135) ===
+1028: 
+1029: 
+1030: class EndpointEditor(QFrame):
+1031:     def __init__(self, title: str, accent: str, stage: str, settings: dict):
+1032:         super().__init__()
+1033:         self.setObjectName("endpointCard")
+1034:         self.stage = stage
+1035:         self.accent = accent
+1036:         models = settings["models"]
+1037:         prefix = "polish" if stage == "polish" else "group"
+1038:         layout = QVBoxLayout(self)
+1039:         layout.setContentsMargins(14, 12, 14, 13)
+1040:         self.title_label = QLabel(f"●  {title}")
+1041:         self.title_label.setStyleSheet(f"color: {accent}; font-size: 15px; font-weight: 700;")
+1042:         layout.addWidget(self.title_label)
+1043:         form = QFormLayout()
+1044:         form.setHorizontalSpacing(12)
+1045:         form.setVerticalSpacing(8)
+1046:         self.provider = QComboBox()
+1047:         for key, spec in PROVIDER_PRESETS.items():
+1048:             self.provider.addItem(spec["label"], key)
+1049:         current_provider = models.get(f"{prefix}_provider", "bailian")
+1050:         self.provider.setCurrentIndex(max(0, self.provider.findData(current_provider)))
+1051:         self.model = QComboBox()
+1052:         self.model.setEditable(True)
+1053:         defaults = [
+1054:             "qwen3.7-flash-2026-07-15",
+1055:             "qwen3-max",
+1056:             "glm-5.2",
+1057:         ]
+1058:         self.model.addItems(defaults)
+1059:         self.model.setCurrentText(models.get(f"{prefix}_model", ""))
+1060:         self.base_url = QLineEdit(models.get(f"{prefix}_base_url", ""))
+1061:         self.key = QLineEdit()
+1062:         self.key.setEchoMode(QLineEdit.EchoMode.Password)
+1063:         existing, source = resolve_api_key(stage)
+1064:         self.key.setPlaceholderText(f"已配置：{source}" if existing else "请输入 API Key")
+1065:         self.test_button = AnimatedButton("测试连接")
+1066:         self.status = QLabel("已配置" if existing else "未配置密钥")
+1067:         self.status.setObjectName("statusGood" if existing else "statusWarn")
+1068:         key_row = QHBoxLayout()
+1069:         key_row.addWidget(self.key, 1)
+1070:         key_row.addWidget(self.test_button)
+1071:         status_row = QHBoxLayout()
+1072:         status_row.addWidget(self.status)
+1073:         status_row.addStretch(1)
+1074:         form.addRow("服务商预设", self.provider)
+1075:         form.addRow("模型名称", self.model)
+1076:         form.addRow("API 地址", self.base_url)
+1077:         form.addRow("API 密钥", key_row)
+1078:         form.addRow("", status_row)
+1079:         layout.addLayout(form)
+1080:         self.provider.currentIndexChanged.connect(self._provider_changed)
+1081:         self.test_button.clicked.connect(self.test_connection)
+1082:         self._tester = None
+1083: 
+1084:     def refresh_secret_status(self):
+1085:         existing, source = resolve_api_key(self.stage)
+1086:         self.key.setPlaceholderText(f"已配置：{source}" if existing else "请输入 API Key")
+1087:         self.status.setObjectName("statusGood" if existing else "statusWarn")
+1088:         self.status.setText("密钥已保存" if existing else "尚未配置密钥")
+1089:         self.status.style().unpolish(self.status)
+1090:         self.status.style().polish(self.status)
+1091: 
+1092:     def _provider_changed(self):
+1093:         provider = self.provider.currentData()
+1094:         preset = PROVIDER_PRESETS.get(provider, {})
+1095:         if provider != "custom":
+1096:             self.base_url.setText(preset.get("base_url", ""))
+1097: 
+1098:     def values(self) -> dict:
+1099:         return {
+1100:             "provider": str(self.provider.currentData()),
+1101:             "model": self.model.currentText().strip(),
+1102:             "base_url": normalize_base_url(self.base_url.text()),
+1103:             "key": self.key.text().strip(),
+1104:         }
+1105: 
+1106:     def test_connection(self):
+1107:         values = self.values()
+1108:         key = values["key"] or resolve_api_key(self.stage)[0]
+1109:         endpoint = {
+1110:             **values,
+1111:             "api_key": key,
+1112:             "url": f"{values['base_url']}/chat/completions" if values["base_url"] else "",
+1113:         }
+1114:         try:
+1115:             validate_endpoint(endpoint, "当前模型")
+1116:         except RuntimeError as exc:
+1117:             self.status.setObjectName("statusWarn")
+1118:             self.status.setText(str(exc))
+1119:             self.status.style().unpolish(self.status)
+1120:             self.status.style().polish(self.status)
+1121:             return
+1122:         self.test_button.setEnabled(False)
+1123:         self.status.setText("正在测试…")
+1124:         self._tester = ConnectionTester(endpoint)
+1125:         self._tester.finished_status.connect(self._connection_finished)
+1126:         self._tester.start()
+1127: 
+1128:     def _connection_finished(self, ok: bool, message: str):
+1129:         self.test_button.setEnabled(True)
+1130:         self.status.setObjectName("statusGood" if ok else "statusWarn")
+1131:         self.status.setText(message)
+1132:         self.status.style().unpolish(self.status)
+1133:         self.status.style().polish(self.status)
+1134: 
+1135: 
+
+=== _settings_page (1510-1748) ===
+1510:             return
+1511:         self._workflow_expanded = False
+1512:         self._workflow_animation.stop()
+1513:         self._workflow_animation.setDuration(280)
+1514:         self._workflow_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+1515:         self._workflow_animation.setStartValue(self.workflow.maximumHeight())
+1516:         self._workflow_animation.setEndValue(0)
+1517:         self._workflow_animation.start()
+1518: 
+1519:     def _workflow_animation_finished(self):
+1520:         if not self._workflow_expanded and self.workflow.maximumHeight() <= 0:
+1521:             self.workflow.hide()
+1522: 
+1523:     def _settings_page(self):
+1524:         page = QWidget()
+1525:         page.setObjectName("settingsPage")
+1526:         layout = QVBoxLayout(page)
+1527:         layout.setContentsMargins(0, 0, 0, 0)
+1528:         layout.setSpacing(10)
+1529:         title = QLabel("  本批字幕内容设置  ")
+1530:         title.setObjectName("sectionTitle")
+1531:         title.setMaximumWidth(245)
+1532:         layout.addWidget(title)
+1533:         # 素材区放在最上方：用户应先放入素材，再配置内容设置。
+1534:         self.media_frame = QFrame()
+1535:         self.media_frame.setObjectName("mediaRow")
+1536:         self.media_frame.setProperty("dropActive", False)
+1537:         self.media_frame.setMinimumHeight(68)
+1538:         media_row = QHBoxLayout(self.media_frame)
+1539:         media_row.setContentsMargins(16, 11, 13, 11)
+1540:         media_icon = QLabel()
+1541:         media_icon.setPixmap(_icon("fa5s.file-audio").pixmap(QSize(20, 20)))
+1542:         media_row.addWidget(media_icon)
+1543:         media_row.addWidget(QLabel("本地素材"))
+1544:         media_row.addSpacing(20)
+1545:         media_text = QVBoxLayout()
+1546:         media_text.setSpacing(1)
+1547:         self.media_name = QLabel("")
+1548:         self.media_name.setStyleSheet("font-weight: 700; color: #5d3e20;")
+1549:         self.media_drop_hint = QLabel("可把视频 / 音频拖到窗口，或点击右侧选择")
+1550:         self.media_drop_hint.setObjectName("dropHint")
+1551:         media_text.addWidget(self.media_name)
+1552:         media_text.addWidget(self.media_drop_hint)
+1553:         media_row.addLayout(media_text, 1)
+1554:         choose_media = AnimatedButton("选择素材")
+1555:         choose_media.setIcon(_icon("fa5s.folder-open"))
+1556:         choose_media.clicked.connect(self._choose_media)
+1557:         media_row.addWidget(choose_media)
+1558:         layout.addWidget(self.media_frame)
+1559:         surface = QFrame()
+1560:         surface.setObjectName("settingsSurface")
+1561:         surface_layout = QHBoxLayout(surface)
+1562:         surface_layout.setContentsMargins(20, 17, 20, 17)
+1563:         surface_layout.setSpacing(34)
+1564:         left = QVBoxLayout()
+1565:         left.setSpacing(10)
+1566:         name_label = QLabel("●  游戏 / 内容名称")
+1567:         name_label.setStyleSheet(f"font-weight: 700; color: {AMBER};")
+1568:         left.addWidget(name_label)
+1569:         self.game_box = EditableHistoryCombo()
+1570:         choices = []
+1571:         seen = set()
+1572:         for value in (*self.legacy.load_runtime_game_history(), *self.legacy.BUILTIN_GAME_PROFILES):
+1573:             canonical = self.legacy.canonicalize_runtime_game_name(value)
+1574:             identity = self.legacy.runtime_game_identity(canonical)
+1575:             if canonical and identity not in seen:
+1576:                 choices.append(canonical)
+1577:                 seen.add(identity)
+1578:         self.game_box.addItems(choices)
+1579:         self.game_box.setCurrentIndex(-1)
+1580:         self.game_box.setPlaceholderText("选择历史记录或内置游戏，也可以直接输入；留空为通用模式")
+1581:         self.game_box.setToolTip("点击右侧箭头选择历史记录或内置游戏；输入新名称也会自动保存")
+1582:         left.addWidget(self.game_box)
+1583:         left.addSpacing(8)
+1584:         self.terms = SwitchControl("游戏术语增强")
+1585:         self.terms.setToolTip("本地图鉴候选 + 联网复核；PVP 内容建议开启")
+1586:         self.game_box.currentTextChanged.connect(self._auto_enable_terms)
+1587:         left.addWidget(self.terms)
+1588:         terms_note = QLabel("启用术语增强（本地图鉴候选 + 联网复核，PVP 时勾选）")
+1589:         terms_note.setObjectName("muted")
+1590:         terms_note.setWordWrap(True)
+1591:         left.addWidget(terms_note)
+1592:         # 手动添加术语：输入角色名 / 技能名等专名，立即写入该游戏的术语表
+1593:         term_row = QHBoxLayout()
+1594:         self.term_input = QLineEdit()
+1595:         self.term_input.setPlaceholderText("添加专名（角色名 / 技能名 / 物品名），回车确认")
+1596:         self.term_input.setToolTip("手动确认的专名会作为强参考参与本地校对，也会进入联网复核候选")
+1597:         self.term_input.returnPressed.connect(self._add_custom_term)
+1598:         add_term = AnimatedButton("添加术语")
+1599:         add_term.setIcon(_icon("fa5s.plus"))
+1600:         add_term.setMaximumWidth(120)
+1601:         add_term.clicked.connect(self._add_custom_term)
+1602:         term_row.addWidget(self.term_input, 1)
+1603:         term_row.addWidget(add_term)
+1604:         left.addLayout(term_row)
+1605:         term_hint = QLabel("内置词表（角色 / 技能名）可在“管理已学习术语”中查看")
+1606:         term_hint.setObjectName("muted")
+1607:         left.addWidget(term_hint)
+1608:         self.term_hint = term_hint
+1609:         right = QVBoxLayout()
+1610:         right.setSpacing(10)
+1611:         self.review_track = SwitchControl("输出疑似吞字幕复核轨")
+1612:         self.review_track.setChecked(self.legacy.RUNTIME_SETTINGS["switches"]["output_review_track"])
+1613:         right.addWidget(self.review_track)
+1614:         review_note = QLabel("默认关闭，不影响主播分轨；复核轨保存到项目 review_tracks/")
+1615:         review_note.setObjectName("muted")
+1616:         right.addWidget(review_note)
+1617:         speaker_label = QLabel("预计主播人数")
+1618:         speaker_label.setStyleSheet("font-weight: 600;")
+1619:         right.addWidget(speaker_label)
+1620:         self.expected_speakers = QComboBox()
+1621:         self.expected_speakers.addItems(["自动", "1", "2", "3", "4", "5", "6"])
+1622:         self.expected_speakers.setMaximumWidth(190)
+1623:         right.addWidget(self.expected_speakers)
+1624:         manage = AnimatedButton("管理已学习术语")
+1625:         manage.setIcon(_icon("fa5s.book-open"))
+1626:         manage.clicked.connect(self._manage_terms)
+1627:         manage.setMaximumWidth(190)
+1628:         right.addWidget(manage)
+1629:         surface_layout.addLayout(left, 1)
+1630:         divider = QFrame()
+1631:         divider.setFrameShape(QFrame.Shape.VLine)
+1632:         divider.setStyleSheet(f"color: {LINE};")
+1633:         surface_layout.addWidget(divider)
+1634:         surface_layout.addLayout(right, 1)
+1635:         layout.addWidget(surface)
+1636: 
+1637:         settings = self.legacy.RUNTIME_SETTINGS
+1638:         self.ai_panel = CollapsibleFrame(
+1639:             "AI 模型与密钥",
+1640:             "fa5s.project-diagram",
+1641:             expanded=True,
+1642:             action_text="修改配置",
+1643:         )
+1644:         self.unified_glm = SwitchControl("同一云端模型负责字幕校对与全文断句（推荐）")
+1645:         self.unified_glm.setChecked(
+1646:             settings["switches"].get("unified_glm_processing", True)
+1647:         )
+1648:         self.ai_panel.content_layout.addWidget(self.unified_glm)
+1649:         endpoint_row = QHBoxLayout()
+1650:         self.polish_editor = EndpointEditor("字幕校对模型", CORAL, "polish", settings)
+1651:         self.group_editor = EndpointEditor("全文断句模型", BLUE, "group", settings)
+1652:         endpoint_row.addWidget(self.polish_editor, 1)
+1653:         endpoint_row.addWidget(self.group_editor, 1)
+1654:         self.ai_panel.content_layout.addLayout(endpoint_row)
+1655:         prompt_row = QHBoxLayout()
+1656:         self.share_key = SwitchControl("两阶段共用新填写的校对密钥")
+1657:         self.share_key.setChecked(True)
+1658:         prompt_button = AnimatedButton("查看项目内置提示词")
+1659:         prompt_button.setIcon(_icon("fa5s.info-circle"))
+1660:         prompt_button.clicked.connect(lambda: PromptDialog(self).exec())
+1661:         self.save_ai_button = AnimatedButton("保存 AI 配置")
+1662:         self.save_ai_button.setIcon(_icon("fa5s.save"))
+1663:         self.save_ai_button.clicked.connect(
+1664:             lambda: self._save_ai_configuration(show_feedback=True)
+1665:         )
+1666:         prompt_row.addWidget(self.share_key)
+1667:         prompt_row.addStretch(1)
+1668:         prompt_row.addWidget(prompt_button)
+1669:         prompt_row.addWidget(self.save_ai_button)
+1670:         self.ai_panel.content_layout.addLayout(prompt_row)
+1671:         self.ai_save_status = QLabel("供应商、模型、地址和新填写的密钥可在这里单独保存")
+1672:         self.ai_save_status.setObjectName("muted")
+1673:         self.ai_panel.content_layout.addWidget(
+1674:             self.ai_save_status, 0, Qt.AlignmentFlag.AlignRight
+1675:         )
+1676:         self.unified_glm.toggled.connect(self._apply_unified_glm_mode)
+1677:         self.polish_editor.model.currentTextChanged.connect(self._refresh_ai_summary)
+1678:         self.group_editor.model.currentTextChanged.connect(self._refresh_ai_summary)
+1679:         for editor in (self.polish_editor, self.group_editor):
+1680:             editor.provider.currentIndexChanged.connect(self._mark_ai_configuration_dirty)
+1681:             editor.provider.currentIndexChanged.connect(self._refresh_ai_summary)
+1682:             editor.model.currentTextChanged.connect(self._mark_ai_configuration_dirty)
+1683:             editor.base_url.textChanged.connect(self._mark_ai_configuration_dirty)
+1684:             editor.key.textChanged.connect(self._mark_ai_configuration_dirty)
+1685:         self.unified_glm.toggled.connect(self._mark_ai_configuration_dirty)
+1686:         self.share_key.toggled.connect(self._mark_ai_configuration_dirty)
+1687:         self._apply_unified_glm_mode(self.unified_glm.isChecked())
+1688:         layout.addWidget(self.ai_panel)
+1689:         # CollapsibleFrame 在构造时内容为空，展开高度会被锁死；
+1690:         # 内容添加完毕后重新计算一次，避免“收起再打开才正常”的假死状态。
+1691:         self.ai_panel.set_expanded(True, animate=False)
+1692: 
+1693:         self.advanced_panel = CollapsibleFrame("高级设置（缓存与覆盖）", "fa5s.cog", expanded=False)
+1694:         advanced_row = QHBoxLayout()
+1695:         self.refresh_polish = SwitchControl("刷新字幕校对缓存")
+1696:         self.refresh_polish.setChecked(settings["cache"]["force_refresh_polish"])
+1697:         self.refresh_group = SwitchControl("刷新全文断句缓存")
+1698:         self.refresh_group.setChecked(settings["cache"]["force_refresh_group"])
+1699:         self.overwrite = QComboBox()
+1700:         self.overwrite.addItem("覆盖已有结果", "overwrite")
+1701:         self.overwrite.addItem("跳过已有结果", "skip")
+1702:         self.overwrite.addItem("已有结果则报错", "error")
+1703:         advanced_row.addWidget(self.refresh_polish)
+1704:         advanced_row.addWidget(self.refresh_group)
+1705:         advanced_row.addStretch(1)
+1706:         advanced_row.addWidget(QLabel("已有字幕："))
+1707:         advanced_row.addWidget(self.overwrite)
+1708:         self.advanced_panel.content_layout.addLayout(advanced_row)
+1709:         layout.addWidget(self.advanced_panel)
+1710: 
+1711:         action_row = QHBoxLayout()
+1712:         action_row.addStretch(1)
+1713:         self.start_button = AnimatedButton("开始生成字幕")
+1714:         self.start_button.setObjectName("primary")
+1715:         self.start_button.setIcon(_icon("fa5s.play-circle", "white"))
+1716:         self.start_button.setIconSize(QSize(24, 24))
+1717:         self.start_button.clicked.connect(self._start_run)
+1718:         cancel = AnimatedButton("取消")
+1719:         cancel.clicked.connect(self.close)
+1720:         action_row.addWidget(self.start_button)
+1721:         action_row.addSpacing(20)
+1722:         action_row.addWidget(cancel)
+1723:         action_row.addStretch(1)
+1724:         layout.addLayout(action_row)
+1725:         self._refresh_media_summary()
+1726:         has_required_keys = bool(resolve_api_key("group")[0]) if self.unified_glm.isChecked() else bool(
+1727:             resolve_api_key("polish")[0] and resolve_api_key("group")[0]
+1728:         )
+1729:         if not has_required_keys:
+1730:             self.ai_panel.set_expanded(True, animate=False)
+1731:         return page
+1732: 
+1733:     def _progress_page(self):
+1734:         page = QWidget()
+1735:         layout = QVBoxLayout(page)
+1736:         layout.setContentsMargins(24, 14, 24, 16)
+1737:         layout.setSpacing(10)
+1738: 
+1739:         hero = QFrame()
+1740:         hero.setObjectName("progressHero")
+1741:         hero_layout = QHBoxLayout(hero)
+1742:         hero_layout.setContentsMargins(20, 15, 16, 15)
+1743:         hero_layout.setSpacing(13)
+1744:         hero_text = QVBoxLayout()
+1745:         hero_text.setSpacing(2)
+1746:         title = QLabel("2ByteASR 正在制作字幕")
+1747:         title.setStyleSheet("font-size: 22px; font-weight: 800;")
+1748:         hero_text.addWidget(title)
