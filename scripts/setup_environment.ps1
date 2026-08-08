@@ -247,7 +247,8 @@ function Ensure-SystemPython {
     $localInstaller = Join-Path $ProjectRoot "tools\python-$pyVersion-amd64.exe"
     if (Test-Path $localInstaller) {
         Write-Host "[环境] 使用便携包内置 Python 安装器（$pyVersion）..." -ForegroundColor Cyan
-        & $localInstaller /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=0
+        # Include_tcltk=1：部分依赖（tqdm/PIL）会可选导入 tkinter，缺 tcl/tk 会启动失败
+        & $localInstaller /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=1
         $exe = Resolve-SystemPython $MajorMinor
         if ($exe) { return $exe }
         throw "$Label 需要 Python $MajorMinor。便携包内置安装器安装失败，请手动安装后重试。"
@@ -277,7 +278,7 @@ function Ensure-SystemPython {
                 Start-Sleep -Seconds 4
             }
         }
-        & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=0
+        & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=1
         if ($LASTEXITCODE -ne 0) {
             throw "$Label 需要 Python $MajorMinor。python.org 安装失败（退出码 $LASTEXITCODE），请手动安装后重新运行 setup_2byteasr.bat。"
         }

@@ -157,8 +157,8 @@ def _configure_windows_app_identity() -> None:
 APP_QSS = f"""
 QWidget {{
     color: {INK};
-    font-family: "Microsoft YaHei UI";
-    font-size: 14px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC";
+    font-size: 13px;
 }}
 QMainWindow, QWidget#appRoot {{ background: {IVORY}; }}
 QFrame#workflow, QFrame#accordion, QFrame#mediaRow {{
@@ -169,7 +169,7 @@ QFrame#workflow, QFrame#accordion, QFrame#mediaRow {{
 QFrame#settingsSurface {{
     background: {PARCHMENT};
     border: 1px solid #d6c5aa;
-    border-radius: 14px;
+    border-radius: 12px;
 }}
 QFrame#mediaRow[dropActive="true"] {{
     background: #eef6ea;
@@ -185,10 +185,10 @@ QFrame#dropOverlay {{
     border-radius: 24px;
 }}
 QLabel#dropOverlayTitle {{
-    color: {INK}; font-size: 28px; font-weight: 800;
+    color: {INK}; font-size: 26px; font-weight: 800;
 }}
 QLabel#dropOverlayHint {{
-    color: {MUTED}; font-size: 14px;
+    color: {MUTED}; font-size: 13px;
 }}
 QLabel#dropHint {{ color: {MUTED}; font-size: 12px; }}
 QFrame#endpointCard {{
@@ -199,20 +199,20 @@ QFrame#endpointCard {{
 QFrame#progressHero {{
     background: #f0e7d8;
     border: 1px solid #d6c5aa;
-    border-radius: 16px;
+    border-radius: 14px;
 }}
 QFrame#phaseCard, QFrame#currentStageCard, QFrame#eventFeedCard, QFrame#consoleCard,
 QFrame#resultSummaryCard, QFrame#resultFilesCard, QFrame#resultLogCard {{
     background: {SURFACE};
     border: 1px solid {LINE};
-    border-radius: 13px;
+    border-radius: 12px;
 }}
 QLabel#progressPercent {{
-    background: {CHARCOAL}; color: white; border-radius: 16px;
-    font-size: 17px; font-weight: 800; padding: 7px 13px;
+    background: {CHARCOAL}; color: white; border-radius: 15px;
+    font-size: 16px; font-weight: 800; padding: 6px 12px;
 }}
 QLabel#stageEyebrow {{ color: {AMBER}; font-size: 12px; font-weight: 800; }}
-QLabel#stageLarge {{ font-size: 21px; font-weight: 800; }}
+QLabel#stageLarge {{ font-size: 20px; font-weight: 800; }}
 QLabel#consoleBadge {{
     background: #e9dfcf; color: #5b4a36; border-radius: 9px;
     padding: 4px 9px; font-size: 11px; font-weight: 700;
@@ -239,8 +239,9 @@ QTextEdit#resultConsole {{
 QLineEdit, QComboBox, QPlainTextEdit, QListWidget {{
     background: #ffffff;
     border: 1px solid #bdb8ae;
-    border-radius: 7px;
+    border-radius: 8px;
     padding: 8px 10px;
+    min-height: 20px;
     selection-background-color: {GREEN};
 }}
 QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QListWidget:focus {{
@@ -248,40 +249,58 @@ QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QListWidget:focus {{
 }}
 QComboBox::drop-down {{ border: 0; width: 24px; }}
 QComboBox QAbstractItemView {{
-    background: {SURFACE}; border: 1px solid {LINE}; border-radius: 7px;
+    background: {SURFACE}; border: 1px solid {LINE}; border-radius: 8px;
     padding: 5px; selection-background-color: #e5eee2; selection-color: {INK};
 }}
 QPushButton {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fffefa, stop:1 #f2ede4);
     border: 1px solid #beb8ad;
-    border-radius: 7px;
+    border-radius: 8px;
     padding: 8px 16px;
+    min-height: 18px;
 }}
 QPushButton:hover {{ background: #fffaf0; border-color: {AMBER}; }}
 QPushButton:pressed {{ background: #e8e0d2; border-color: #9e7a45; }}
 QPushButton#primary {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #618f5f, stop:1 #416f45);
     color: white; border: 1px solid #365f3a; border-radius: 9px;
-    font-size: 17px; font-weight: 700; padding: 13px 26px;
+    font-size: 15px; font-weight: 700; padding: 11px 28px;
 }}
 QPushButton#primary:hover {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6b9b68, stop:1 #497b4c);
     border-color: #294e2c;
 }}
+QPushButton#outline {{
+    background: transparent;
+    border: 1px solid {GREEN};
+    color: {GREEN};
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: 600;
+}}
+QPushButton#outline:hover {{ background: #eef6ea; border-color: #3a6d3e; }}
+QPushButton#linkButton {{
+    border: 0; background: transparent; color: {GREEN};
+    font-weight: 600; padding: 6px 10px; border-radius: 6px;
+}}
+QPushButton#linkButton:hover {{ background: #eef6ea; color: #3a6d3e; }}
 QPushButton:disabled {{ color: #99958d; background: #ece7de; border-color: #d2cbc0; }}
 QPushButton#danger {{ color: #8a6524; }}
 QPushButton#flat {{ border: 0; background: transparent; padding: 5px; }}
 QPushButton#accordionButton {{
     border: 0; background: transparent; text-align: left; padding: 11px 14px;
-    font-size: 15px; font-weight: 600;
+    font-size: 14px; font-weight: 600;
 }}
 QPushButton#accordionButton:hover {{ background: rgba(196, 171, 131, 0.12); }}
-QLabel#brand {{ font-size: 27px; font-weight: 800; padding: 4px 7px; border-radius: 8px; }}
+QLabel#brand {{ font-size: 26px; font-weight: 800; padding: 4px 7px; border-radius: 8px; }}
 QLabel#brand:hover {{ background: #eee7d9; color: #365f3a; }}
 QLabel#title {{ font-size: 18px; font-weight: 700; }}
 QLabel#sectionTitle {{
-    background: {CHARCOAL}; color: white; border-radius: 8px;
-    font-size: 17px; font-weight: 700; padding: 10px 18px;
+    color: {INK};
+    font-size: 15px; font-weight: 700;
+    padding: 0 0 8px 0;
+    border-left: 3px solid {AMBER};
+    padding-left: 9px;
 }}
 QLabel#muted {{ color: {MUTED}; font-size: 12px; }}
 QLabel#statusGood {{ color: {GREEN}; font-weight: 600; }}
@@ -1412,6 +1431,7 @@ class MainWindow(QWidget):
 
     def _apply_ui_language(self):
         code = current_language()
+        self._ui_language = code
         self.setWindowTitle("2ByteASR｜" + translate("智能游戏字幕工作台", code))
         apply_ui_language(self, code)
 
@@ -1526,7 +1546,7 @@ class MainWindow(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        title = QLabel("  本批字幕内容设置  ")
+        title = QLabel("本批字幕内容设置")
         title.setObjectName("sectionTitle")
         title.setMaximumWidth(245)
         layout.addWidget(title)
@@ -1559,12 +1579,12 @@ class MainWindow(QWidget):
         surface = QFrame()
         surface.setObjectName("settingsSurface")
         surface_layout = QHBoxLayout(surface)
-        surface_layout.setContentsMargins(20, 17, 20, 17)
-        surface_layout.setSpacing(34)
+        surface_layout.setContentsMargins(18, 14, 18, 14)
+        surface_layout.setSpacing(24)
         left = QVBoxLayout()
         left.setSpacing(10)
         name_label = QLabel("●  游戏 / 内容名称")
-        name_label.setStyleSheet(f"font-weight: 700; color: {AMBER};")
+        name_label.setStyleSheet("font-weight: 700; color: #5b564c;")
         left.addWidget(name_label)
         self.game_box = EditableHistoryCombo()
         choices = []
@@ -1626,12 +1646,12 @@ class MainWindow(QWidget):
         manage.clicked.connect(self._manage_terms)
         manage.setMaximumWidth(190)
         right.addWidget(manage)
-        surface_layout.addLayout(left, 1)
+        surface_layout.addLayout(left, 62)
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.VLine)
         divider.setStyleSheet(f"color: {LINE};")
         surface_layout.addWidget(divider)
-        surface_layout.addLayout(right, 1)
+        surface_layout.addLayout(right, 38)
         layout.addWidget(surface)
 
         settings = self.legacy.RUNTIME_SETTINGS
@@ -1639,7 +1659,6 @@ class MainWindow(QWidget):
             "AI 模型与密钥",
             "fa5s.project-diagram",
             expanded=True,
-            action_text="修改配置",
         )
         self.unified_glm = SwitchControl("同一云端模型负责字幕校对与全文断句（推荐）")
         self.unified_glm.setChecked(
@@ -1656,9 +1675,11 @@ class MainWindow(QWidget):
         self.share_key = SwitchControl("两阶段共用新填写的校对密钥")
         self.share_key.setChecked(True)
         prompt_button = AnimatedButton("查看项目内置提示词")
+        prompt_button.setObjectName("linkButton")
         prompt_button.setIcon(_icon("fa5s.info-circle"))
         prompt_button.clicked.connect(lambda: PromptDialog(self).exec())
         self.save_ai_button = AnimatedButton("保存 AI 配置")
+        self.save_ai_button.setObjectName("outline")
         self.save_ai_button.setIcon(_icon("fa5s.save"))
         self.save_ai_button.clicked.connect(
             lambda: self._save_ai_configuration(show_feedback=True)
@@ -1670,9 +1691,7 @@ class MainWindow(QWidget):
         self.ai_panel.content_layout.addLayout(prompt_row)
         self.ai_save_status = QLabel("供应商、模型、地址和新填写的密钥可在这里单独保存")
         self.ai_save_status.setObjectName("muted")
-        self.ai_panel.content_layout.addWidget(
-            self.ai_save_status, 0, Qt.AlignmentFlag.AlignRight
-        )
+        self.ai_panel.content_layout.addWidget(self.ai_save_status)
         self.unified_glm.toggled.connect(self._apply_unified_glm_mode)
         self.polish_editor.model.currentTextChanged.connect(self._refresh_ai_summary)
         self.group_editor.model.currentTextChanged.connect(self._refresh_ai_summary)
@@ -1686,6 +1705,9 @@ class MainWindow(QWidget):
         self.share_key.toggled.connect(self._mark_ai_configuration_dirty)
         self._apply_unified_glm_mode(self.unified_glm.isChecked())
         layout.addWidget(self.ai_panel)
+        # CollapsibleFrame 在构造时内容为空，展开高度会被锁死；
+        # 内容添加完毕后重新计算一次，避免“收起再打开才正常”的假死状态。
+        self.ai_panel.set_expanded(True, animate=False)
 
         self.advanced_panel = CollapsibleFrame("高级设置（缓存与覆盖）", "fa5s.cog", expanded=False)
         advanced_row = QHBoxLayout()
@@ -2257,6 +2279,8 @@ class MainWindow(QWidget):
         while self.event_log.count() > 60:
             self.event_log.takeItem(0)
         self.event_log.scrollToBottom()
+        # 运行期间新建的卡片也应用当前界面语言
+        apply_ui_language(self, getattr(self, "_ui_language", "zh"))
 
     def _append_console_line(self, line: str, level: str = "stdout"):
         compact = str(line or "").rstrip()
@@ -2342,6 +2366,7 @@ class MainWindow(QWidget):
             self.running_indicator.set_running(False)
         else:
             self.running_indicator.set_running(False)
+        apply_ui_language(self, getattr(self, "_ui_language", "zh"))
 
         total_stages = max(1, self._stage_total)
         finished = len(self._completed_stages)
@@ -2502,6 +2527,7 @@ class MainWindow(QWidget):
         )
         self.result_console.setHtml(self.console_log.toHtml())
         self.pages.setCurrentIndex(2)
+        apply_ui_language(self, getattr(self, "_ui_language", "zh"))
         self._show_task_notification(
             "字幕任务异常中止",
             "任务未能正常完成，请查看结果页和运行日志。",
@@ -2580,6 +2606,9 @@ def run_desktop_app(
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     app.setStyleSheet(APP_QSS)
+    app_font = QFont("Microsoft YaHei UI", 9)
+    app_font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC"])
+    app.setFont(app_font)
     media_paths = MainWindow._supported_paths(initial_paths)
     if select_media and not media_paths:
         media_paths = _select_media_paths()
@@ -2601,6 +2630,9 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     app.setStyleSheet(APP_QSS)
+    app_font = QFont("Microsoft YaHei UI", 9)
+    app_font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC"])
+    app.setFont(app_font)
     preview_media = [] if state == "empty" else [
         r"F:\直播回放\舰礼有等身抱枕～代刮刮刮乐～_vocal.wav"
     ]

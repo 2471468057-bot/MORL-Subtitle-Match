@@ -20,6 +20,9 @@
     "force_refresh_polish": false,
     "force_refresh_group": false
   },
+  "ui": {
+    "language": "en"
+  },
   "performance": {
     "parallel_cloud_batches": true,
     "cloud_batch_workers": 4,
