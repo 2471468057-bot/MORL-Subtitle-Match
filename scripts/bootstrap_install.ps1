@@ -76,6 +76,34 @@ function Download-WithProxy {
 }
 
 
+function Install-GitDirect {
+    # 国内网络下 winget 直连 GitHub 可能极慢甚至卡死；
+    # 改为官方安装包直装，依次尝试国内加速代理与 GitHub 官方源（带连接超时）。
+    $gitInstaller = Join-Path $downloads "git.exe"
+    $sources = @(
+        "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe",
+        "https://ghproxy.net/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe",
+        "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe"
+    )
+    $downloaded = $false
+    foreach ($url in $sources) {
+        try {
+            Write-Host "[Prerequisite] 正在下载 Git（约 62 MB，国内网络可能较慢）..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $url -OutFile $gitInstaller -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            if ((Get-Item $gitInstaller).Length -gt 10MB) { $downloaded = $true; break }
+        } catch {
+            Write-Warning "Git 下载失败（$url），尝试下一个源..."
+        }
+    }
+    if (-not $downloaded) {
+        throw "Git 下载失败（国内网络受限）。可手动下载 Git for Windows 安装包后重新运行 setup_2byteasr.bat。"
+    }
+    Write-Host "[Prerequisite] 安装 Git ..." -ForegroundColor Cyan
+    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES
+    if ($LASTEXITCODE -ne 0) { throw "Git 安装失败（退出码 $LASTEXITCODE）。" }
+}
+
+
 function Install-DirectPrerequisites {
     # winget 不可用时的降级方案：从官方渠道直接下载安装（使用系统代理）。
     $downloads = Join-Path $env:TEMP "2byteasr-prereq"
@@ -90,11 +118,7 @@ function Install-DirectPrerequisites {
         $env:Path = "$uvDir;$env:Path"
     }
     if ($missing -contains "git") {
-        Write-Host "[Prerequisite] 从 Git for Windows 官方下载 Git ..." -ForegroundColor Cyan
-        $gitInstaller = Join-Path $downloads "git.exe"
-        Download-WithProxy "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe" $gitInstaller
-        & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES
-        if ($LASTEXITCODE -ne 0) { throw "Git 官方安装失败（退出码 $LASTEXITCODE）。" }
+        Install-GitDirect
     }
     if (($missing -contains "ffmpeg") -or ($missing -contains "ffprobe")) {
         Write-Host "[Prerequisite] 从 gyan.dev 官方下载 FFmpeg ..." -ForegroundColor Cyan
@@ -137,7 +161,7 @@ if ($InstallPrerequisites) {
         Install-DirectPrerequisites
     } else {
         if ($missing -contains "uv") { Install-WinGetPackage "astral-sh.uv" "uv" }
-        if ($missing -contains "git") { Install-WinGetPackage "Git.Git" "Git" }
+        if ($missing -contains "git") { Install-GitDirect }
         if (($missing -contains "ffmpeg") -or ($missing -contains "ffprobe")) {
             Install-WinGetPackage "Gyan.FFmpeg" "FFmpeg"
         }
