@@ -20,6 +20,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
 OutputBaseFilename=2ByteASR-Setup-{#MyAppVersion}
 SetupIconFile=..\assets\2byteasr.ico
+; 程序文件本身只有约 6 MB，但首次配置还需下载约 11 GB 模型并创建
+; Python 环境（约 4 GB），安装器按 15 GB 提示磁盘空间要求。
+ExtraDiskSpaceRequired=15728640
 UninstallDisplayIcon={app}\{#MyAppExeName}
 LicenseFile=..\LICENSE
 Compression=lzma2/ultra64

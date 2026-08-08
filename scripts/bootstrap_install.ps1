@@ -52,6 +52,63 @@ function Install-WinGetPackage {
     throw "$Label installation failed (winget exit code $LASTEXITCODE).`n请手动重试：winget install --id $Id -e"
 }
 
+
+function Download-WithProxy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
+    # Invoke-WebRequest 遵循系统代理设置；多次尝试以对抗网络抖动。
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            if (Test-Path $OutFile) { return }
+        } catch {
+            if ($attempt -ge 3) { throw }
+            Write-Warning "下载失败（$Url），正在重试（$attempt/3）..."
+            Start-Sleep -Seconds 4
+        }
+    }
+    throw "下载失败：$Url"
+}
+
+
+function Install-DirectPrerequisites {
+    # winget 不可用时的降级方案：从官方渠道直接下载安装（使用系统代理）。
+    $downloads = Join-Path $env:TEMP "2byteasr-prereq"
+    New-Item -ItemType Directory -Path $downloads -Force | Out-Null
+    if ($missing -contains "uv") {
+        Write-Host "[Prerequisite] 从 GitHub 官方下载 uv ..." -ForegroundColor Cyan
+        Download-WithProxy "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" (Join-Path $downloads "uv.zip")
+        Expand-Archive (Join-Path $downloads "uv.zip") (Join-Path $downloads "uv") -Force
+        $uvDir = Join-Path $env:LOCALAPPDATA "uv"
+        New-Item -ItemType Directory -Path $uvDir -Force | Out-Null
+        Copy-Item (Join-Path $downloads "uv\uv.exe") (Join-Path $uvDir "uv.exe") -Force
+        $env:Path = "$uvDir;$env:Path"
+    }
+    if ($missing -contains "git") {
+        Write-Host "[Prerequisite] 从 Git for Windows 官方下载 Git ..." -ForegroundColor Cyan
+        $gitInstaller = Join-Path $downloads "git.exe"
+        Download-WithProxy "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe" $gitInstaller
+        & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES
+        if ($LASTEXITCODE -ne 0) { throw "Git 官方安装失败（退出码 $LASTEXITCODE）。" }
+    }
+    if (($missing -contains "ffmpeg") -or ($missing -contains "ffprobe")) {
+        Write-Host "[Prerequisite] 从 gyan.dev 官方下载 FFmpeg ..." -ForegroundColor Cyan
+        $ffmpegZip = Join-Path $downloads "ffmpeg.zip"
+        Download-WithProxy "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $ffmpegZip
+        Expand-Archive $ffmpegZip (Join-Path $downloads "ffmpeg") -Force
+        $ffBin = Get-ChildItem (Join-Path $downloads "ffmpeg") -Recurse -Directory |
+            Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
+        if (-not $ffBin) { throw "FFmpeg 解压后未找到 bin 目录。" }
+        $dest = Join-Path $env:LOCALAPPDATA "Programs\FFmpeg\bin"
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        Copy-Item (Join-Path $ffBin.FullName "ffmpeg.exe") $dest -Force
+        Copy-Item (Join-Path $ffBin.FullName "ffprobe.exe") $dest -Force
+        $env:Path = "$dest;$env:Path"
+    }
+}
+
 Refresh-ProcessPath
 $missing = @(Get-MissingCommands)
 
@@ -73,12 +130,14 @@ if ($missing -contains "nvidia-smi") {
 
 if ($InstallPrerequisites) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "winget is unavailable. Install App Installer from Microsoft Store first."
-    }
-    if ($missing -contains "uv") { Install-WinGetPackage "astral-sh.uv" "uv" }
-    if ($missing -contains "git") { Install-WinGetPackage "Git.Git" "Git" }
-    if (($missing -contains "ffmpeg") -or ($missing -contains "ffprobe")) {
-        Install-WinGetPackage "Gyan.FFmpeg" "FFmpeg"
+        Write-Warning "winget 不可用，改用官方渠道直接下载安装依赖（使用系统代理）..."
+        Install-DirectPrerequisites
+    } else {
+        if ($missing -contains "uv") { Install-WinGetPackage "astral-sh.uv" "uv" }
+        if ($missing -contains "git") { Install-WinGetPackage "Git.Git" "Git" }
+        if (($missing -contains "ffmpeg") -or ($missing -contains "ffprobe")) {
+            Install-WinGetPackage "Gyan.FFmpeg" "FFmpeg"
+        }
     }
     Refresh-ProcessPath
 }

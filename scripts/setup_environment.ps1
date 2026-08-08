@@ -202,7 +202,25 @@ function Ensure-SystemPython {
     # winget 的进度输出会污染函数返回值，必须全部吞掉
     & winget install --id "Python.Python.$MajorMinor" --exact --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "$Label 需要 Python $MajorMinor。winget 安装失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
+        Write-Warning "winget 安装 Python 失败，尝试从 python.org 官方下载安装（使用系统代理）..."
+        $pyVersion = if ($MajorMinor -eq "3.10") { "3.10.11" } elseif ($MajorMinor -eq "3.12") { "3.12.10" } else { $MajorMinor }
+        $installer = Join-Path $env:TEMP "python-$pyVersion-amd64.exe"
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-amd64.exe" -OutFile $installer -UseBasicParsing -ErrorAction Stop
+                break
+            } catch {
+                if ($attempt -ge 3) {
+                    throw "$Label 需要 Python $MajorMinor。官方下载失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
+                }
+                Write-Warning "python.org 下载失败，正在重试（$attempt/3）..."
+                Start-Sleep -Seconds 4
+            }
+        }
+        & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=0
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Label 需要 Python $MajorMinor。python.org 安装失败（退出码 $LASTEXITCODE），请手动安装后重新运行 setup_2byteasr.bat。"
+        }
     }
     $exe = Resolve-SystemPython $MajorMinor
     if (-not $exe) {
