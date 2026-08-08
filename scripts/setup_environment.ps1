@@ -194,6 +194,14 @@ if (-not $env:UV_DEFAULT_INDEX) {
     Write-Host "[网络] 依赖走清华 PyPI 镜像：$env:UV_DEFAULT_INDEX（可用 UV_DEFAULT_INDEX 覆盖）" -ForegroundColor Cyan
 }
 
+# 便携包内置依赖（wheels/）：--no-index + --find-links 全离线安装，零网络。
+$WheelsDir = Join-Path $ProjectRoot "wheels"
+$OfflineArgs = @()
+if (Test-Path $WheelsDir) {
+    $OfflineArgs = @("--no-index", "--find-links", $WheelsDir)
+    Write-Host "[环境] 使用便携包内置依赖（wheels/），无需联网下载" -ForegroundColor Cyan
+}
+
 # 依赖缓存目录固定到项目内，避免默认 %LOCALAPPDATA%\uv\cache 占用系统盘
 # （torch 等大包缓存可达数 GB）。可用 UV_CACHE_DIR 覆盖。
 if (-not $env:UV_CACHE_DIR) {
@@ -301,17 +309,30 @@ $MainPythonExe = Ensure-SystemPython ([string]$Lock.python.main) "主流程"
 Write-Host "[环境] 使用系统 Python：$MainPythonExe"
 New-StdlibVenv $MainPythonExe $MainEnv
 $MainPython = Join-Path $MainEnv "Scripts\python.exe"
-Invoke-External $Uv @("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt"), "--torch-backend=auto")
+Invoke-External $Uv (@("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt"), "--torch-backend=auto") + $OfflineArgs)
 
 Write-Host "[环境] 创建 MOSS Python $($Lock.python.moss) ..."
 $MossPythonExe = Ensure-SystemPython ([string]$Lock.python.moss) "MOSS"
 Write-Host "[环境] 使用系统 Python：$MossPythonExe"
 New-StdlibVenv $MossPythonExe $MossEnv
 $MossPython = Join-Path $MossEnv "Scripts\python.exe"
-Invoke-External $Uv @("pip", "install", "--python", $MossPython, "-e", "$MossSource[torch-runtime]", "--torch-backend=auto")
+Invoke-External $Uv (@("pip", "install", "--python", $MossPython, "-e", "$MossSource[torch-runtime]", "--torch-backend=auto") + $OfflineArgs)
 
 if (-not (Test-Path (Join-Path $MossEnv "Scripts\hf.exe"))) {
-    Invoke-External $Uv @("pip", "install", "--python", $MossPython, "huggingface_hub[cli]==1.24.0")
+    Invoke-External $Uv (@("pip", "install", "--python", $MossPython, "huggingface_hub[cli]==1.24.0") + $OfflineArgs)
+}
+
+# 离线 wheels 装的是 CPU torch；检测到 NVIDIA GPU 时升级为 CUDA 版
+# （唯一联网步骤，约 2.5 GB，可断点续传；失败则继续使用 CPU 版）。
+$gpuPresent = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($OfflineArgs.Count -gt 0 -and $gpuPresent -and -not $env:2BYTEASR_CPU_ONLY) {
+    Write-Host "[环境] 检测到 NVIDIA GPU：将 torch 升级为 CUDA 版（一次性联网下载约 2.5 GB，可断点续传）..." -ForegroundColor Cyan
+    foreach ($python in @($MainPython, $MossPython)) {
+        & $Uv pip install --python $python --upgrade torch torchaudio --torch-backend=cuda
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "CUDA torch 升级失败（退出码 $LASTEXITCODE），继续使用内置 CPU 版（转写较慢）。可稍后手动升级：uv pip install --python $python --upgrade torch torchaudio --torch-backend=cuda"
+        }
+    }
 }
 
 Invoke-External $MainPython @(

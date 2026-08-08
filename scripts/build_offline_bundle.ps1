@@ -4,7 +4,8 @@ param(
     [switch]$Lite
 )
 
-# 打包便携版 2ByteASR：程序文件 + models/（模型）+ third_party/（固定版本源码）。
+# 打包便携版 2ByteASR：程序文件 + models/（模型）+ third_party/（固定版本源码）
+# + tools/（git/ffmpeg/python/uv 安装器）+ wheels/（Python 依赖，离线安装）。
 # 解压到任意目录即可作为完整程序使用（首次运行 setup_2byteasr.bat 安装 Python 环境）。
 # 适合国内网络下载模型困难的环境：一次性下载，解压即用。
 #
@@ -12,8 +13,8 @@ param(
 # 首次配置时模型自动下载（约 7 GB 默认 / 11.7 GB 含 Qwen，可断点续传）。
 #
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/build_offline_bundle.ps1 [-Lite]
-# 产物：dist/2ByteASR-portable-<日期>.7z（完整版，约 9-12 GB）
-#       或 dist/2ByteASR-lite-<日期>.7z（精简版，约 300-500 MB；需要 7-Zip）
+# 产物：dist/2ByteASR-portable-<日期>.7z（完整版，约 10-12 GB）
+#       或 dist/2ByteASR-lite-<日期>.7z（精简版，约 1.5 GB；需要 7-Zip）
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -137,10 +138,62 @@ foreach ($py in @("3.10.11", "3.12.10")) {
 Remove-Item $tmpDownload -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "[工具] 内置工具收集完成：$tools" -ForegroundColor Green
 
+# 依赖 wheel 集（wheels/）：首次配置时离线安装 Python 依赖，无需联网下载。
+# 版本来源：本地两个 venv（python -m venv 自带 pip）的精确冻结列表；
+# 剔除 torch 家族（离线装 CPU 版，GPU 机器安装后由 setup 自动升级 CUDA 版）。
+$WheelsDir = Join-Path $staging "wheels"
+New-Item -ItemType Directory -Path $WheelsDir -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpDownload -Force | Out-Null
+$uvExe = (Get-Command uv).Source
+$wheelSpecs = @(
+    @{ Label = "主流程(3.10)"; Py = Join-Path $ProjectRoot ".venv-main\Scripts\python.exe" },
+    @{ Label = "MOSS(3.12)"; Py = Join-Path $ProjectRoot ".venv-moss\Scripts\python.exe" }
+)
+foreach ($spec in $wheelSpecs) {
+    if (-not (Test-Path $spec.Py)) {
+        throw "缺少本地环境 $($spec.Label)（$($spec.Py)），无法收集依赖 wheel。请先运行 setup_environment.bat。"
+    }
+    Write-Host "[依赖] 冻结 $($spec.Label) 版本清单 ..." -ForegroundColor Cyan
+    $freezeFile = Join-Path $tmpDownload "freeze-$($spec.Label).txt"
+    & $uvExe pip freeze --python $spec.Py 2>$null |
+        Where-Object {
+            $_ -and $_ -notmatch '^(torch|torchaudio|torchvision|nvidia-|pip==|setuptools==|wheel==)' `
+                -and $_ -notmatch '^-e '
+        } |
+        Set-Content $freezeFile -Encoding ascii
+    if ((Get-Item $freezeFile).Length -lt 50) {
+        throw "冻结 $($spec.Label) 版本清单为空，请先运行 setup_environment.bat。"
+    }
+    Write-Host "[依赖] 下载 $($spec.Label) 依赖 wheel（本地 pip 缓存命中，无需网络）..." -ForegroundColor Cyan
+    & $spec.Py -m pip download -r $freezeFile --only-binary=:all: --no-deps `
+        -d $WheelsDir --quiet --disable-pip-version-check
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip download 失败（$($spec.Label)）。"
+    }
+}
+# CPU torch / torchaudio（cp310 + cp312），离线安装用；GPU 机器安装后自动升级 CUDA 版
+foreach ($tag in @("cp310", "cp312")) {
+    foreach ($pkg in @("torch-2.13.0+cpu", "torchaudio-2.11.0+cpu")) {
+        $url = "https://download.pytorch.org/whl/cpu/$pkg-$tag-$tag-win_amd64.whl"
+        $out = Join-Path $WheelsDir "$pkg-$tag-$tag-win_amd64.whl"
+        Invoke-Download $url $out
+    }
+}
+$wheelBytes = (Get-ChildItem $WheelsDir -File | Measure-Object Length -Sum).Sum
+Write-Host "[依赖] wheels/ 就绪：$([math]::Round($wheelBytes / 1MB)) MB（首次配置零依赖下载）" -ForegroundColor Green
+
 $stamp = Get-Date -Format "yyyyMMdd"
 $baseName = if ($Lite) { "2ByteASR-lite" } else { "2ByteASR-portable" }
 $output = Join-Path $OutputDir "$baseName-$stamp.7z"
 Remove-Item $output -Force -ErrorAction SilentlyContinue
+# 精简版受 GitHub 2GB 单文件限制：超限时自动剔除 wheels/（依赖退回联网安装）
+if ($Lite) {
+    $stagingBytes = (Get-ChildItem $staging -Recurse -File | Measure-Object Length -Sum).Sum
+    if ($stagingBytes -gt 1.9GB) {
+        Remove-Item $WheelsDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Warning "精简版打包内容超过 1.9GB，已剔除 wheels/（Python 依赖将联网安装）。"
+    }
+}
 $label = if ($Lite) { "精简版（不含模型，约 300-500 MB）" } else { "完整版（约 9-12 GB）" }
 Write-Host "[打包] 正在压缩（$label，可能需要一段时间）..." -ForegroundColor Cyan
 $logOut = Join-Path $OutputDir "portable-bundle.log"
