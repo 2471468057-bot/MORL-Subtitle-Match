@@ -12,6 +12,13 @@ $LockPath = Join-Path $ProjectRoot "dependencies.lock.json"
 $HfExe = Join-Path $ProjectRoot ".venv-moss\Scripts\hf.exe"
 $ManifestPath = Join-Path $ProjectRoot "models\.twobyteasr-models.json"
 
+# 国内网络默认走 HuggingFace 镜像（hf-mirror.com）；
+# 需要直连官方时设置环境变量 HF_ENDPOINT=https://huggingface.co 覆盖。
+if (-not $env:HF_ENDPOINT) {
+    $env:HF_ENDPOINT = "https://hf-mirror.com"
+    Write-Host "[网络] HuggingFace 走国内镜像：$env:HF_ENDPOINT（可用 HF_ENDPOINT 环境变量覆盖）" -ForegroundColor Cyan
+}
+
 function Resolve-ProjectPath {
     param([string]$RelativePath)
     return Join-Path $ProjectRoot ($RelativePath -replace '/', '\')

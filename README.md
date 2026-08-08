@@ -73,6 +73,15 @@ install_shortcut.bat     :: 安装桌面快捷方式
 - NVIDIA 显卡（建议 8GB+ 显存；**显存更低或显卡稍弱也能运行，只是更慢**）
 - 模型约 11GB，建议安装盘预留 15GB 以上
 
+### 🌐 国内网络
+
+安装流程已针对国内网络优化，无需额外配置：
+
+- **模型下载**：默认走 HuggingFace 国内镜像（hf-mirror.com）；如需官方源，设置环境变量 `HF_ENDPOINT=https://huggingface.co`
+- **Python 依赖**：默认走清华 PyPI 镜像；可用 `UV_DEFAULT_INDEX` 覆盖
+- **Python 本体**：python.org 官方与华为云镜像自动切换
+- **离线安装**：网络确实很差的机器，可下载离线素材包（`models/` + `third_party/`，约 12GB，见 Releases 附件说明），解压到安装目录后运行 `setup_2byteasr.bat` 会自动跳过模型与源码下载
+
 ## 🗣️ 主播声纹（可选）
 
 想让人名跟着声音走？每人放一段 5–14 秒的清晰独白 WAV 到 `%LOCALAPPDATA%\2ByteASR\host_voiceprints\samples\`，然后运行：

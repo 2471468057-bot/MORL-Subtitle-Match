@@ -170,6 +170,13 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 $Uv = (Get-Command uv).Source
 $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
+# 国内网络默认使用清华 PyPI 镜像安装依赖；
+# 需要官方 PyPI 时设置环境变量 UV_DEFAULT_INDEX=https://pypi.org/simple 覆盖。
+if (-not $env:UV_DEFAULT_INDEX) {
+    $env:UV_DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    Write-Host "[网络] 依赖走清华 PyPI 镜像：$env:UV_DEFAULT_INDEX（可用 UV_DEFAULT_INDEX 覆盖）" -ForegroundColor Cyan
+}
+
 
 function Resolve-SystemPython {
     param([Parameter(Mandatory = $true)][string]$MajorMinor)
@@ -205,15 +212,21 @@ function Ensure-SystemPython {
         Write-Warning "winget 安装 Python 失败，尝试从 python.org 官方下载安装（使用系统代理）..."
         $pyVersion = if ($MajorMinor -eq "3.10") { "3.10.11" } elseif ($MajorMinor -eq "3.12") { "3.12.10" } else { $MajorMinor }
         $installer = Join-Path $env:TEMP "python-$pyVersion-amd64.exe"
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        # 依次尝试 python.org 官方与华为云国内镜像
+        $pyUrls = @(
+            "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-amd64.exe",
+            "https://mirrors.huaweicloud.com/python/$pyVersion/python-$pyVersion-amd64.exe"
+        )
+        for ($attempt = 1; $attempt -le ($pyUrls.Count * 2); $attempt++) {
+            $url = $pyUrls[[math]::Floor(($attempt - 1) / 2)]
             try {
-                Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-amd64.exe" -OutFile $installer -UseBasicParsing -ErrorAction Stop
+                Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing -ErrorAction Stop
                 break
             } catch {
-                if ($attempt -ge 3) {
-                    throw "$Label 需要 Python $MajorMinor。官方下载失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
+                if ($attempt -ge ($pyUrls.Count * 2)) {
+                    throw "$Label 需要 Python $MajorMinor。官方与镜像下载均失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
                 }
-                Write-Warning "python.org 下载失败，正在重试（$attempt/3）..."
+                Write-Warning "下载失败（$url），正在重试..."
                 Start-Sleep -Seconds 4
             }
         }
