@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="assets/2byteasr-icon-transparent.png" width="96" alt="2ByteASR logo" />
 
@@ -78,6 +78,7 @@ install_shortcut.bat     :: 安装桌面快捷方式
 安装流程已针对国内网络优化，无需额外配置：
 
 - **模型下载**：默认走 HuggingFace 国内镜像（hf-mirror.com）；如需官方源，设置环境变量 `HF_ENDPOINT=https://huggingface.co`
+- **模型组合**：默认约 7GB（MOSS 转写/说话人、FireRed 字级时间轴、声纹）；安装时提示可选附加 Qwen3-ASR 复核模型（+4.7GB，提升准确度）——不选也能正常出字幕，可后续用 `download_models.bat` 补下（或设置 `2BYTEASR_INCLUDE_QWEN=1` 跳过提示）
 - **Python 依赖**：默认走清华 PyPI 镜像；可用 `UV_DEFAULT_INDEX` 覆盖
 - **Python 本体**：python.org 官方与华为云镜像自动切换
 - **离线安装**：网络确实很差的机器，可下载离线素材包（`models/` + `third_party/`，约 12GB，见 Releases 附件说明），解压到安装目录后运行 `setup_2byteasr.bat` 会自动跳过模型与源码下载

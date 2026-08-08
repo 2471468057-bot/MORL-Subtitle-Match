@@ -229,8 +229,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($DownloadModels) {
-    Write-Host "[2/2] Downloading pinned models (about 11 GB, resumable) ..." -ForegroundColor Cyan
-    & $DownloadModelScript -Yes
+    Write-Host "[2/2] 下载固定版本模型（默认约 7 GB：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
+    $includeQwen = $false
+    if ($env:2BYTEASR_INCLUDE_QWEN) { $includeQwen = $true }
+    elseif (-not $env:2BYTEASR_NO_QWEN) {
+        $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
+        if ($answer -match "^[yY]") { $includeQwen = $true }
+    }
+    if ($includeQwen) {
+        & $DownloadModelScript -Yes -IncludeQwen
+    } else {
+        & $DownloadModelScript -Yes
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Model download failed (exit code $LASTEXITCODE)."
     }

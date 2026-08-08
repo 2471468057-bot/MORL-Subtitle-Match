@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Yes,
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [switch]$IncludeQwen
 )
 
 $ErrorActionPreference = "Stop"
@@ -102,6 +103,18 @@ foreach ($property in $Lock.models.PSObject.Properties) {
     $modelSpecs += [pscustomobject]@{ Name = $property.Name; Spec = $property.Value }
 }
 
+# Qwen3-ASR 复核模型（约 4.7 GB）为可选附加：默认方案为
+# MOSS/说话人/FireRed 字级时间轴（约 7 GB）。交互确认、-IncludeQwen
+# 参数或环境变量 2BYTEASR_INCLUDE_QWEN=1 时包含。
+if (-not $IncludeQwen -and $env:2BYTEASR_INCLUDE_QWEN) { $IncludeQwen = $true }
+if (-not $IncludeQwen -and -not $Yes -and -not $VerifyOnly) {
+    $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
+    if ($answer -match "^[yY]") { $IncludeQwen = $true }
+}
+if (-not $IncludeQwen) {
+    $modelSpecs = @($modelSpecs | Where-Object { $_.Name -ne "qwen_asr" })
+}
+
 if ($VerifyOnly) {
     $failed = @()
     foreach ($entry in $modelSpecs) {
@@ -125,7 +138,11 @@ $driveName = ([System.IO.Path]::GetPathRoot($ProjectRoot)).TrimEnd('\').TrimEnd(
 $drive = Get-PSDrive -Name $driveName
 $freeGb = [math]::Round($drive.Free / 1GB, 1)
 Write-Host "2ByteASR 模型下载" -ForegroundColor Cyan
-Write-Host "- 下载量约 11 GB，建议至少保留 15 GB 可用空间。"
+if ($IncludeQwen) {
+    Write-Host "- 下载量约 11 GB（含 Qwen3-ASR 复核），建议至少保留 15 GB 可用空间。"
+} else {
+    Write-Host "- 下载量约 7 GB（MOSS 转写/说话人、FireRed 字级时间轴、声纹；不含 Qwen3-ASR 复核，可后续补下）。"
+}
 Write-Host "- 当前项目盘剩余约 $freeGb GB。"
 Write-Host "- 下载可中断；重新运行会复用 Hugging Face 已完成的文件。"
 $hasMissingFiles = @($modelSpecs | Where-Object { -not (Test-ModelFiles $_.Spec) }).Count -gt 0
