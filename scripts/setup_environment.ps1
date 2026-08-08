@@ -170,52 +170,73 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 $Uv = (Get-Command uv).Source
 $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
-# 把 uv 的 Python 安装目录固定到项目内，避免默认 %APPDATA%\uv\python
-# 里快照回滚/中断安装残留的失效 junction（Windows “不受信任的装入点” os error 448）。
-$env:UV_PYTHON_INSTALL_DIR = Join-Path $ProjectRoot ".uv-python"
+
+function Resolve-SystemPython {
+    param([Parameter(Mandatory = $true)][string]$MajorMinor)
+    # 依次查找：py 启动器 → 注册表/常见安装路径
+    $pyCommand = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyCommand) {
+        $out = & py -$MajorMinor -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $out) {
+            $exe = (($out | Select-Object -Last 1) -as [string]).Trim()
+            if ($exe -and (Test-Path $exe)) { return $exe }
+        }
+    }
+    $short = $MajorMinor -replace '\.', ''
+    foreach ($base in @((Join-Path $env:LOCALAPPDATA "Programs\Python"), (Join-Path $env:ProgramFiles "Python"))) {
+        $candidate = Join-Path (Join-Path $base "Python$short") "python.exe"
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return ""
+}
 
 
-function New-UvVenv {
+function Ensure-SystemPython {
     param(
-        [Parameter(Mandatory = $true)][string]$PythonVersion,
+        [Parameter(Mandatory = $true)][string]$MajorMinor,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $exe = Resolve-SystemPython $MajorMinor
+    if ($exe) { return $exe }
+    Write-Host "[环境] 未找到系统 Python $MajorMinor，尝试通过 winget 安装..." -ForegroundColor Cyan
+    & winget install --id "Python.Python.$MajorMinor" --exact --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label 需要 Python $MajorMinor。winget 安装失败，请从 https://www.python.org/downloads/ 手动安装后重新运行 setup_2byteasr.bat。"
+    }
+    $exe = Resolve-SystemPython $MajorMinor
+    if (-not $exe) {
+        throw "$Label 需要 Python $MajorMinor。安装后请重新运行 setup_2byteasr.bat。"
+    }
+    return $exe
+}
+
+
+function New-StdlibVenv {
+    param(
+        [Parameter(Mandatory = $true)][string]$PythonExe,
         [Parameter(Mandatory = $true)][string]$VenvPath
     )
-    # uv 的 Python 版本链接（junction）在中断安装后可能残留损坏条目，
-    # 触发 Windows “不受信任的装入点”（os error 448）；venv 创建失败时
-    # 一律清理 uv\python 残留后重试一次（Invoke-External 异常不包含 uv 明细）。
-    for ($attempt = 1; $attempt -le 2; $attempt++) {
-        try {
-            Invoke-External $Uv @("venv", "--python", $PythonVersion, "--allow-existing", $VenvPath)
-            return
-        } catch {
-            if ($attempt -ge 2) {
-                throw "uv 创建虚拟环境持续失败（os error 448：不受信任的装入点）。`n" +
-                      "请开启 Windows「开发人员模式」后重启电脑再试：`n" +
-                      "设置 → 系统 → 开发者选项 → 开发人员模式（开）`n" +
-                      "或管理员 PowerShell 执行：`n" +
-                      'reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f'
-            }
-            Write-Warning "uv 创建虚拟环境失败，清理 uv Python 与目标 venv 残留后重试..."
-            foreach ($pythonRoot in @($env:UV_PYTHON_INSTALL_DIR, (Join-Path $env:LOCALAPPDATA "uv\python"), (Join-Path $env:APPDATA "uv\python"))) {
-                if ($pythonRoot -and (Test-Path $pythonRoot)) {
-                    # cmd rmdir 只删除 junction 本身、不跟随目标，
-                    # 不会触发 Windows “不受信任的装入点”（os error 448）。
-                    & cmd /c "rmdir /s /q `"$pythonRoot`"" 2>$null | Out-Null
-                }
-            }
-            # venv 内的 python 链接指向已删除的 uv Python 安装，同样需要清理；
-            # 若被运行中的 2ByteASR 占用则删除失败，重试一次后会给出明确提示。
-            Remove-Item $VenvPath -Recurse -Force -ErrorAction SilentlyContinue
-        }
+    # 使用 python -m venv（标准库）创建环境，避免 uv 管理 Python 时
+    # 创建版本链接（junction）触发 Windows “不受信任的装入点”（os error 448）。
+    Remove-Item $VenvPath -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-External $PythonExe @("-m", "venv", $VenvPath)
+    if (-not (Test-Path (Join-Path $VenvPath "Scripts\python.exe"))) {
+        throw "虚拟环境创建失败：$VenvPath"
     }
 }
 
 Write-Host "[环境] 创建主流程 Python $($Lock.python.main) ..."
-New-UvVenv ([string]$Lock.python.main) $MainEnv
+$MainPythonExe = Ensure-SystemPython ([string]$Lock.python.main) "主流程"
+Write-Host "[环境] 使用系统 Python：$MainPythonExe"
+New-StdlibVenv $MainPythonExe $MainEnv
+$MainPython = Join-Path $MainEnv "Scripts\python.exe"
 Invoke-External $Uv @("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt"), "--torch-backend=auto")
 
 Write-Host "[环境] 创建 MOSS Python $($Lock.python.moss) ..."
-New-UvVenv ([string]$Lock.python.moss) $MossEnv
+$MossPythonExe = Ensure-SystemPython ([string]$Lock.python.moss) "MOSS"
+Write-Host "[环境] 使用系统 Python：$MossPythonExe"
+New-StdlibVenv $MossPythonExe $MossEnv
+$MossPython = Join-Path $MossEnv "Scripts\python.exe"
 Invoke-External $Uv @("pip", "install", "--python", $MossPython, "-e", "$MossSource[torch-runtime]", "--torch-backend=auto")
 
 if (-not (Test-Path (Join-Path $MossEnv "Scripts\hf.exe"))) {
