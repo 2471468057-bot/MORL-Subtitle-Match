@@ -19,6 +19,7 @@ function Refresh-ProcessPath {
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $extraPaths = @(
         (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Git\cmd"),
         (Join-Path $env:USERPROFILE ".local\bin"),
         (Join-Path $env:ProgramFiles "Git\cmd")
     )
@@ -100,9 +101,29 @@ function Install-GitDirect {
     if (-not $downloaded) {
         throw "Git 下载失败（国内网络受限）。可手动下载 Git for Windows 安装包后重新运行 setup_2byteasr.bat。"
     }
-    Write-Host "[Prerequisite] 安装 Git ..." -ForegroundColor Cyan
-    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES
+    # 装到当前用户目录（无需管理员权限），并持久化 PATH
+    $gitInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Git"
+    Write-Host "[Prerequisite] 安装 Git 到 $gitInstallDir ..." -ForegroundColor Cyan
+    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$gitInstallDir"
     if ($LASTEXITCODE -ne 0) { throw "Git 安装失败（退出码 $LASTEXITCODE）。" }
+    $gitCmd = Join-Path $gitInstallDir "cmd\git.exe"
+    if (-not (Test-Path $gitCmd)) {
+        # 安装器可能仍装到默认位置（如 Program Files）
+        foreach ($candidate in @((Join-Path $env:ProgramFiles "Git\cmd\git.exe"), (Join-Path ${env:ProgramFiles(x86)} "Git\cmd\git.exe"))) {
+            if (Test-Path $candidate) { $gitCmd = $candidate; break }
+        }
+    }
+    if (-not (Test-Path $gitCmd)) {
+        throw "Git 安装完成但未找到 git.exe。请手动安装 Git for Windows 后重新运行 setup_2byteasr.bat。"
+    }
+    $gitBin = Split-Path $gitCmd -Parent
+    # 当前进程与用户级 PATH 持久化（后续进程也能找到 git）
+    $env:Path = "$gitBin;$env:Path"
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -notlike "*$gitBin*") {
+        [Environment]::SetEnvironmentVariable("Path", "$gitBin;$userPath", "User")
+    }
+    Write-Host "[Prerequisite] Git 已就绪：$gitCmd" -ForegroundColor Green
 }
 
 
