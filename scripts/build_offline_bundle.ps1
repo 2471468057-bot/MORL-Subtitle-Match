@@ -29,20 +29,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "模型完整性校验未通过，请先修复模型再打包。"
 }
 
-$sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue)
-if (-not $sevenZip) {
+$sevenZipPath = ""
+$sevenZipCommand = Get-Command 7z -ErrorAction SilentlyContinue
+if ($sevenZipCommand) { $sevenZipPath = $sevenZipCommand.Source }
+if (-not $sevenZipPath) {
     foreach ($candidate in @("C:\Program Files\7-Zip\7z.exe", "C:\Program Files (x86)\7-Zip\7z.exe", "G:\VMWARE\7za.exe")) {
-        if (Test-Path $candidate) { $sevenZip = Get-Item $candidate; break }
+        if (Test-Path $candidate) { $sevenZipPath = $candidate; break }
     }
 }
-if (-not $sevenZip) {
+if (-not $sevenZipPath) {
     throw "未找到 7-Zip。请安装（winget install 7zip.7zip）后重试。"
 }
 
 $stamp = Get-Date -Format "yyyyMMdd"
 $output = Join-Path $OutputDir "2ByteASR-offline-models-$stamp.7z"
 Write-Host "[打包] 正在压缩 models 与 third_party（约 12 GB，可能需要一段时间）..." -ForegroundColor Cyan
-& $sevenZip.Source a -t7z -mx=1 -mmt=on $output `
+& $sevenZipPath a -t7z -mx=1 -mmt=on $output `
     (Join-Path $ProjectRoot "models\*") (Join-Path $ProjectRoot "third_party\*") | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "7-Zip 打包失败（退出码 $LASTEXITCODE）。"
