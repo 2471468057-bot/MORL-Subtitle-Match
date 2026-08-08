@@ -112,16 +112,22 @@ function Install-GitDirect {
     Remove-Item $gitLog -Force -ErrorAction SilentlyContinue
     Write-Host "[Prerequisite] 安装 Git 到 $gitInstallDir ..." -ForegroundColor Cyan
     # 兼容两种安装器：Inno（/VERYSILENT /DIR）与 NSIS（/S /D）；
-    # Git 2.5x 的安装器已迁移到 NSIS，仅传 Inno 参数会导致静默安装不执行。
-    & $gitInstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /S "/DIR=$gitInstallDir" "/D=$gitInstallDir" "/LOG=$gitLog"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Git 安装失败（退出码 $LASTEXITCODE）。安装日志：$gitLog"
+    # NSIS 的 /D= 必须是命令行最后一个参数；GUI 安装器用 & 调用时
+    # PowerShell 5.1 拿不到退出码，必须用 Start-Process -Wait。
+    $p = Start-Process -FilePath $gitInstaller -ArgumentList @(
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/S",
+        "/DIR=$gitInstallDir", "/LOG=$gitLog", "/D=$gitInstallDir"
+    ) -Wait -PassThru
+    if ($p.ExitCode -ne 0) {
+        throw "Git 安装失败（退出码 $($p.ExitCode)）。安装日志：$gitLog"
     }
     $gitCmd = ""
     foreach ($candidate in @(
         (Join-Path $gitInstallDir "cmd\git.exe"), (Join-Path $gitInstallDir "bin\git.exe"),
-        (Join-Path $env:ProgramFiles "Git\cmd\git.exe"), (Join-Path $env:ProgramFiles "Git\bin\git.exe"),
-        (Join-Path ${env:ProgramFiles(x86)} "Git\cmd\git.exe"), (Join-Path ${env:ProgramFiles(x86)} "Git\bin\git.exe")
+        (Join-Path $gitInstallDir "usr\bin\git.exe"), (Join-Path $gitInstallDir "mingw64\bin\git.exe"),
+        (Join-Path $env:ProgramFiles "Git\cmd\git.exe"), (Join-Path $env:ProgramFiles "Git\usr\bin\git.exe"),
+        (Join-Path $env:ProgramFiles "Git\mingw64\bin\git.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git\cmd\git.exe")
     )) {
         if (Test-Path $candidate) { $gitCmd = $candidate; break }
     }
@@ -130,7 +136,7 @@ function Install-GitDirect {
         if (Test-Path $gitLog) {
             $logTail = "`n--- Git 安装日志（末尾 25 行）---`n" + ((Get-Content $gitLog -Tail 25) -join "`n")
         }
-        throw "Git 安装完成但未找到 git.exe。$logTail`n请手动安装 Git for Windows 后重新运行 setup_2byteasr.bat。"
+        throw "Git 安装完成但未找到 git.exe（退出码 0）。$logTail`n请手动安装 Git for Windows（https://git-scm.com/download/win）后重新运行 setup_2byteasr.bat。"
     }
     $gitBin = Split-Path $gitCmd -Parent
     # 当前进程与用户级 PATH 持久化（后续进程也能找到 git）
