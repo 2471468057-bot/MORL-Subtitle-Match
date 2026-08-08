@@ -9,6 +9,11 @@ param(
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
+# 完整安装过程记录到 %TEMP%\2byteasr-setup.log，方便排查
+$TranscriptPath = Join-Path $env:TEMP "2byteasr-setup.log"
+Start-Transcript -Path $TranscriptPath -Append -ErrorAction SilentlyContinue | Out-Null
+Write-Host "[日志] 安装过程已记录到 $TranscriptPath" -ForegroundColor DarkGray
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $SetupEnvironment = Join-Path $PSScriptRoot "setup_environment.ps1"
 $DownloadModelScript = Join-Path $PSScriptRoot "download_models.ps1"
@@ -103,18 +108,27 @@ function Install-GitDirect {
     }
     # 装到当前用户目录（无需管理员权限），并持久化 PATH
     $gitInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Git"
+    $gitLog = Join-Path $env:TEMP "git-install.log"
+    Remove-Item $gitLog -Force -ErrorAction SilentlyContinue
     Write-Host "[Prerequisite] 安装 Git 到 $gitInstallDir ..." -ForegroundColor Cyan
-    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$gitInstallDir"
-    if ($LASTEXITCODE -ne 0) { throw "Git 安装失败（退出码 $LASTEXITCODE）。" }
-    $gitCmd = Join-Path $gitInstallDir "cmd\git.exe"
-    if (-not (Test-Path $gitCmd)) {
-        # 安装器可能仍装到默认位置（如 Program Files）
-        foreach ($candidate in @((Join-Path $env:ProgramFiles "Git\cmd\git.exe"), (Join-Path ${env:ProgramFiles(x86)} "Git\cmd\git.exe"))) {
-            if (Test-Path $candidate) { $gitCmd = $candidate; break }
-        }
+    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$gitInstallDir" "/LOG=$gitLog"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git 安装失败（退出码 $LASTEXITCODE）。安装日志：$gitLog"
     }
-    if (-not (Test-Path $gitCmd)) {
-        throw "Git 安装完成但未找到 git.exe。请手动安装 Git for Windows 后重新运行 setup_2byteasr.bat。"
+    $gitCmd = ""
+    foreach ($candidate in @(
+        (Join-Path $gitInstallDir "cmd\git.exe"), (Join-Path $gitInstallDir "bin\git.exe"),
+        (Join-Path $env:ProgramFiles "Git\cmd\git.exe"), (Join-Path $env:ProgramFiles "Git\bin\git.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git\cmd\git.exe"), (Join-Path ${env:ProgramFiles(x86)} "Git\bin\git.exe")
+    )) {
+        if (Test-Path $candidate) { $gitCmd = $candidate; break }
+    }
+    if (-not $gitCmd) {
+        $logTail = ""
+        if (Test-Path $gitLog) {
+            $logTail = "`n--- Git 安装日志（末尾 25 行）---`n" + ((Get-Content $gitLog -Tail 25) -join "`n")
+        }
+        throw "Git 安装完成但未找到 git.exe。$logTail`n请手动安装 Git for Windows 后重新运行 setup_2byteasr.bat。"
     }
     $gitBin = Split-Path $gitCmd -Parent
     # 当前进程与用户级 PATH 持久化（后续进程也能找到 git）
