@@ -58,6 +58,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
+from twobyteasr.i18n import apply_ui_language, current_language, save_language, translate
 from twobyteasr.llm_config import PROVIDER_PRESETS, endpoint_from_settings, normalize_base_url, resolve_api_key, validate_endpoint
 from twobyteasr.service import CancellationToken, RunOptions, run_media_queue
 
@@ -636,6 +637,7 @@ class CompletionDialog(QDialog):
         self._fade_in.setStartValue(0.0)
         self._fade_in.setEndValue(1.0)
         self._fade_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+        apply_ui_language(self)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1281,6 +1283,7 @@ class PromptDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        apply_ui_language(self)
 
 
 class DropOverlay(QFrame):
@@ -1405,6 +1408,17 @@ class MainWindow(QWidget):
         self.drop_overlay.setGeometry(self.rect().adjusted(16, 16, -16, -16))
         self.drop_overlay.hide()
         self._refresh_ai_summary()
+        self._apply_ui_language()
+
+    def _apply_ui_language(self):
+        code = current_language()
+        self.setWindowTitle("2ByteASR｜" + translate("智能游戏字幕工作台", code))
+        apply_ui_language(self, code)
+
+    def _change_language(self, index):
+        code = self.language_combo.itemData(index) or "zh"
+        save_language(code)
+        self._apply_ui_language()
 
     def _scrollable(self, widget: QWidget) -> QScrollArea:
         area = QScrollArea()
@@ -1452,6 +1466,15 @@ class MainWindow(QWidget):
         row.addSpacing(10)
         row.addWidget(self.header_status)
         row.addStretch(1)
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("中文", "zh")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.addItem("日本語", "ja")
+        self.language_combo.setCurrentIndex(
+            max(0, self.language_combo.findData(current_language()))
+        )
+        self.language_combo.currentIndexChanged.connect(self._change_language)
+        row.addWidget(self.language_combo)
         return row
 
     def _queue_workflow_show(self):
@@ -1583,7 +1606,6 @@ class MainWindow(QWidget):
         term_hint.setObjectName("muted")
         left.addWidget(term_hint)
         self.term_hint = term_hint
-        left.addStretch(1)
         right = QVBoxLayout()
         right.setSpacing(10)
         self.review_track = SwitchControl("输出疑似吞字幕复核轨")
@@ -1604,7 +1626,6 @@ class MainWindow(QWidget):
         manage.clicked.connect(self._manage_terms)
         manage.setMaximumWidth(190)
         right.addWidget(manage)
-        right.addStretch(1)
         surface_layout.addLayout(left, 1)
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.VLine)
@@ -1617,7 +1638,7 @@ class MainWindow(QWidget):
         self.ai_panel = CollapsibleFrame(
             "AI 模型与密钥",
             "fa5s.project-diagram",
-            expanded=False,
+            expanded=True,
             action_text="修改配置",
         )
         self.unified_glm = SwitchControl("同一云端模型负责字幕校对与全文断句（推荐）")

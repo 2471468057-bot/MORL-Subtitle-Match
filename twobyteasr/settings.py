@@ -31,6 +31,9 @@ DEFAULT_SETTINGS = {
         "force_refresh_polish": False,
         "force_refresh_group": False,
     },
+    "ui": {
+        "language": "zh",
+    },
     "performance": {
         "parallel_cloud_batches": True,
         "cloud_batch_workers": 4,
