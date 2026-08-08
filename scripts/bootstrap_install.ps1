@@ -111,7 +111,9 @@ function Install-GitDirect {
     $gitLog = Join-Path $env:TEMP "git-install.log"
     Remove-Item $gitLog -Force -ErrorAction SilentlyContinue
     Write-Host "[Prerequisite] 安装 Git 到 $gitInstallDir ..." -ForegroundColor Cyan
-    & $gitInstaller /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$gitInstallDir" "/LOG=$gitLog"
+    # 兼容两种安装器：Inno（/VERYSILENT /DIR）与 NSIS（/S /D）；
+    # Git 2.5x 的安装器已迁移到 NSIS，仅传 Inno 参数会导致静默安装不执行。
+    & $gitInstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /S "/DIR=$gitInstallDir" "/D=$gitInstallDir" "/LOG=$gitLog"
     if ($LASTEXITCODE -ne 0) {
         throw "Git 安装失败（退出码 $LASTEXITCODE）。安装日志：$gitLog"
     }
