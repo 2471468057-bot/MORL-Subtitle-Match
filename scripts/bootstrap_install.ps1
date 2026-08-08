@@ -182,6 +182,13 @@ function Install-DirectPrerequisites {
 }
 
 Refresh-ProcessPath
+# 便携版内置工具（tools/）优先：ffmpeg/git/uv 无需联网下载
+$ToolsDir = Join-Path $ProjectRoot "tools"
+if (Test-Path $ToolsDir) {
+    foreach ($extra in @($ToolsDir, (Join-Path $ToolsDir "ffmpeg\bin"), (Join-Path $ToolsDir "git\cmd"), (Join-Path $ToolsDir "git\bin"))) {
+        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
+    }
+}
 $missing = @(Get-MissingCommands)
 
 if ($CheckOnly) {

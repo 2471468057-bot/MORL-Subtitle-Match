@@ -58,6 +58,73 @@ Copy-Item $models (Join-Path $staging "models") -Recurse -Force
 Copy-Item $thirdParty (Join-Path $staging "third_party") -Recurse -Force
 Write-Host "[打包] 便携目录已组装：$staging" -ForegroundColor Cyan
 
+
+function Invoke-Download {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            if ((Get-Item $OutFile).Length -gt 1MB) { return }
+            Write-Warning "文件不完整（$Url），重试..."
+        } catch {
+            Write-Warning "下载失败（$Url）：$($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds 5
+    }
+    throw "下载失败：$Url"
+}
+
+# 收集内置工具（tools/）：ffmpeg、minGit、Python 安装器、uv —— 便携包免联网安装依赖
+$tools = Join-Path $staging "tools"
+$tmpDownload = Join-Path $OutputDir "tools-tmp"
+New-Item -ItemType Directory -Path $tools -Force | Out-Null
+New-Item -ItemType Directory -Path $tmpDownload -Force | Out-Null
+
+# FFmpeg（gyan.dev essentials，含 ffmpeg/ffprobe）
+Write-Host "[工具] 下载 FFmpeg ..." -ForegroundColor Cyan
+$ffmpegZip = Join-Path $tmpDownload "ffmpeg.zip"
+Invoke-Download "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $ffmpegZip
+Expand-Archive $ffmpegZip (Join-Path $tmpDownload "ffmpeg") -Force
+$ffBin = Get-ChildItem (Join-Path $tmpDownload "ffmpeg") -Recurse -Directory | Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
+if (-not $ffBin) { throw "FFmpeg 解压后未找到 bin 目录。" }
+New-Item -ItemType Directory -Path (Join-Path $tools "ffmpeg\bin") -Force | Out-Null
+Copy-Item (Join-Path $ffBin.FullName "ffmpeg.exe") (Join-Path $tools "ffmpeg\bin") -Force
+Copy-Item (Join-Path $ffBin.FullName "ffprobe.exe") (Join-Path $tools "ffmpeg\bin") -Force
+
+# minGit（Git for Windows 精简便携版，含 git）
+Write-Host "[工具] 下载 minGit ..." -ForegroundColor Cyan
+$gitZip = Join-Path $tmpDownload "mingit.zip"
+Invoke-Download "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip" $gitZip
+Expand-Archive $gitZip (Join-Path $tools "git") -Force
+if (-not (Test-Path (Join-Path $tools "git\cmd\git.exe"))) { throw "minGit 解压后未找到 git.exe。" }
+
+# uv
+Write-Host "[工具] 下载 uv ..." -ForegroundColor Cyan
+$uvZip = Join-Path $tmpDownload "uv.zip"
+Invoke-Download "https://ghfast.top/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" $uvZip
+Expand-Archive $uvZip (Join-Path $tmpDownload "uv") -Force
+Copy-Item (Join-Path $tmpDownload "uv\uv.exe") (Join-Path $tools "uv.exe") -Force
+
+# Python 官方安装器（3.10 / 3.12）
+foreach ($py in @("3.10.11", "3.12.10")) {
+    Write-Host "[工具] 下载 Python $py 安装器 ..." -ForegroundColor Cyan
+    $pyInstaller = Join-Path $tools "python-$py-amd64.exe"
+    $ok = $false
+    foreach ($url in @(
+        "https://www.python.org/ftp/python/$py/python-$py-amd64.exe",
+        "https://mirrors.huaweicloud.com/python/$py/python-$py-amd64.exe"
+    )) {
+        try { Invoke-Download $url $pyInstaller; $ok = $true; break } catch { Write-Warning "Python $py 下载失败（$url），尝试镜像..." }
+    }
+    if (-not $ok) { throw "Python $py 安装器下载失败。" }
+}
+
+Remove-Item $tmpDownload -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "[工具] 内置工具收集完成：$tools" -ForegroundColor Green
+
 $stamp = Get-Date -Format "yyyyMMdd"
 $output = Join-Path $OutputDir "2ByteASR-portable-$stamp.7z"
 Remove-Item $output -Force -ErrorAction SilentlyContinue

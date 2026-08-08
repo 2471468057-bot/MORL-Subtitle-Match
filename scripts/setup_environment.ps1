@@ -170,6 +170,21 @@ Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.
 $Uv = (Get-Command uv).Source
 $MossSource = Resolve-ProjectPath $Lock.sources.moss.path
 
+# 便携版内置工具（tools/）优先加入 PATH：ffmpeg、git、uv 无需联网下载
+$ToolsDir = Join-Path $ProjectRoot "tools"
+if (Test-Path $ToolsDir) {
+    foreach ($extra in @($ToolsDir, (Join-Path $ToolsDir "ffmpeg\bin"), (Join-Path $ToolsDir "git\cmd"), (Join-Path $ToolsDir "git\bin"))) {
+        if (Test-Path $extra) { $env:Path = "$extra;$env:Path" }
+    }
+    if (-not $Uv) {
+        $localUv = Join-Path $ToolsDir "uv.exe"
+        if (Test-Path $localUv) {
+            $env:Path = "$ToolsDir;$env:Path"
+            $Uv = (Get-Command uv).Source
+        }
+    }
+}
+
 # 国内网络默认使用清华 PyPI 镜像安装依赖；
 # 需要官方 PyPI 时设置环境变量 UV_DEFAULT_INDEX=https://pypi.org/simple 覆盖。
 if (-not $env:UV_DEFAULT_INDEX) {
@@ -212,6 +227,16 @@ function Ensure-SystemPython {
     )
     $exe = Resolve-SystemPython $MajorMinor
     if ($exe) { return $exe }
+    # 便携包内置 Python 安装器优先（本地安装，不联网）
+    $pyVersion = if ($MajorMinor -eq "3.10") { "3.10.11" } elseif ($MajorMinor -eq "3.12") { "3.12.10" } else { $MajorMinor }
+    $localInstaller = Join-Path $ProjectRoot "tools\python-$pyVersion-amd64.exe"
+    if (Test-Path $localInstaller) {
+        Write-Host "[环境] 使用便携包内置 Python 安装器（$pyVersion）..." -ForegroundColor Cyan
+        & $localInstaller /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=0
+        $exe = Resolve-SystemPython $MajorMinor
+        if ($exe) { return $exe }
+        throw "$Label 需要 Python $MajorMinor。便携包内置安装器安装失败，请手动安装后重试。"
+    }
     Write-Host "[环境] 未找到系统 Python $MajorMinor，尝试通过 winget 安装..." -ForegroundColor Cyan
     # winget 的进度输出会污染函数返回值，必须全部吞掉
     & winget install --id "Python.Python.$MajorMinor" --exact --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null

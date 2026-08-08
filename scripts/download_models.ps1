@@ -143,11 +143,13 @@ if (-not (Test-Path $HfExe)) {
 $driveName = ([System.IO.Path]::GetPathRoot($ProjectRoot)).TrimEnd('\').TrimEnd(':')
 $drive = Get-PSDrive -Name $driveName
 $freeGb = [math]::Round($drive.Free / 1GB, 1)
+$missingModels = @($modelSpecs | Where-Object { -not (Test-ModelFiles $_.Spec) })
 Write-Host "2ByteASR 模型下载" -ForegroundColor Cyan
-if ($IncludeQwen) {
-    Write-Host "- 下载量约 11 GB（含 Qwen3-ASR 复核），建议至少保留 15 GB 可用空间。"
+if ($missingModels.Count -eq 0) {
+    Write-Host "- 模型已全部就绪，无需下载。" -ForegroundColor Green
 } else {
-    Write-Host "- 下载量约 7 GB（MOSS 转写/说话人、FireRed 字级时间轴、声纹；不含 Qwen3-ASR 复核，可后续补下）。"
+    Write-Host "- 需下载 $($missingModels.Count) 个模型：$($missingModels.Name -join '、')"
+    Write-Host "- 建议至少保留 15 GB 可用空间。"
 }
 Write-Host "- 当前项目盘剩余约 $freeGb GB。"
 Write-Host "- 下载可中断；重新运行会复用 Hugging Face 已完成的文件。"
