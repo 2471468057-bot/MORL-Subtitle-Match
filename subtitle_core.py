@@ -1741,8 +1741,28 @@ def check_runtime():
             '"pypinyin==0.55.0" "requests==2.33.0"'
         )
     for executable in ("ffmpeg", "ffprobe"):
-        if shutil.which(executable) is None:
+        resolved = shutil.which(executable)
+        if resolved is None:
             raise RuntimeError(f"缺少 {executable}，请先加入 PATH。")
+        # 可执行性验证：部分环境（winget 安装中断/缺运行库）下 exe 会
+        # 0xc0000005 崩溃，运行中才暴露。提前探测并给出明确提示。
+        try:
+            completed = subprocess.run(
+                [resolved, "-version"],
+                capture_output=True,
+                timeout=20,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+        except (OSError, subprocess.SubprocessError):
+            completed = None
+        if completed is None or completed.returncode not in (0, 1):
+            raise RuntimeError(
+                f"{executable} 无法正常运行（可能已损坏或缺少运行库）。\n"
+                "请重新安装 FFmpeg：\n"
+                "  winget uninstall Gyan.FFmpeg\n"
+                "  winget install Gyan.FFmpeg\n"
+                "或从 https://www.gyan.dev/ffmpeg/builds/ 下载完整版解压到 C:\\ffmpeg\\bin"
+            )
 
 
 def build_hf_endpoints():
