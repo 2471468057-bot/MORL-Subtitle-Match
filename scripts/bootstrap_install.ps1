@@ -79,6 +79,8 @@ function Download-WithProxy {
 function Install-GitDirect {
     # 国内网络下 winget 直连 GitHub 可能极慢甚至卡死；
     # 改为官方安装包直装，依次尝试国内加速代理与 GitHub 官方源（带连接超时）。
+    $downloads = Join-Path $env:TEMP "2byteasr-prereq"
+    New-Item -ItemType Directory -Path $downloads -Force | Out-Null
     $gitInstaller = Join-Path $downloads "git.exe"
     $sources = @(
         "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe",
