@@ -29,6 +29,7 @@ review_tracks/
 artifacts/
 design-qa.md
 .uv-python/
+.uv-cache/
 
 # Local security-scan tool state (never publish)
 .mimosa/

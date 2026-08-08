@@ -43,6 +43,9 @@ function Install-WinGetPackage {
     # 下载可能因网络瞬断失败（如 0x80072f78 超时），重试最多 3 次。
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         Write-Host "[Prerequisite] Installing $Label ... (第 $attempt 次尝试)" -ForegroundColor Cyan
+        if ($Label -in @("Git", "uv")) {
+            Write-Host "  提示：GitHub 组件在国内网络下可能较慢，请耐心等待；失败会自动重试。" -ForegroundColor DarkYellow
+        }
         & winget install --id $Id --exact --silent --disable-interactivity `
             --accept-package-agreements --accept-source-agreements
         if ($LASTEXITCODE -eq 0) { return }

@@ -177,6 +177,13 @@ if (-not $env:UV_DEFAULT_INDEX) {
     Write-Host "[网络] 依赖走清华 PyPI 镜像：$env:UV_DEFAULT_INDEX（可用 UV_DEFAULT_INDEX 覆盖）" -ForegroundColor Cyan
 }
 
+# 依赖缓存目录固定到项目内，避免默认 %LOCALAPPDATA%\uv\cache 占用系统盘
+# （torch 等大包缓存可达数 GB）。可用 UV_CACHE_DIR 覆盖。
+if (-not $env:UV_CACHE_DIR) {
+    $env:UV_CACHE_DIR = Join-Path $ProjectRoot ".uv-cache"
+    Write-Host "[网络] uv 依赖缓存：$env:UV_CACHE_DIR（可用 UV_CACHE_DIR 覆盖）" -ForegroundColor Cyan
+}
+
 
 function Resolve-SystemPython {
     param([Parameter(Mandatory = $true)][string]$MajorMinor)
