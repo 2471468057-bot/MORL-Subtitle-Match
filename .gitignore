@@ -40,6 +40,9 @@ design-qa.md
 # First-run setup completion marker (written by bootstrap_install.ps1)
 2byteasr.setup-complete
 
+# Bundled font binaries (downloaded by build_offline_bundle.ps1)
+assets/fonts/
+
 # Never commit local credentials or voiceprints
 .env
 .env.*

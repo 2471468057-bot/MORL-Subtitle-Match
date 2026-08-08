@@ -150,6 +150,20 @@ foreach ($py in @("3.10.11", "3.12.10")) {
 Remove-Item $tmpDownload -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "[工具] 内置工具收集完成：$tools" -ForegroundColor Green
 
+# 思源黑体 Heavy（SIL OFL 开源）：随包分发保证所有机器字体一致；
+# 同时放进项目 assets/fonts 供本机开发预览使用。
+$fontDir = Join-Path $staging "assets\fonts"
+New-Item -ItemType Directory -Path $fontDir -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $ProjectRoot "assets\fonts") -Force | Out-Null
+$fontLocal = Join-Path $ProjectRoot "assets\fonts\SourceHanSansSC-Heavy.otf"
+$fontStaged = Join-Path $fontDir "SourceHanSansSC-Heavy.otf"
+if (-not (Test-Path $fontLocal)) {
+    Write-Host "[字体] 下载思源黑体 Heavy ..." -ForegroundColor Cyan
+    Invoke-Download "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Heavy.otf" $fontLocal
+}
+Copy-Item $fontLocal $fontStaged -Force
+Write-Host "[字体] 思源黑体 Heavy 已就绪：$fontStaged" -ForegroundColor Green
+
 # 依赖 wheel 集（wheels/）：首次配置时离线安装 Python 依赖，无需联网下载。
 # 版本来源：本地两个 venv（python -m venv 自带 pip）的精确冻结列表；
 # 剔除 torch 家族（离线装 CPU 版，GPU 机器安装后由 setup 自动升级 CUDA 版）。
@@ -187,6 +201,9 @@ foreach ($spec in $wheelSpecs) {
     $ErrorActionPreference = "Continue"
     # uv 创建的 venv 可能不带 pip；ensurepip 离线补装
     & $spec.Py -m ensurepip --upgrade --default-pip 2>$null | Out-Null
+    # MOSS 以可编辑方式从源码安装（setuptools 构建后端）；离线构建隔离环境
+    # 需要 setuptools/wheel 在 wheels/ 里，否则报 “failed to build moss”。
+    & $spec.Py -m pip download setuptools wheel --no-deps -d $WheelsDir --quiet --disable-pip-version-check
     # 不用 --only-binary：jieba / sox 等包在 PyPI 只有 sdist（pip download 只下载归档、
     # 不构建）；保留 setuptools/wheel 以便离线安装时构建这些 sdist。
     & $spec.Py -m pip download -r $freezeFile --no-deps `

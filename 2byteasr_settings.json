@@ -2,12 +2,12 @@
   "schema_version": 1,
   "models": {
     "qwen_asr_model": "Qwen/Qwen3-ASR-1.7B",
-    "polish_provider": "bailian",
+    "polish_provider": "custom",
     "polish_model": "qwen3.7-flash",
-    "polish_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "group_provider": "bailian",
+    "polish_base_url": "https://api.openai.com/v1",
+    "group_provider": "custom",
     "group_model": "qwen3.7-flash",
-    "group_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    "group_base_url": "https://api.openai.com/v1"
   },
   "switches": {
     "enable_qwen_asr_reference": true,
@@ -21,7 +21,7 @@
     "force_refresh_group": false
   },
   "ui": {
-    "language": "en"
+    "language": "zh"
   },
   "performance": {
     "parallel_cloud_batches": true,

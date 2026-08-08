@@ -100,6 +100,40 @@ def _app_icon() -> QIcon:
     return _icon("fa5s.closed-captioning", GREEN)
 
 
+def _register_bundled_fonts() -> None:
+    """Register bundled Source Han Sans OTFs so every machine renders alike."""
+    from PySide6.QtGui import QFontDatabase
+    root = Path(__file__).resolve().parents[1]
+    candidates = [root / "assets" / "fonts", root / "tools" / "fonts"]
+    found = 0
+    for directory in candidates:
+        if not directory.is_dir():
+            continue
+        for font_path in sorted(directory.glob("*.otf")) + sorted(directory.glob("*.ttf")):
+            try:
+                QFontDatabase.addApplicationFont(str(font_path))
+                found += 1
+            except Exception:
+                pass
+    if found:
+        print(f"[fonts] registered {found} bundled font file(s)")
+
+
+def _app_font() -> QFont:
+    font = QFont("Source Han Sans SC", 9)
+    font.setFamilies([
+        "Source Han Sans SC",
+        "思源黑体",
+        "Noto Sans CJK SC",
+        "Microsoft YaHei UI",
+        "Segoe UI",
+        "Yu Gothic UI",
+        "PingFang SC",
+    ])
+    font.setWeight(QFont.Weight.Black)  # 思源黑体 Heavy 为主要字重
+    return font
+
+
 def _completion_notification_spec(result):
     """Build a concise, user-visible completion message for every queue outcome."""
     success_count = len(result.successes)
@@ -157,7 +191,8 @@ def _configure_windows_app_identity() -> None:
 APP_QSS = f"""
 QWidget {{
     color: {INK};
-    font-family: "Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC";
+    font-family: "Source Han Sans SC", "思源黑体", "Noto Sans CJK SC",
+                 "Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC";
     font-size: 13px;
 }}
 QMainWindow, QWidget#appRoot {{ background: {IVORY}; }}
@@ -236,7 +271,7 @@ QTextEdit#resultConsole {{
     background: #30332f; color: #edf0e9; border: 0; border-radius: 9px;
     padding: 9px; font-family: "Cascadia Mono", "Microsoft YaHei UI"; font-size: 12px;
 }}
-QLineEdit, QComboBox, QPlainTextEdit, QListWidget {{
+QLineEdit, QPlainTextEdit, QListWidget {{
     background: #ffffff;
     border: 1px solid #bdb8ae;
     border-radius: 8px;
@@ -244,10 +279,25 @@ QLineEdit, QComboBox, QPlainTextEdit, QListWidget {{
     min-height: 20px;
     selection-background-color: {GREEN};
 }}
-QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QListWidget:focus {{
+QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus {{
     border: 1px solid {GREEN};
 }}
-QComboBox::drop-down {{ border: 0; width: 24px; }}
+QComboBox {{
+    background: #ffffff;
+    border: 1px solid #bdb8ae;
+    border-radius: 8px;
+    padding: 7px 30px 7px 10px;
+    min-height: 0;
+    selection-background-color: {GREEN};
+}}
+QComboBox:focus {{ border: 1px solid {GREEN}; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border: 0;
+    width: 28px;
+    background: transparent;
+}}
 QComboBox QAbstractItemView {{
     background: {SURFACE}; border: 1px solid {LINE}; border-radius: 8px;
     padding: 5px; selection-background-color: #e5eee2; selection-color: {INK};
@@ -1008,8 +1058,8 @@ class CollapsibleFrame(QFrame):
         self._summary = summary
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(16, 3, 16, 15)
-        self.content_layout.setSpacing(10)
+        self.content_layout.setContentsMargins(16, 3, 16, 12)
+        self.content_layout.setSpacing(8)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -1546,7 +1596,7 @@ class MainWindow(QWidget):
         page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         title = QLabel("本批字幕内容设置")
         title.setObjectName("sectionTitle")
         title.setMaximumWidth(245)
@@ -2601,9 +2651,8 @@ def run_desktop_app(
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     app.setStyleSheet(APP_QSS)
-    app_font = QFont("Microsoft YaHei UI", 9)
-    app_font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC"])
-    app.setFont(app_font)
+    _register_bundled_fonts()
+    app.setFont(_app_font())
     media_paths = MainWindow._supported_paths(initial_paths)
     if select_media and not media_paths:
         media_paths = _select_media_paths()
@@ -2625,9 +2674,8 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     app.setStyleSheet(APP_QSS)
-    app_font = QFont("Microsoft YaHei UI", 9)
-    app_font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "Yu Gothic UI", "PingFang SC"])
-    app.setFont(app_font)
+    _register_bundled_fonts()
+    app.setFont(_app_font())
     preview_media = [] if state == "empty" else [
         r"F:\直播回放\舰礼有等身抱枕～代刮刮刮乐～_vocal.wav"
     ]
