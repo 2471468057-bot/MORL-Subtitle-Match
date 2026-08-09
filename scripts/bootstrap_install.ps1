@@ -25,6 +25,21 @@ $Launcher = Join-Path $ProjectRoot "2ByteASR.exe"
 $SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
 Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
 
+# 提前询问 Qwen 复核模型：环境安装需要较长时间，不能等装完才让用户选择。
+$IncludeQwenChoice = $false
+if ($DownloadModels) {
+    $qwenConfig = Join-Path $ProjectRoot "models\Qwen3-ASR-1.7B\config.json"
+    if ($env:2BYTEASR_INCLUDE_QWEN -or (Test-Path $qwenConfig)) {
+        $IncludeQwenChoice = $true
+        if (Test-Path $qwenConfig) { Write-Host "[Qwen] 检测到 Qwen3-ASR 模型已存在。" -ForegroundColor Green }
+    } elseif (-not $env:2BYTEASR_NO_QWEN) {
+        $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
+        if ($answer -match "^[yY]") { $IncludeQwenChoice = $true }
+    }
+    $qwenText = if ($IncludeQwenChoice) { "包含" } else { "不包含" }
+    Write-Host "[选择] Qwen3-ASR 复核模型：$qwenText（可随时用 download_models.bat 补下或关闭）" -ForegroundColor Cyan
+}
+
 function Add-BundledToolsToPath {
     # 便携版内置工具（tools/）优先：ffmpeg/git/uv 无需联网下载。
     # Refresh-ProcessPath 会重建整个 PATH，必须在这里一并恢复——
@@ -258,16 +273,7 @@ if ($LASTEXITCODE -ne 0) {
 
 if ($DownloadModels) {
     Write-Host "[2/2] 下载固定版本模型（默认约 7 GB：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
-    $includeQwen = $false
-    $qwenConfig = Join-Path $ProjectRoot "models\Qwen3-ASR-1.7B\config.json"
-    if ($env:2BYTEASR_INCLUDE_QWEN -or (Test-Path $qwenConfig)) {
-        $includeQwen = $true
-        if (Test-Path $qwenConfig) { Write-Host "[2/2] 检测到 Qwen3-ASR 模型已存在。" -ForegroundColor Green }
-    } elseif (-not $env:2BYTEASR_NO_QWEN) {
-        $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
-        if ($answer -match "^[yY]") { $includeQwen = $true }
-    }
-    if ($includeQwen) {
+    if ($IncludeQwenChoice) {
         & $DownloadModelScript -Yes -IncludeQwen
     } else {
         & $DownloadModelScript -Yes

@@ -60,7 +60,10 @@ def verify_model_files(
         except ValueError as exc:
             raise ModelIntegrityError(f"模型锁包含非法路径：{relative}") from exc
         if not candidate.is_file():
-            raise ModelIntegrityError(f"模型关键文件缺失：{candidate}")
+            raise ModelIntegrityError(
+                f"模型关键文件缺失：{candidate}\n"
+                "请运行 download_models.bat 补齐（断点续传，只下载缺失部分）。"
+            )
         actual = sha256_file(candidate)
         if actual.lower() != str(expected).lower():
             raise ModelIntegrityError(
