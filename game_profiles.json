@@ -1061,6 +1061,10 @@
           "白只重工",
           "白祇重工"
         ]
+      ],
+      "lexicons": [
+        "lexicons/zenless_characters.json",
+        "lexicons/zenless_terms.json"
       ]
     },
     "原神": {
@@ -1083,7 +1087,9 @@
         },
         {
           "canonical": "若娜瓦",
-          "aliases": ["若纳瓦"],
+          "aliases": [
+            "若纳瓦"
+          ],
           "category": "character",
           "source": "genshin_7.0_public_sources_2026-07-31",
           "confirmed": true
@@ -1097,21 +1103,28 @@
         },
         {
           "canonical": "伊涅芙",
-          "aliases": ["伊涅福", "伊涅弗"],
+          "aliases": [
+            "伊涅福",
+            "伊涅弗"
+          ],
           "category": "character",
           "source": "genshin_7.0_public_sources_2026-07-31",
           "confirmed": true
         },
         {
           "canonical": "薇斯纳",
-          "aliases": ["薇丝娜"],
+          "aliases": [
+            "薇丝娜"
+          ],
           "category": "character",
           "source": "genshin_7.0_public_sources_2026-07-31",
           "confirmed": true
         },
         {
           "canonical": "达妮卡",
-          "aliases": ["达尼卡"],
+          "aliases": [
+            "达尼卡"
+          ],
           "category": "character",
           "source": "genshin_7.0_public_sources_2026-07-31",
           "confirmed": true
@@ -1125,14 +1138,20 @@
         },
         {
           "canonical": "阿蕾奇诺",
-          "aliases": ["阿雷奇诺"],
+          "aliases": [
+            "阿雷奇诺"
+          ],
           "category": "character",
           "source": "official",
           "confirmed": true
         },
         {
           "canonical": "至冬",
-          "aliases": ["至东", "志东", "智东"],
+          "aliases": [
+            "至东",
+            "志东",
+            "智东"
+          ],
           "replacement_mode": "global",
           "category": "region",
           "source": "official",
@@ -1140,7 +1159,9 @@
         },
         {
           "canonical": "纪行",
-          "aliases": ["骑行"],
+          "aliases": [
+            "骑行"
+          ],
           "replacement_mode": "global",
           "category": "game_system",
           "source": "official",
@@ -1148,7 +1169,9 @@
         },
         {
           "canonical": "坎瑞亚",
-          "aliases": ["凯瑞亚"],
+          "aliases": [
+            "凯瑞亚"
+          ],
           "category": "region",
           "source": "official",
           "confirmed": true
@@ -1165,11 +1188,15 @@
     "鹰角嘉年华": {
       "identity": "鹰角嘉年华",
       "updated": "2026-08-03",
-      "title_triggers": ["鹰角嘉年华"],
+      "title_triggers": [
+        "鹰角嘉年华"
+      ],
       "terms": [
         {
           "canonical": "鹰角嘉年华",
-          "aliases": ["英角嘉年华"],
+          "aliases": [
+            "英角嘉年华"
+          ],
           "replacement_mode": "global",
           "category": "event",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1177,7 +1204,11 @@
         },
         {
           "canonical": "终末地",
-          "aliases": ["周末地", "周末帝", "周末的"],
+          "aliases": [
+            "周末地",
+            "周末帝",
+            "周末的"
+          ],
           "replacement_mode": "global",
           "category": "game_term",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1185,7 +1216,9 @@
         },
         {
           "canonical": "舟的洞洞鞋",
-          "aliases": ["周的洞洞鞋"],
+          "aliases": [
+            "周的洞洞鞋"
+          ],
           "replacement_mode": "global",
           "category": "spoken_game_abbreviation",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1193,7 +1226,9 @@
         },
         {
           "canonical": "舟的博士款",
-          "aliases": ["周的博士款"],
+          "aliases": [
+            "周的博士款"
+          ],
           "replacement_mode": "global",
           "category": "spoken_game_abbreviation",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1201,7 +1236,9 @@
         },
         {
           "canonical": "舟的斗篷毯",
-          "aliases": ["周的斗篷毯"],
+          "aliases": [
+            "周的斗篷毯"
+          ],
           "replacement_mode": "global",
           "category": "spoken_game_abbreviation",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1209,7 +1246,9 @@
         },
         {
           "canonical": "柄图",
-          "aliases": ["饼图"],
+          "aliases": [
+            "饼图"
+          ],
           "replacement_mode": "global",
           "category": "merchandise_term",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1217,7 +1256,9 @@
         },
         {
           "canonical": "同柄图",
-          "aliases": ["红饼图"],
+          "aliases": [
+            "红饼图"
+          ],
           "replacement_mode": "global",
           "category": "merchandise_term",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1225,7 +1266,9 @@
         },
         {
           "canonical": "不织布",
-          "aliases": ["布织布"],
+          "aliases": [
+            "布织布"
+          ],
           "replacement_mode": "global",
           "category": "material",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1233,7 +1276,9 @@
         },
         {
           "canonical": "捶背",
-          "aliases": ["锤背"],
+          "aliases": [
+            "锤背"
+          ],
           "replacement_mode": "global",
           "category": "common_collocation",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1241,7 +1286,11 @@
         },
         {
           "canonical": "不戴抑制器",
-          "aliases": ["不带抑制器", "不带移植器", "不带一只气"],
+          "aliases": [
+            "不带抑制器",
+            "不带移植器",
+            "不带一只气"
+          ],
           "replacement_mode": "global",
           "category": "game_collocation",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1249,7 +1298,9 @@
         },
         {
           "canonical": "正比",
-          "aliases": ["真笔"],
+          "aliases": [
+            "真笔"
+          ],
           "replacement_mode": "global",
           "category": "art_term",
           "source": "user_verified_manual_srt_2026-08-03",
@@ -1257,12 +1308,21 @@
         },
         {
           "canonical": "文武双全气球小套组",
-          "aliases": ["文武双全气球小透足", "文武双全气球小偷族"],
+          "aliases": [
+            "文武双全气球小透足",
+            "文武双全气球小偷族"
+          ],
           "replacement_mode": "global",
           "category": "merchandise_name",
           "source": "user_verified_manual_srt_2026-08-03",
           "confirmed": true
         }
+      ]
+    },
+    "明日方舟": {
+      "lexicons": [
+        "lexicons/arknights_operators.json",
+        "lexicons/arknights_terms.json"
       ]
     }
   }
