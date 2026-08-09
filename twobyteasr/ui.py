@@ -134,6 +134,21 @@ def _app_font() -> QFont:
     return font
 
 
+def _acquire_instance_lock():
+    """Single-instance guard: another running workbench shows an error."""
+    from PySide6.QtCore import QLockFile
+    base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "2ByteASR"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    lock = QLockFile(str(base / "app.lock"))
+    lock.setStaleLockTime(30000)
+    if not lock.tryLock(100):
+        return None
+    return lock
+
+
 def _completion_notification_spec(result):
     """Build a concise, user-visible completion message for every queue outcome."""
     success_count = len(result.successes)
@@ -531,6 +546,18 @@ class SwitchControl(QAbstractButton):
             focus_pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(focus_pen)
             painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
+
+
+def _merge_media_paths(existing, incoming):
+    """Append incoming media paths, de-duplicated by normalized absolute path."""
+    merged = []
+    seen = set()
+    for item in (*existing, *incoming):
+        key = os.path.normcase(os.path.abspath(item))
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
+    return merged
 
 
 class FramelessPopupCombo(QComboBox):
@@ -1444,6 +1471,91 @@ class PromptDialog(QDialog):
         apply_ui_language(self)
 
 
+class GuidedSetupDialog(QDialog):
+    """首次运行引导：界面语言 → 硬件检测 → 使用说明 → 开始使用。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(translate("首次使用引导", current_language()))
+        self.setFixedSize(580, 400)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setSpacing(12)
+
+        title = QLabel(translate("欢迎使用 2ByteASR", current_language()))
+        title.setStyleSheet("font-size: 20px; font-weight: 800;")
+        layout.addWidget(title)
+        hint = QLabel(translate(
+            "拖入视频或音频即可生成字幕，下面三步一分钟搞定。", current_language()))
+        hint.setObjectName("muted")
+        layout.addWidget(hint)
+
+        lang_row = QHBoxLayout()
+        lang_row.addWidget(QLabel(translate("界面语言：", current_language())))
+        self.lang_combo = FramelessPopupCombo()
+        self.lang_combo.addItem("中文", "zh")
+        self.lang_combo.addItem("English", "en")
+        self.lang_combo.addItem("日本語", "ja")
+        self.lang_combo.setCurrentIndex(
+            max(0, self.lang_combo.findData(current_language())))
+        self.lang_combo.currentIndexChanged.connect(self._change_lang)
+        lang_row.addWidget(self.lang_combo, 1)
+        layout.addLayout(lang_row)
+
+        layout.addWidget(QLabel(translate("硬件检测：", current_language())))
+        self.gpu_info = QLabel(translate("正在检测…", current_language()))
+        self.gpu_info.setObjectName("muted")
+        layout.addWidget(self.gpu_info)
+
+        usage = QLabel(translate(
+            "使用方式：\n"
+            "1. 双击 2ByteASR.exe（或把视频/音频直接拖到它上面）\n"
+            "2. 可继续拖入更多素材，选择游戏名称后点击「开始生成字幕」\n"
+            "3. 字幕与剪映文稿生成在素材同目录（xxx_剪映文稿.srt）",
+            current_language()))
+        usage.setObjectName("muted")
+        usage.setWordWrap(True)
+        layout.addWidget(usage)
+
+        layout.addStretch(1)
+        start = AnimatedButton(translate("开始使用", current_language()))
+        start.setObjectName("primary")
+        start.clicked.connect(self.accept)
+        layout.addWidget(start, 0, Qt.AlignmentFlag.AlignRight)
+        self._detect_gpu()
+
+    def _detect_gpu(self):
+        text = translate(
+            "未检测到 NVIDIA GPU：将使用 CPU 模式（较慢，可正常出字幕）",
+            current_language())
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+            first = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+            if first:
+                parts = [part.strip() for part in first.split(",")]
+                text = f"{translate('已检测到 NVIDIA GPU：', current_language())}{parts[0]}（{parts[1]} MB）"
+                self.gpu_info.setObjectName("statusGood")
+        except Exception:
+            pass
+        self.gpu_info.setText(text)
+        self.gpu_info.style().unpolish(self.gpu_info)
+        self.gpu_info.style().polish(self.gpu_info)
+
+    def _change_lang(self, index):
+        code = self.lang_combo.itemData(index) or "zh"
+        save_language(code)
+        self.setWindowTitle(translate("首次使用引导", code))
+        self.gpu_info.setText(translate(
+            "未检测到 NVIDIA GPU：将使用 CPU 模式（较慢，可正常出字幕）", code))
+        apply_ui_language(self, code)
+
+
 class DropOverlay(QFrame):
     """Full-window drag target that dims the workbench without stealing drops."""
 
@@ -2102,9 +2214,14 @@ class MainWindow(QWidget):
         open_subtitles = AnimatedButton("打开字幕目录")
         open_subtitles.setIcon(_icon("fa5s.folder-open"))
         open_subtitles.clicked.connect(self._open_subtitle_dir)
+        self.retry_failed_button = AnimatedButton("重试失败项")
+        self.retry_failed_button.setIcon(_icon("fa5s.redo"))
+        self.retry_failed_button.clicked.connect(self._retry_failed_items)
+        self.retry_failed_button.hide()
         close = AnimatedButton("完成")
         close.setObjectName("primary")
         close.clicked.connect(self.close)
+        row.addWidget(self.retry_failed_button)
         row.addWidget(open_subtitles)
         row.addWidget(open_reports)
         row.addWidget(close)
@@ -2115,6 +2232,17 @@ class MainWindow(QWidget):
     def _open_subtitle_dir(self):
         target = getattr(self, "_last_srt_dir", "") or str(Path(self.legacy.SCRIPT_DIR))
         os.startfile(target)
+
+    def _retry_failed_items(self):
+        failed = getattr(self, "_last_failed_items", [])
+        if not failed:
+            return
+        self.media_paths = _merge_media_paths(
+            self.media_paths, [f.media_path for f in failed])
+        self.pages.setCurrentIndex(0)
+        self._refresh_media_summary()
+        # 已完成阶段会命中阶段缓存，重试只重跑失败部分
+        QTimer.singleShot(0, self._start_run)
 
     @staticmethod
     def _supported_paths(paths):
@@ -2211,14 +2339,7 @@ class MainWindow(QWidget):
             event.ignore()
             return
         # 追加而非替换：提示文案是“可继续拖入另一批素材”，第二批应与第一批合并
-        merged = []
-        seen = set()
-        for item in (*self.media_paths, *accepted):
-            key = os.path.normcase(os.path.abspath(item))
-            if key not in seen:
-                seen.add(key)
-                merged.append(item)
-        self.media_paths = merged
+        self.media_paths = _merge_media_paths(self.media_paths, accepted)
         _remember_media_directory(accepted)
         self._refresh_media_summary()
         event.acceptProposedAction()
@@ -2674,6 +2795,10 @@ class MainWindow(QWidget):
         self.result_files.setHtml("".join(rows))
         self.result_console.setHtml(self.console_log.toHtml())
         self.pages.setCurrentIndex(2)
+        self._last_failed_items = [
+            item for item in result.results if item.status == "failed"
+        ]
+        self.retry_failed_button.setVisible(bool(self._last_failed_items))
         self._show_task_notification(*_completion_notification_spec(result))
 
     def _handle_unexpected_error(self, message: str):
@@ -2768,6 +2893,14 @@ def run_desktop_app(
     app.setStyleSheet(APP_QSS)
     _register_bundled_fonts()
     app.setFont(_app_font())
+    lock = _acquire_instance_lock()
+    if lock is None:
+        _show_error(
+            "2ByteASR 已在运行",
+            "检测到另一个 2ByteASR 实例正在运行，请先关闭它再启动。",
+        )
+        return 2
+    app._instance_lock = lock
     media_paths = MainWindow._supported_paths(initial_paths)
     if select_media and not media_paths:
         media_paths = _select_media_paths()
@@ -2775,8 +2908,22 @@ def run_desktop_app(
             return 0
     window = MainWindow(media_paths, legacy, pipeline, startup_self_test)
     window.show()
+    _run_first_run_wizard(window)
     app.exec()
     return int(window.result_exit_code)
+
+
+def _run_first_run_wizard(parent) -> None:
+    """First-run guide (language / GPU / usage) shown once per install dir."""
+    root = Path(__file__).resolve().parents[1]
+    marker = root / "2byteasr.first-run-done"
+    if marker.is_file():
+        return
+    try:
+        GuidedSetupDialog(parent).exec()
+        marker.write_text("done", encoding="ascii")
+    except Exception:
+        pass
 
 
 def _preview(screenshot_path: str, state: str = "settings") -> int:

@@ -40,6 +40,9 @@ design-qa.md
 # First-run setup completion marker (written by bootstrap_install.ps1)
 2byteasr.setup-complete
 
+# First-run guide marker (written by the desktop UI)
+2byteasr.first-run-done
+
 # Bundled font binaries (downloaded by build_offline_bundle.ps1)
 assets/fonts/
 

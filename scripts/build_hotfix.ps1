@@ -24,6 +24,7 @@ $files = @(
     "quick_start.py",
     "subtitle_core.py",
     "setup_2byteasr.bat",
+    "clean_models.bat",
     "scripts\bootstrap_install.ps1",
     "scripts\setup_environment.ps1",
     "scripts\download_models.ps1",
@@ -34,10 +35,23 @@ $files = @(
     "assets\ui-chevron-down.png"
 )
 
+# 需要删除的旧文件（避免新代码与旧残留冲突）；按版本登记。
+# 例：@("setup_moss_firered.bat")
+$deleteFiles = @()
+
 $missing = @($files | Where-Object { -not (Test-Path (Join-Path $ProjectRoot $_)) })
 if ($missing.Count -gt 0) {
     throw "hotfix 清单中的文件缺失：$($missing -join ', ')"
 }
+
+# HOTFIX.json：apply_hotfix.bat 按它做覆盖与删除；也是版本追溯依据
+$hotfixManifest = Join-Path $env:TEMP "HOTFIX.json"
+[ordered]@{
+    schema_version = 1
+    built_at = (Get-Date).ToString("o")
+    files = $files
+    delete = $deleteFiles
+} | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 $hotfixManifest
 
 $sevenZipPath = ""
 $sevenZipCommand = Get-Command 7z -ErrorAction SilentlyContinue
@@ -55,10 +69,15 @@ if (-not $sevenZipPath) {
 }
 
 Remove-Item $output -Force -ErrorAction SilentlyContinue
+# 先打包内容（含 HOTFIX.json 清单），再把清单加入 zip
 $zipArgs = @("a", "-tzip", $output) + $files
 & $sevenZipPath @zipArgs | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "hotfix 打包失败（退出码 $LASTEXITCODE）。"
+}
+& $sevenZipPath a -tzip $output $hotfixManifest | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "hotfix 清单写入失败（退出码 $LASTEXITCODE）。"
 }
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $output).Hash

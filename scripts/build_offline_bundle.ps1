@@ -279,3 +279,20 @@ if ($Lite) {
 } else {
     Write-Host "用法：解压到任意目录（如 D:\2ByteASR），双击 setup_2byteasr.bat 完成环境配置后即可使用。" -ForegroundColor Yellow
 }
+
+# 汇总产物清单（README/发布说明的数字以它为准，避免人工维护失真）
+$manifestPath = Join-Path $OutputDir "RELEASE-MANIFEST.txt"
+$rows = @()
+foreach ($artifact in @(Get-ChildItem $OutputDir -File | Where-Object { $_.Extension -in @(".7z", ".zip", ".exe") } | Sort-Object Name)) {
+    $sizeMb = [math]::Round($artifact.Length / 1MB, 0)
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifact.FullName).Hash.ToLowerInvariant()
+    $rows += "{0}`t{1} MB`t{2}" -f $artifact.Name, $sizeMb, $hash
+}
+@(
+    "2ByteASR 发布产物清单（由构建脚本生成，勿手改）",
+    "生成时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm')",
+    "",
+    "文件名`t大小`tSHA256",
+    $rows
+) | Set-Content -Encoding UTF8 $manifestPath
+Write-Host "[OK] 产物清单：$manifestPath" -ForegroundColor Green

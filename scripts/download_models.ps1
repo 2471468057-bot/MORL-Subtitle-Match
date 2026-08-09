@@ -179,9 +179,12 @@ $missingModels = @($modelSpecs | Where-Object { -not (Test-ModelFiles $_.Spec) }
 Write-Host "2ByteASR 模型下载" -ForegroundColor Cyan
 if ($missingModels.Count -eq 0) {
     Write-Host "- 模型已全部就绪，无需下载。" -ForegroundColor Green
+    Write-Host "- 如需强制重新下载某个模型，请删除对应 models\<模型名> 目录后重跑本脚本。" -ForegroundColor DarkGray
+    exit 0
 } else {
     Write-Host "- 需下载 $($missingModels.Count) 个模型：$($missingModels.Name -join '、')"
     Write-Host "- 建议至少保留 15 GB 可用空间。"
+    Write-Host "- 若反复下载失败，请删除对应 models\<模型名> 目录后重试（残留损坏文件会导致重复下载）。" -ForegroundColor Yellow
 }
 Write-Host "- 当前项目盘剩余约 $freeGb GB。"
 Write-Host "- 下载可中断；重新运行会复用 Hugging Face 已完成的文件。"
@@ -245,7 +248,7 @@ foreach ($entry in $modelSpecs) {
         throw "模型下载失败：$($spec.repository)。请检查网络后重试，或设置 HF_ENDPOINT 环境变量切换下载源（如 HF_ENDPOINT=https://huggingface.co）。"
     }
     if (-not (Test-ModelFiles $spec -VerifyHashes)) {
-        throw "模型下载结束但关键文件缺失或 SHA-256 不匹配：$($spec.repository)"
+        throw "模型下载结束但关键文件缺失或 SHA-256 不匹配：$($spec.repository)`n请删除 models\$($spec.path.Split('/')[-1]) 目录后重跑（残留损坏文件会导致反复下载）。"
     }
     if ($name -eq "speaker_embedding") {
         $customPath = Join-Path $destination "custom.py"

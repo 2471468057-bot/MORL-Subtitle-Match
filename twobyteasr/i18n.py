@@ -191,6 +191,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "已发出安全取消请求，正在等待当前阶段收尾": "Safe-cancel requested; waiting for the current stage to finish",
         "正在衔接下一阶段": "Preparing the next stage",
         "阶段衔接": "Stage transition",
+        # First-run wizard / retry / single instance
+        "首次使用引导": "First-run guide",
+        "欢迎使用 2ByteASR": "Welcome to 2ByteASR",
+        "拖入视频或音频即可生成字幕，下面三步一分钟搞定。":
+            "Drop a video or audio file to generate subtitles; three quick steps below.",
+        "界面语言：": "Interface language: ",
+        "硬件检测：": "Hardware check: ",
+        "已检测到 NVIDIA GPU：": "NVIDIA GPU detected: ",
+        "未检测到 NVIDIA GPU：将使用 CPU 模式（较慢，可正常出字幕）":
+            "No NVIDIA GPU detected: CPU mode will be used (slower but works).",
+        "使用方式：\n1. 双击 2ByteASR.exe（或把视频/音频直接拖到它上面）\n2. 可继续拖入更多素材，选择游戏名称后点击「开始生成字幕」\n3. 字幕与剪映文稿生成在素材同目录（xxx_剪映文稿.srt）":
+            "How to use:\n1. Double-click 2ByteASR.exe (or drop video/audio onto it)\n2. Drop more media, pick a game name, click “Start subtitles”\n3. Subtitles are saved next to the source media (xxx_剪映文稿.srt)",
+        "开始使用": "Get started",
+        "重试失败项": "Retry failed",
+        "打开字幕目录": "Open subtitle folder",
+        "2ByteASR 已在运行": "2ByteASR is already running",
+        "检测到另一个 2ByteASR 实例正在运行，请先关闭它再启动。":
+            "Another 2ByteASR instance is running; close it before starting again.",
     },
     "ja": {
         # Header / window
@@ -368,6 +386,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "已发出安全取消请求，正在等待当前阶段收尾": "安全キャンセルを要求しました。現在の段階の完了を待っています",
         "正在衔接下一阶段": "次の段階を準備中",
         "阶段衔接": "段階遷移",
+        # First-run wizard / retry / single instance
+        "首次使用引导": "初回セットアップ",
+        "欢迎使用 2ByteASR": "2ByteASR へようこそ",
+        "拖入视频或音频即可生成字幕，下面三步一分钟搞定。":
+            "動画・音声をドロップすると字幕を生成できます。次の3ステップで完了します。",
+        "界面语言：": "表示言語：",
+        "硬件检测：": "ハードウェア確認：",
+        "已检测到 NVIDIA GPU：": "NVIDIA GPU を検出：",
+        "未检测到 NVIDIA GPU：将使用 CPU 模式（较慢，可正常出字幕）":
+            "NVIDIA GPU を検出できません：CPU モードで動作します（遅いですが正常に動作）",
+        "使用方式：\n1. 双击 2ByteASR.exe（或把视频/音频直接拖到它上面）\n2. 可继续拖入更多素材，选择游戏名称后点击「开始生成字幕」\n3. 字幕与剪映文稿生成在素材同目录（xxx_剪映文稿.srt）":
+            "使い方：\n1. 2ByteASR.exe をダブルクリック（動画・音声をドロップも可）\n2. 素材を追加し、ゲーム名を選んで「字幕生成を開始」\n3. 字幕は素材と同じフォルダに保存（xxx_剪映文稿.srt）",
+        "开始使用": "はじめる",
+        "重试失败项": "失敗項目を再試行",
+        "打开字幕目录": "字幕フォルダを開く",
+        "2ByteASR 已在运行": "2ByteASR は実行中です",
+        "检测到另一个 2ByteASR 实例正在运行，请先关闭它再启动。":
+            "別の 2ByteASR が実行中です。先に閉じてから起動してください。",
     },
 }
 
