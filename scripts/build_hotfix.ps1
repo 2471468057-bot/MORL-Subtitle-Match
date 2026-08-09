@@ -32,6 +32,8 @@ $files = @(
     "twobyteasr\i18n.py",
     "twobyteasr\settings.py",
     "twobyteasr\model_integrity.py",
+    "twobyteasr\segmentation.py",
+    "twobyteasr\pipeline_runtime.py",
     "assets\ui-chevron-down.png"
 )
 
