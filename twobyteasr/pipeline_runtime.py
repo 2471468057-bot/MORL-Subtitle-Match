@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from twobyteasr.runtime import get_runtime_context
+from twobyteasr.segmentation import merge_split_interjections_in_cues
 
 
 def run_parallel_stages(legacy, runners, *, thread_name_prefix):
@@ -47,6 +48,9 @@ def finalize_cues(
     legacy,
 ):
     """Apply the established final timing and conservation sequence unchanged."""
+    # 语气词防拆：成片前把“哎 呦”等白名单拆分形态合并回“哎呦”
+    # （与人工校对稿一致；组合不在白名单的保持原样）
+    cues = merge_split_interjections_in_cues(cues)
     finalized = legacy.repair_overlong_cues_from_source(
         cues,
         segments,

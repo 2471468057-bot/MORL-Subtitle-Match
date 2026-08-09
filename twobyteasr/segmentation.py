@@ -1,10 +1,15 @@
 ﻿"""segmentation stage implementation extracted from subtitle_core."""
 
+import re
+
 # The core owns runtime configuration; these imports preserve the existing public contract.
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.runtime import get_runtime_context
 
 __all__ = [
+    'INTERJECTION_MERGES',
+    'merge_split_interjections',
+    'merge_split_interjections_in_cues',
     'SEMANTIC_RESTART_MARKERS',
     'NOW_RESTART_LEFT_SUFFIXES',
     'DANGLING_SHORT_FRAGMENTS',
@@ -74,6 +79,42 @@ __all__ = [
 ]
 
 SEMANTIC_RESTART_MARKERS = ("但是", "不过", "所以", "然后", "结果")
+
+# 语气词防拆：ASR/校对可能把“哎呦”拆成“哎 呦”甚至“哎，呦”。
+# 人工校对稿一律连写（“哎呦打不动”“哎呦但是这个龙”），成片时按白名单合并；
+# 组合不在表内的（如“哎 那”“哦 呀”）保持原样，避免误并。
+INTERJECTION_MERGES = {
+    ("哎", "呦"): "哎呦",
+    ("哎", "哟"): "哎哟",
+    ("诶", "呦"): "诶呦",
+    ("诶", "哟"): "诶哟",
+    ("哎", "呀"): "哎呀",
+    ("诶", "呀"): "诶呀",
+    ("哦", "豁"): "哦豁",
+}
+_INTERJECTION_SPLIT_RE = re.compile(r"([哎诶哦])[\s，,。.!！?？]{1,2}([呦哟呀豁])")
+
+
+def merge_split_interjections(text: str) -> str:
+    """Merge split interjections like “哎 呦” back into “哎呦” (whitelist only)."""
+
+    def repl(match):
+        pair = (match.group(1), match.group(2))
+        return INTERJECTION_MERGES.get(pair, match.group(0))
+
+    return _INTERJECTION_SPLIT_RE.sub(repl, text)
+
+
+def merge_split_interjections_in_cues(cues):
+    """Apply interjection merging to every final cue in place."""
+    for cue in cues:
+        text = getattr(cue, "text", None)
+        if not isinstance(text, str):
+            continue
+        merged = merge_split_interjections(text)
+        if merged != text:
+            cue.text = merged
+    return cues
 
 
 DISCOURSE_PREFIXES = (
