@@ -94,6 +94,38 @@ function Write-Manifest {
     Move-Item -Force $tempPath $ManifestPath
 }
 
+function Invoke-DirectModelFallback {
+    param(
+        [Parameter(Mandatory = $true)]$Spec,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    # hf_hub 在镜像上可能因元数据头缺失报 “Local entry not found”，但 blob
+    # 实际可下载。此时绕过 hf_hub，直接按 /resolve/<revision>/<file> 下载必需文件
+    # （国内镜像优先，失败自动切官方源）。
+    $endpoints = @("https://hf-mirror.com", "https://huggingface.co")
+    foreach ($relative in $Spec.required_files) {
+        $out = Join-Path $Destination ($relative -replace '/', '\')
+        New-Item -ItemType Directory -Path (Split-Path $out) -Force | Out-Null
+        $ok = $false
+        foreach ($base in $endpoints) {
+            $url = "$base/$($Spec.repository)/resolve/$($Spec.revision)/$relative"
+            try {
+                Write-Host "  直链下载：$url" -ForegroundColor DarkGray
+                Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing `
+                    -TimeoutSec 300 -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" `
+                    -ErrorAction Stop
+                $ok = $true
+                break
+            } catch {
+                Write-Warning "直链下载失败（$url）：$($_.Exception.Message)"
+            }
+        }
+        if (-not $ok) { return $false }
+    }
+    return $true
+}
+
+
 if (-not (Test-Path $LockPath)) { throw "缺少依赖版本清单：$LockPath" }
 $Lock = Get-Content -Raw -Encoding UTF8 $LockPath | ConvertFrom-Json
 $Installed = Read-Manifest
@@ -183,6 +215,13 @@ foreach ($entry in $modelSpecs) {
     }
     $destination = Resolve-ProjectPath $spec.path
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    # 上次中断会留下与镜像元数据不一致的 hf 缓存（“Local entry not found”），
+    # 先清掉 .cache（保留已下载的模型文件），再做全新下载
+    $hfCache = Join-Path $destination ".cache"
+    if (Test-Path $hfCache) {
+        Write-Host "[下载] 清理中断残留的 HuggingFace 元数据缓存 ..." -ForegroundColor DarkYellow
+        Remove-Item $hfCache -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "[下载] $($spec.repository) @ $($spec.revision)"
     # 国内镜像下载大文件较慢：放宽读超时、降低并发，失败自动重试（可续传）
     $downloaded = $false
@@ -195,6 +234,12 @@ foreach ($entry in $modelSpecs) {
             $env:HF_ENDPOINT = "https://huggingface.co"
         }
         Start-Sleep -Seconds 10
+    }
+    if (-not $downloaded) {
+        # hf 客户端在镜像上可能报 “Local entry not found” 但文件实际可下载：
+        # 改用直链逐个拉取必需文件（镜像→官方）
+        Write-Host "[下载] hf 客户端失败，改用直链下载必需文件（镜像优先）..." -ForegroundColor Yellow
+        $downloaded = Invoke-DirectModelFallback $spec $destination
     }
     if (-not $downloaded) {
         throw "模型下载失败：$($spec.repository)。请检查网络后重试，或设置 HF_ENDPOINT 环境变量切换下载源（如 HF_ENDPOINT=https://huggingface.co）。"
