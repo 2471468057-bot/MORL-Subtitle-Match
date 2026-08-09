@@ -533,7 +533,28 @@ class SwitchControl(QAbstractButton):
             painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
 
 
-class EditableHistoryCombo(QComboBox):
+class FramelessPopupCombo(QComboBox):
+    """QComboBox whose popup strips the Win11 DWM border.
+
+    QSS cannot remove the native black border around the popup window; the
+    popup container must be made frameless and translucent (corners are
+    then cut by the QSS border-radius on QAbstractItemView).
+    """
+
+    def showPopup(self):
+        super().showPopup()
+        try:
+            window = self.view().window()
+            window.setWindowFlags(
+                window.windowFlags() | Qt.WindowType.FramelessWindowHint
+            )
+            window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            window.show()
+        except Exception:
+            pass
+
+
+class EditableHistoryCombo(FramelessPopupCombo):
     """Editable combo with an explicit, reliable history dropdown affordance."""
 
     def __init__(self, parent=None):
@@ -1180,12 +1201,12 @@ class EndpointEditor(QFrame):
         form = QFormLayout()
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(8)
-        self.provider = QComboBox()
+        self.provider = FramelessPopupCombo()
         for key, spec in PROVIDER_PRESETS.items():
             self.provider.addItem(spec["label"], key)
         current_provider = models.get(f"{prefix}_provider", "bailian")
         self.provider.setCurrentIndex(max(0, self.provider.findData(current_provider)))
-        self.model = QComboBox()
+        self.model = FramelessPopupCombo()
         self.model.setEditable(True)
         defaults = [
             "qwen3.7-flash-2026-07-15",
@@ -1604,7 +1625,7 @@ class MainWindow(QWidget):
         row.addSpacing(10)
         row.addWidget(self.header_status)
         row.addStretch(1)
-        self.language_combo = QComboBox()
+        self.language_combo = FramelessPopupCombo()
         self.language_combo.setFixedWidth(110)
         self.language_combo.addItem("中文", "zh")
         self.language_combo.addItem("English", "en")
@@ -1750,7 +1771,7 @@ class MainWindow(QWidget):
         speaker_label = QLabel("预计主播人数")
         speaker_label.setStyleSheet("font-weight: 600;")
         right.addWidget(speaker_label)
-        self.expected_speakers = QComboBox()
+        self.expected_speakers = FramelessPopupCombo()
         self.expected_speakers.addItems(["自动", "1", "2", "3", "4", "5", "6"])
         self.expected_speakers.setMaximumWidth(190)
         right.addWidget(self.expected_speakers)
@@ -1828,7 +1849,7 @@ class MainWindow(QWidget):
         self.refresh_polish.setChecked(settings["cache"]["force_refresh_polish"])
         self.refresh_group = SwitchControl("刷新全文断句缓存")
         self.refresh_group.setChecked(settings["cache"]["force_refresh_group"])
-        self.overwrite = QComboBox()
+        self.overwrite = FramelessPopupCombo()
         self.overwrite.addItem("覆盖已有结果", "overwrite")
         self.overwrite.addItem("跳过已有结果", "skip")
         self.overwrite.addItem("已有结果则报错", "error")
