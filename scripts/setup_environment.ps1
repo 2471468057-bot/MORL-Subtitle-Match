@@ -193,6 +193,12 @@ if (-not $env:UV_DEFAULT_INDEX) {
     $env:UV_DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
     Write-Host "[网络] 依赖走清华 PyPI 镜像：$env:UV_DEFAULT_INDEX（可用 UV_DEFAULT_INDEX 覆盖）" -ForegroundColor Cyan
 }
+# 清华镜像封禁部分包（qwen-asr 返回 403），uv 找不到/被拒时自动回退官方 PyPI。
+# 离线 wheels 模式（--no-index）不受影响。
+if (-not $env:UV_EXTRA_INDEX_URL) {
+    $env:UV_EXTRA_INDEX_URL = "https://pypi.org/simple"
+    Write-Host "[网络] 官方 PyPI 作为兜底源（清华镜像封禁的包自动回退）" -ForegroundColor Cyan
+}
 
 # 便携包内置依赖（wheels/）：--no-index + --find-links 全离线安装，零网络。
 $WheelsDir = Join-Path $ProjectRoot "wheels"
