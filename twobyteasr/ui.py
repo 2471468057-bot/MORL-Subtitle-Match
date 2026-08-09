@@ -211,6 +211,28 @@ QWidget {{
     font-size: 13px;
 }}
 QMainWindow, QWidget#appRoot {{ background: {IVORY}; }}
+QFrame#actionBar {{
+    background: {SURFACE};
+    border: 1px solid {LINE};
+    border-radius: 12px;
+}}
+QDialog {{
+    background-color: {IVORY};
+    color: {INK};
+    border: 1px solid {LINE};
+    border-radius: 12px;
+}}
+QDialog QWidget {{ background-color: transparent; color: {INK}; }}
+QDialog QLabel, QMessageBox QLabel {{
+    background-color: transparent;
+    color: {INK};
+}}
+QMessageBox {{
+    background-color: {IVORY};
+    color: {INK};
+    border: 1px solid {LINE};
+    border-radius: 12px;
+}}
 QFrame#workflow, QFrame#accordion, QFrame#mediaRow {{
     background: {SURFACE};
     border: 1px solid {LINE};
@@ -1674,9 +1696,14 @@ class MainWindow(QWidget):
         self.pages.addWidget(self._progress_page())
         self.pages.addWidget(self._result_page())
         root.addWidget(self.pages, 1)
+        # 固定底部操作条（仅设置页显示），开始按钮无需滚动即可见
+        root.addWidget(self._action_bar())
+        self.pages.currentChanged.connect(
+            lambda index: self.action_bar.setVisible(index == 0))
         self.drop_overlay = DropOverlay(self)
         self.drop_overlay.setGeometry(self.rect().adjusted(16, 16, -16, -16))
         self.drop_overlay.hide()
+        self._refresh_media_summary()
         self._refresh_ai_summary()
         self._apply_ui_language()
 
@@ -1972,28 +1999,34 @@ class MainWindow(QWidget):
         advanced_row.addWidget(self.overwrite)
         self.advanced_panel.content_layout.addLayout(advanced_row)
         layout.addWidget(self.advanced_panel)
-
-        action_row = QHBoxLayout()
-        action_row.addStretch(1)
-        self.start_button = AnimatedButton("开始生成字幕")
-        self.start_button.setObjectName("primary")
-        self.start_button.setIcon(_icon("fa5s.play-circle", "white"))
-        self.start_button.setIconSize(QSize(24, 24))
-        self.start_button.clicked.connect(self._start_run)
-        cancel = AnimatedButton("取消")
-        cancel.clicked.connect(self.close)
-        action_row.addWidget(self.start_button)
-        action_row.addSpacing(20)
-        action_row.addWidget(cancel)
-        action_row.addStretch(1)
-        layout.addLayout(action_row)
-        self._refresh_media_summary()
         has_required_keys = bool(resolve_api_key("group")[0]) if self.unified_glm.isChecked() else bool(
             resolve_api_key("polish")[0] and resolve_api_key("group")[0]
         )
         if not has_required_keys:
             self.ai_panel.set_expanded(True, animate=False)
         return page
+
+    def _action_bar(self):
+        # 固定底部操作条：开始生成字幕始终可见，无需向下滚动
+        bar = QFrame()
+        bar.setObjectName("actionBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(16, 10, 16, 10)
+        bar_layout.addStretch(1)
+        self.start_button = AnimatedButton("开始生成字幕")
+        self.start_button.setObjectName("primary")
+        self.start_button.setIcon(_icon("fa5s.play-circle", "white"))
+        self.start_button.setIconSize(QSize(24, 24))
+        self.start_button.setMinimumWidth(220)
+        self.start_button.clicked.connect(self._start_run)
+        cancel = AnimatedButton("取消")
+        cancel.clicked.connect(self.close)
+        bar_layout.addWidget(self.start_button)
+        bar_layout.addSpacing(20)
+        bar_layout.addWidget(cancel)
+        bar_layout.addStretch(1)
+        self.action_bar = bar
+        return bar
 
     def _progress_page(self):
         page = QWidget()

@@ -8,7 +8,9 @@ from twobyteasr.runtime import get_runtime_context
 
 __all__ = [
     'INTERJECTION_MERGES',
+    'INTERJECTION_WORDS',
     'merge_split_interjections',
+    'space_separate_interjections',
     'merge_split_interjections_in_cues',
     'SEMANTIC_RESTART_MARKERS',
     'NOW_RESTART_LEFT_SUFFIXES',
@@ -94,6 +96,13 @@ INTERJECTION_MERGES = {
 }
 _INTERJECTION_SPLIT_RE = re.compile(r"([哎诶哦])[\s，,。.!！?？]{1,2}([呦哟呀豁])")
 
+# 连写语气词（人工稿观感：每个语气词独立、用空格隔开，如「哎呦 哎呦 可以吗 哎呀」）
+INTERJECTION_WORDS = (
+    "哎呦", "哎哟", "诶呦", "诶哟", "哎呀", "诶呀", "哦豁", "哇哦",
+    "哎哎", "嗯嗯", "啊啊", "哦哦", "欸欸", "哟呵", "呦呵", "嗨呀",
+)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
 
 def merge_split_interjections(text: str) -> str:
     """Merge split interjections like “哎 呦” back into “哎呦” (whitelist only)."""
@@ -105,13 +114,34 @@ def merge_split_interjections(text: str) -> str:
     return _INTERJECTION_SPLIT_RE.sub(repl, text)
 
 
+def space_separate_interjections(text: str) -> str:
+    """Space out each multi-char interjection so it reads clearly:
+    “哎呦打不动” → “哎呦 打不动”，“…可以吗哎呀” → “…可以吗 哎呀”。
+    Single characters and non-CJK neighbors are left untouched."""
+    for word in INTERJECTION_WORDS:
+        index = 0
+        while True:
+            pos = text.find(word, index)
+            if pos < 0:
+                break
+            if pos > 0 and _CJK_RE.match(text[pos - 1]):
+                text = text[:pos] + " " + text[pos:]
+                pos += 1
+            end = pos + len(word)
+            if end < len(text) and _CJK_RE.match(text[end]):
+                text = text[:end] + " " + text[end:]
+                end += 1
+            index = end
+    return text
+
+
 def merge_split_interjections_in_cues(cues):
-    """Apply interjection merging to every final cue in place."""
+    """Merge split interjections and space them out in every final cue."""
     for cue in cues:
         text = getattr(cue, "text", None)
         if not isinstance(text, str):
             continue
-        merged = merge_split_interjections(text)
+        merged = space_separate_interjections(merge_split_interjections(text))
         if merged != text:
             cue.text = merged
     return cues

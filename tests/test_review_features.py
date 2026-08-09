@@ -10,9 +10,11 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 
-def test_instance_lock_is_exclusive():
+def test_instance_lock_is_exclusive(tmp_path, monkeypatch):
     from twobyteasr.ui import _acquire_instance_lock
 
+    # 隔离：避免与用户正在运行的真实实例锁冲突
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = QApplication.instance() or QApplication([])
     first = _acquire_instance_lock()
     assert first is not None, "first instance should acquire the lock"
