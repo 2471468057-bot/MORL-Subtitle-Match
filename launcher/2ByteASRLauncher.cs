@@ -64,6 +64,15 @@ internal static class TwoByteAsrLauncher
                 "2ByteASR 首次配置",
                 File.Exists(setup) ? MessageBoxButtons.YesNo : MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
+            if (answer == DialogResult.No)
+            {
+                MessageBox.Show(
+                    "配置可稍后进行：双击 setup_2byteasr.bat 即可完成首次配置。",
+                    "2ByteASR",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return 2;
+            }
             if (answer == DialogResult.Yes && File.Exists(setup))
             {
                 ProcessStartInfo setupInfo = new ProcessStartInfo();

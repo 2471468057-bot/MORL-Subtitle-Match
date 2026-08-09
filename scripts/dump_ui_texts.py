@@ -1,4 +1,4 @@
-"""Dump the settings-page widget texts for verification (offscreen).
+﻿"""Dump the settings-page widget texts for verification (offscreen).
 
 Usage: .venv-main\\Scripts\\python.exe scripts\\dump_ui_texts.py
 Prints every QLabel / button / combo text found under the main window,

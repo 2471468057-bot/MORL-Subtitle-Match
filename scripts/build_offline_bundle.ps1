@@ -17,6 +17,7 @@ param(
 #       或 dist/2ByteASR-lite-<日期>.7z（精简版，约 1.5 GB；需要 7-Zip）
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDir) { $OutputDir = Join-Path $ProjectRoot "dist" }
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -43,13 +44,16 @@ if (-not $Lite) {
 $sevenZipPath = ""
 $sevenZipCommand = Get-Command 7z -ErrorAction SilentlyContinue
 if ($sevenZipCommand) { $sevenZipPath = $sevenZipCommand.Source }
+if (-not $sevenZipPath -and $env:SEVENZIP_PATH) {
+    if (Test-Path $env:SEVENZIP_PATH) { $sevenZipPath = $env:SEVENZIP_PATH }
+}
 if (-not $sevenZipPath) {
-    foreach ($candidate in @("C:\Program Files\7-Zip\7z.exe", "C:\Program Files (x86)\7-Zip\7z.exe", "G:\VMWARE\7za.exe")) {
+    foreach ($candidate in @("C:\Program Files\7-Zip\7z.exe", "C:\Program Files (x86)\7-Zip\7z.exe")) {
         if (Test-Path $candidate) { $sevenZipPath = $candidate; break }
     }
 }
 if (-not $sevenZipPath) {
-    throw "未找到 7-Zip。请安装（winget install 7zip.7zip）后重试。"
+    throw "未找到 7-Zip。请安装（winget install 7zip.7zip）或设置 SEVENZIP_PATH 后重试。"
 }
 
 # 组装便携目录：程序文件（排除运行环境/缓存/产物）+ models + third_party
@@ -119,17 +123,33 @@ New-Item -ItemType Directory -Path (Join-Path $tools "ffmpeg\bin") -Force | Out-
 Copy-Item (Join-Path $ffBin.FullName "ffmpeg.exe") (Join-Path $tools "ffmpeg\bin") -Force
 Copy-Item (Join-Path $ffBin.FullName "ffprobe.exe") (Join-Path $tools "ffmpeg\bin") -Force
 
-# minGit（Git for Windows 精简便携版，含 git）
+# minGit（Git for Windows 精简便携版，含 git）；多源备援（国内代理 → GitHub 官方）
 Write-Host "[工具] 下载 minGit ..." -ForegroundColor Cyan
 $gitZip = Join-Path $tmpDownload "mingit.zip"
-Invoke-Download "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip" $gitZip
+$gitDownloaded = $false
+foreach ($gitUrl in @(
+    "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
+    "https://ghproxy.net/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
+    "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip"
+)) {
+    try { Invoke-Download $gitUrl $gitZip; $gitDownloaded = $true; break } catch { Write-Warning "minGit 下载失败（$gitUrl）" }
+}
+if (-not $gitDownloaded) { throw "minGit 下载失败（国内网络受限）。" }
 Expand-Archive $gitZip (Join-Path $tools "git") -Force
 if (-not (Test-Path (Join-Path $tools "git\cmd\git.exe"))) { throw "minGit 解压后未找到 git.exe。" }
 
-# uv
+# uv；多源备援
 Write-Host "[工具] 下载 uv ..." -ForegroundColor Cyan
 $uvZip = Join-Path $tmpDownload "uv.zip"
-Invoke-Download "https://ghfast.top/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" $uvZip
+$uvDownloaded = $false
+foreach ($uvUrl in @(
+    "https://ghfast.top/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
+    "https://ghproxy.net/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
+    "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+)) {
+    try { Invoke-Download $uvUrl $uvZip; $uvDownloaded = $true; break } catch { Write-Warning "uv 下载失败（$uvUrl）" }
+}
+if (-not $uvDownloaded) { throw "uv 下载失败（国内网络受限）。" }
 Expand-Archive $uvZip (Join-Path $tmpDownload "uv") -Force
 Copy-Item (Join-Path $tmpDownload "uv\uv.exe") (Join-Path $tools "uv.exe") -Force
 

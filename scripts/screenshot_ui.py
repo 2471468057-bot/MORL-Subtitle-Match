@@ -1,4 +1,4 @@
-"""Render the 2ByteASR settings page in zh / en / ja for design review.
+﻿"""Render the 2ByteASR settings page in zh / en / ja for design review.
 
 Usage: .venv-main\\Scripts\\python.exe scripts\\screenshot_ui.py
 Output: dist\\ui-shots\\{zh,en,ja}.png (offscreen, no window flashes).

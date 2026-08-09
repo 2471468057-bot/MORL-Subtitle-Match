@@ -2099,14 +2099,22 @@ class MainWindow(QWidget):
         open_reports = AnimatedButton("打开报告目录")
         open_reports.setIcon(_icon("fa5s.folder-open"))
         open_reports.clicked.connect(lambda: os.startfile(str(Path(self.legacy.SCRIPT_DIR) / "reports")))
+        open_subtitles = AnimatedButton("打开字幕目录")
+        open_subtitles.setIcon(_icon("fa5s.folder-open"))
+        open_subtitles.clicked.connect(self._open_subtitle_dir)
         close = AnimatedButton("完成")
         close.setObjectName("primary")
         close.clicked.connect(self.close)
+        row.addWidget(open_subtitles)
         row.addWidget(open_reports)
         row.addWidget(close)
         row.addStretch(1)
         layout.addLayout(row)
         return page
+
+    def _open_subtitle_dir(self):
+        target = getattr(self, "_last_srt_dir", "") or str(Path(self.legacy.SCRIPT_DIR))
+        os.startfile(target)
 
     @staticmethod
     def _supported_paths(paths):
@@ -2166,7 +2174,7 @@ class MainWindow(QWidget):
     def dragEnterEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
         accepted = self._supported_paths(paths)
-        if accepted and not (self.worker and self.worker.isRunning()):
+        if accepted:
             event.acceptProposedAction()
             self.drop_overlay.set_file_count(len(accepted))
             self._set_drop_active(True)
@@ -2176,7 +2184,7 @@ class MainWindow(QWidget):
     def dragMoveEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
         accepted = self._supported_paths(paths)
-        if accepted and not (self.worker and self.worker.isRunning()):
+        if accepted:
             self.drop_overlay.set_file_count(len(accepted))
             event.acceptProposedAction()
         else:
@@ -2193,7 +2201,24 @@ class MainWindow(QWidget):
         if not accepted:
             event.ignore()
             return
-        self.media_paths = accepted
+        if self.worker and self.worker.isRunning():
+            code = getattr(self, "_ui_language", "zh")
+            QMessageBox.information(
+                self,
+                translate("任务运行中", code),
+                translate("当前任务正在处理，请结束后再拖入新素材。", code),
+            )
+            event.ignore()
+            return
+        # 追加而非替换：提示文案是“可继续拖入另一批素材”，第二批应与第一批合并
+        merged = []
+        seen = set()
+        for item in (*self.media_paths, *accepted):
+            key = os.path.normcase(os.path.abspath(item))
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
+        self.media_paths = merged
         _remember_media_directory(accepted)
         self._refresh_media_summary()
         event.acceptProposedAction()
@@ -2632,6 +2657,7 @@ class MainWindow(QWidget):
             details = []
             if item.srt_path:
                 details.append(f"字幕：{html.escape(item.srt_path)}")
+                self._last_srt_dir = str(Path(item.srt_path).parent)
             if item.report_text_path:
                 details.append(f"报告：{html.escape(item.report_text_path)}")
             if item.error:

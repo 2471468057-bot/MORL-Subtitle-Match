@@ -54,7 +54,7 @@ flowchart LR
 ### Option 1: Installer (recommended)
 
 1. Download `2ByteASR-Setup-<version>.exe` from [Releases](https://github.com/NOTBAD314/2ByteASR/releases) and run it
-2. Keep "configure environment and download models" checked, and wait for the ~11 GB model download (resumable)
+2. Keep "configure environment and download models" checked, and wait for the model download (~7 GB by default; ~11.7 GB with the optional Qwen reviewer; resumable)
 3. Launch 2ByteASR from your desktop, **drag** a video or audio file into the window, and hit start
 
 ### Option 2: Run from source
@@ -71,7 +71,7 @@ Then simply drag media files onto `2ByteASR.bat`.
 
 - Windows 10/11 x64
 - NVIDIA GPU (8 GB+ VRAM recommended; **lower VRAM or a weaker card still works, just slower**)
-- ~11 GB of models, keep 15 GB+ free on the install drive
+- ~7 GB of models by default (~11.7 GB with the optional Qwen reviewer); keep 15 GB+ free on the install drive
 
 ## 🗣️ Host Voiceprints (optional)
 

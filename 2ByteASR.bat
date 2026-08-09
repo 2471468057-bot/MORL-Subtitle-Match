@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0"
 set "PYW=%ROOT%.venv-main\Scripts\pythonw.exe"

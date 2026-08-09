@@ -20,7 +20,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
 OutputBaseFilename=2ByteASR-Setup-{#MyAppVersion}
 SetupIconFile=..\assets\2byteasr.ico
-; 程序文件本身只有约 6 MB，但首次配置还需下载约 11 GB 模型并创建
+; 程序文件本身只有约 6 MB，但首次配置还需下载模型（默认约 7 GB，含可选 Qwen 约 11.7 GB）并创建
 ; Python 环境（约 4 GB），安装器按 15 GB 提示磁盘空间要求。
 ; （该参数按字节解析：15 GB = 16106127360）
 ExtraDiskSpaceRequired=16106127360
@@ -69,7 +69,8 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{a
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\assets\2byteasr.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{cmd}"; Parameters: "/c ""{app}\setup_2byteasr.bat"""; Description: "配置/更新环境并校验模型（已有模型不会重复下载）"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
+; 环境变量 2BYTEASR_NO_PAUSE=1：安装器触发的配置成功后不等待按键（失败仍会暂停显示错误）
+Filename: "{cmd}"; Parameters: "/c ""set 2BYTEASR_NO_PAUSE=1&& ""{app}\setup_2byteasr.bat"""; Description: "配置/更新环境并校验模型（已有模型不会重复下载）"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.venv-main"

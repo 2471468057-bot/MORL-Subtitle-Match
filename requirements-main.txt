@@ -1,5 +1,6 @@
 # Primary (Python 3.10) runtime for auto_asr.py.
-# GPU Torch is installed by setup_moss_firered.bat with uv's CUDA-aware backend.
+# Torch is installed by setup_environment.ps1 with uv (wheels/ offline set or
+# the Tsinghua PyPI mirror); GPU machines get the CUDA build automatically.
 qwen-asr==0.0.6
 pypinyin==0.55.0
 requests==2.33.0

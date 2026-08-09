@@ -59,7 +59,7 @@ The build signs the installer and generated uninstaller with SHA-256, adds an HT
 Every release should state:
 
 - supported Windows and GPU requirements;
-- that first-time setup downloads about 11 GB of pinned models;
+- that first-time setup downloads pinned models (~7 GB by default, ~11.7 GB with the optional Qwen reviewer);
 - whether the executables are signed;
 - cloud text-processing behavior and the configured provider;
 - noteworthy compatibility or model changes.

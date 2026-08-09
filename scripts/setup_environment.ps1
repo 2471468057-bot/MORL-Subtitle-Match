@@ -156,7 +156,7 @@ if ($Lock.schema_version -ne 1) {
     throw "不支持的 dependencies.lock.json schema_version：$($Lock.schema_version)"
 }
 
-Write-Host "2ByteASR 环境安装（不下载约 11 GB 模型）" -ForegroundColor Cyan
+Write-Host "2ByteASR 环境安装（模型由 download_models.bat 单独下载，默认约 7 GB / 含 Qwen 约 11.7 GB）" -ForegroundColor Cyan
 
 # 便携版内置工具（tools/）优先加入 PATH：ffmpeg、git、uv 无需联网下载。
 # 必须在系统依赖检查之前执行，否则仅带内置工具（未全局安装）的环境会误报缺少依赖。
@@ -298,9 +298,16 @@ function New-StdlibVenv {
     )
     # 使用 python -m venv（标准库）创建环境，避免 uv 管理 Python 时
     # 创建版本链接（junction）触发 Windows “不受信任的装入点”（os error 448）。
+    # 已存在且 python.exe 可用时复用（中断后重跑不再全删重建，依赖由 pip 补齐）；
+    # 需要从零重建时手动删除目录。
+    $venvPython = Join-Path $VenvPath "Scripts\python.exe"
+    if (Test-Path $venvPython) {
+        Write-Host "[环境] 复用已有虚拟环境：$VenvPath（缺失依赖会自动补齐）" -ForegroundColor DarkGray
+        return
+    }
     Remove-Item $VenvPath -Recurse -Force -ErrorAction SilentlyContinue
     Invoke-External $PythonExe @("-m", "venv", $VenvPath)
-    if (-not (Test-Path (Join-Path $VenvPath "Scripts\python.exe"))) {
+    if (-not (Test-Path $venvPython)) {
         throw "虚拟环境创建失败：$VenvPath"
     }
 }
@@ -325,8 +332,14 @@ if (-not (Test-Path (Join-Path $MossEnv "Scripts\hf.exe"))) {
 
 # 离线 wheels 装的是 CPU torch；检测到 NVIDIA GPU 时升级为 CUDA 版
 # （唯一联网步骤，约 2.5 GB，可断点续传；失败则继续使用 CPU 版）。
+# 已有 CUDA torch（+cu 版本）时跳过，重跑不会重复下载。
 $gpuPresent = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-if ($OfflineArgs.Count -gt 0 -and $gpuPresent -and -not $env:2BYTEASR_CPU_ONLY) {
+$hasCudaTorch = $false
+if (Test-Path $MainPython) {
+    $torchVersion = & $MainPython -c "import torch; print(torch.__version__)" 2>$null
+    if ($torchVersion -match '\+cu') { $hasCudaTorch = $true }
+}
+if ($OfflineArgs.Count -gt 0 -and $gpuPresent -and -not $env:2BYTEASR_CPU_ONLY -and -not $hasCudaTorch) {
     Write-Host "[环境] 检测到 NVIDIA GPU：将 torch 升级为 CUDA 版（一次性联网下载约 2.5 GB，可断点续传）..." -ForegroundColor Cyan
     foreach ($python in @($MainPython, $MossPython)) {
         & $Uv pip install --python $python --upgrade torch torchaudio --torch-backend=cuda

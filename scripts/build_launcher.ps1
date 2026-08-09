@@ -28,12 +28,12 @@ if (-not (Test-Path -LiteralPath $IconPath)) {
 }
 
 & $Compiler /nologo /target:winexe /optimize+ "/win32icon:$IconPath" `
-    /reference:System.Windows.Forms.dll "/out:$OutputPath" $SourcePath
+    /codepage:65001 /reference:System.Windows.Forms.dll "/out:$OutputPath" $SourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath)) {
     throw "Failed to build 2ByteASR.exe."
 }
 
-& $Compiler /nologo /target:exe /optimize+ "/out:$ShortcutToolPath" $ShortcutSourcePath
+& $Compiler /nologo /target:exe /optimize+ /codepage:65001 "/out:$ShortcutToolPath" $ShortcutSourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ShortcutToolPath)) {
     throw "Failed to build the shortcut identity helper."
 }

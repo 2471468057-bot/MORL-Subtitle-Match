@@ -18,12 +18,20 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $SetupEnvironment = Join-Path $PSScriptRoot "setup_environment.ps1"
 $DownloadModelScript = Join-Path $PSScriptRoot "download_models.ps1"
 $Launcher = Join-Path $ProjectRoot "2ByteASR.exe"
-
-# 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
-# 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
-# 注意：必须放在 $ProjectRoot 赋值之后（Join-Path 不接受 null 路径）。
 $SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
-Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
+
+# 安装步骤进度：标题栏 + Write-Progress 双通道，用户随时知道进度与等待时间
+$script:StepIndex = 0
+$script:StepTotal = 5
+function Set-InstallStep {
+    param([string]$Label)
+    $script:StepIndex++
+    if ($Host.UI.RawUI) {
+        $Host.UI.RawUI.WindowTitle = "2ByteASR 安装 - 步骤 $($script:StepIndex)/$($script:StepTotal)：$Label"
+    }
+    Write-Progress -Activity "2ByteASR 安装" -Status $Label `
+        -PercentComplete ([math]::Round(100 * $script:StepIndex / $script:StepTotal))
+}
 
 # 提前询问 Qwen 复核模型：环境安装需要较长时间，不能等装完才让用户选择。
 $IncludeQwenChoice = $false
@@ -37,7 +45,52 @@ if ($DownloadModels) {
         if ($answer -match "^[yY]") { $IncludeQwenChoice = $true }
     }
     $qwenText = if ($IncludeQwenChoice) { "包含" } else { "不包含" }
-    Write-Host "[选择] Qwen3-ASR 复核模型：$qwenText（可随时用 download_models.bat 补下或关闭）" -ForegroundColor Cyan
+    Write-Host "[选择] Qwen3-ASR 复核模型：$qwenText（可随时用 download_models.bat 补下；2BYTEASR_NO_QWEN=1 关闭提问）" -ForegroundColor Cyan
+}
+
+# 幂等退出：已完全配置（标记 + 双环境 + 必需模型都在）时不再破坏性重装。
+# 补 Qwen / 修复模型请用 download_models.bat；强制重装设 2BYTEASR_FORCE_SETUP=1。
+$MainPy = Join-Path $ProjectRoot ".venv-main\Scripts\python.exe"
+$MossPy = Join-Path $ProjectRoot ".venv-moss\Scripts\python.exe"
+$ModelRoot = Join-Path $ProjectRoot "models"
+$requiredModels = @(
+    "MOSS-Transcribe-Diarize\model-00000-of-00001.safetensors",
+    "FireRedVAD\VAD\model.pth.tar",
+    "FireRedASR2-AED\model.pth.tar",
+    "spkrec-ecapa-voxceleb\embedding_model.ckpt"
+)
+$alreadyConfigured = (Test-Path $SetupMarker) -and (Test-Path $MainPy) -and (Test-Path $MossPy)
+if ($alreadyConfigured -and -not $env:2BYTEASR_FORCE_SETUP) {
+    foreach ($rel in $requiredModels) {
+        if (-not (Test-Path (Join-Path $ModelRoot $rel))) { $alreadyConfigured = $false; break }
+    }
+}
+if ($alreadyConfigured) {
+    Write-Host "[完成] 2ByteASR 已配置完成（环境与必需模型均已就绪），无需重装。" -ForegroundColor Green
+    Write-Host "       补下 Qwen 复核模型或修复模型：运行 download_models.bat" -ForegroundColor Yellow
+    Write-Host "       强制重装（会重建环境）：设置 2BYTEASR_FORCE_SETUP=1 后重跑" -ForegroundColor DarkGray
+    exit 0
+}
+
+# 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
+# 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
+# 注意：必须放在 $ProjectRoot 赋值之后（Join-Path 不接受 null 路径）。
+Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
+
+# 磁盘预检：模型（按 Qwen 选择）+ 环境/源码/缓存预留，不足直接拦截。
+# （模型下载阶段还会再查一次；这里尽早拦截，避免装到一半才发现空间不够）
+$modelGb = if ($IncludeQwenChoice) { 11.7 } else { 7 }
+$needGb = [math]::Ceiling($modelGb + 3)
+$driveName = ([System.IO.Path]::GetPathRoot($ProjectRoot)).TrimEnd('\').TrimEnd(':')
+try {
+    $drive = Get-PSDrive -Name $driveName
+    $freeGb = [math]::Round($drive.Free / 1GB, 1)
+    if ($freeGb -lt $needGb) {
+        throw "磁盘空间不足：项目盘（${driveName}:）仅剩 $freeGb GB，至少需要 $needGb GB（模型 $modelGb GB + 环境预留 3 GB）。请清理空间后重试。"
+    }
+    Write-Host "[检查] 磁盘空间：$freeGb GB 可用（本次需要约 $needGb GB）" -ForegroundColor Cyan
+} catch {
+    Write-Warning "磁盘预检失败：$($_.Exception.Message)（将继续安装，模型下载时还会再次检查）"
 }
 
 function Add-BundledToolsToPath {
@@ -266,13 +319,16 @@ if ($remaining.Count -gt 0) {
 }
 
 Write-Host "[1/2] Creating Python environments and installing runtime dependencies ..." -ForegroundColor Cyan
+Set-InstallStep "创建 Python 环境并安装依赖（首次约 5-15 分钟）"
 & $SetupEnvironment
 if ($LASTEXITCODE -ne 0) {
     throw "Python environment setup failed (exit code $LASTEXITCODE)."
 }
 
 if ($DownloadModels) {
-    Write-Host "[2/2] 下载固定版本模型（默认约 7 GB：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
+    $totalText = if ($IncludeQwenChoice) { "约 11.7 GB（含 Qwen 复核模型）" } else { "约 7 GB" }
+    Set-InstallStep "下载模型（$totalText，可断点续传）"
+    Write-Host "[2/2] 下载固定版本模型（$totalText：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
     if ($IncludeQwenChoice) {
         & $DownloadModelScript -Yes -IncludeQwen
     } else {
@@ -285,11 +341,13 @@ if ($DownloadModels) {
     Write-Host "[2/2] Model download skipped. Run download_models.bat later." -ForegroundColor Yellow
 }
 
+Set-InstallStep "收尾"
+# 全部成功后才写完成标记：2ByteASR.exe 启动器据此判断环境是否完整。
+# 必须先写标记再启动启动器，避免启动器先读到缺标记而误弹“继续配置”。
+Set-Content -LiteralPath $SetupMarker -Value (Get-Date).ToString("o") -Encoding ascii
+
 if (-not $NoLaunch -and (Test-Path -LiteralPath $Launcher)) {
     Start-Process -FilePath $Launcher -WorkingDirectory $ProjectRoot
 }
-
-# 全部成功后才写完成标记：2ByteASR.exe 启动器据此判断环境是否完整。
-Set-Content -LiteralPath $SetupMarker -Value (Get-Date).ToString("o") -Encoding ascii
 
 Write-Host "[OK] 2ByteASR is ready." -ForegroundColor Green

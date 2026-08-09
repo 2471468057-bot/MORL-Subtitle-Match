@@ -191,8 +191,8 @@ if ($hasMissingFiles -and $drive.Free -lt 15GB) {
 }
 
 if (-not $Yes) {
-    $answer = Read-Host "输入 YES 开始下载"
-    if ($answer -ne "YES") {
+    $answer = Read-Host "开始下载？[Y/n]（回车默认继续）"
+    if ($answer -match "^(n|N|no|NO)$") {
         Write-Host "已取消，未下载模型。"
         exit 0
     }
