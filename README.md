@@ -1,132 +1,90 @@
-﻿<div align="center">
+<div align="center">
+<img src="assets/2byteasr-icon-transparent.png" width="100" alt="兔白字幕原角色图标" />
 
-<img src="assets/2byteasr-icon-transparent.png" width="96" alt="2ByteASR logo" />
+# 2ByteASR · 兔白字幕
 
-# 2ByteASR
+**准确识别字幕，轻松剪辑视频。**
 
-**拖进视频，出字幕 —— 面向中文游戏实况的本地字幕流水线**
+免费的字幕识别与视频编辑工具，支持本地部署。<br/>
+从识别、校对到特效字幕与视频输出，一站完成。
+
+[下载／查看版本](https://github.com/NOTBAD314/2ByteASR/releases) · [完整演示](docs/product-demo.zh-CN.md) · [快速开始](#下载与快速开始)
 
 [中文](README.md) · [English](README_EN.md) · [日本語](README_JA.md)
-
-![License](https://img.shields.io/badge/license-Apache--2.0-green)
-![Platform](https://img.shields.io/badge/platform-Windows-blue)
-![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)
-![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-brightgreen)
-
 </div>
 
----
+![兔白字幕主页：素材、字幕工作台与三种识别角色](docs/assets/readme/overview.png)
 
-## ✨ 特性
+*从主页开始：准备素材与识别方案，或进入字幕工作台继续编辑。*
 
-- 🎙️ **说话人分离**：自动识别多位主播，输出「主播分轨 SRT」，同时说话也不丢
-- 🧬 **三路转写交叉校验**：MOSS 骨架 + FireRed 字级证据 + Qwen3-ASR 本地复核，多模型仲裁减少错字
-- 🔒 **隐私优先**：模型全部本地运行；云端校对可选且只发送文本，密钥用 Windows DPAPI 加密保存
-- 🖥️ **一键安装**：Release 安装包自动配置环境并下载模型，断点续传
-- 📄 **多格式输出**：剪映文稿 TXT、总 SRT、主播分轨 SRT、任务报告（含每个错误修正的可追溯记录）
-- ⚡ **断点续跑**：同一素材二次运行命中阶段缓存，通常快很多
+## 一份字幕，三种分工
 
-## 🖼️ 界面一览
+转写先把话写出来，时间轴把字词落到对应位置，复核让同一句的不同结果可以放在一起比较。按素材和设备选择组合，再按需开启 AI 断句。
 
-| 工作台 | 处理进度 | 完成结果 |
+| 角色 | 帮你做什么 | 代表方案 |
 | --- | --- | --- |
-| ![工作台](assets/screenshots/ui-settings.png) | ![进度](assets/screenshots/ui-progress.png) | ![结果](assets/screenshots/ui-result.png) |
+| 主力转写 | 得到文本；支持说话人区分的方案还可提供分轨线索 | MOSS、SenseVoice、Whisper |
+| 字词时间轴 | 定位边界，让字幕切分与画面更合拍 | FireRedASR2-AED、Paraformer；已有文本可用独立对齐器 |
+| 文字复核 | 对照另一份文本，处理听不清或有分歧的词 | Qwen3-ASR 等本地／在线方案 |
 
-## 🔄 处理流程
+![说话人 A 的两句话与 B 的回应分别进入对应字幕轨](docs/assets/readme/speaker-tracks.gif)
 
-```mermaid
-flowchart LR
-  A[视频/音频] --> B[统一 16kHz 音频]
-  B --> C[MOSS 转写 + 说话人分离]
-  C --> D[FireRed 字级证据]
-  C --> E[Qwen3-ASR 本地复核]
-  D --> F[多模型仲裁]
-  E --> F
-  F --> G[云端受限校对 *]
-  G --> H[断句 + 时间轴校准]
-  H --> I[剪映文稿 / SRT / 主播分轨]
-```
+*A → B → A，逐句识别，分轨呈现。*
 
-> \* 云端校对默认可用；开启后仅发送转写文本，原文保护与断句约束由内置只读提示词强制保证。
+## 切到字词边界，调整字幕节奏
 
-## 🚀 快速开始
+沿着长句选择切点，剃刀切开后，时间轴立即变成对应的字幕片段。切得不合适，就撤销或合并，继续调整。
 
-### 方式一：便携精简版（推荐，国内网络友好）
+![在自然长句上选点、切成三段，时间轴同步分开，再逐次撤销](docs/assets/readme/word-split.gif)
 
-1. 从 [Releases](https://github.com/NOTBAD314/2ByteASR/releases) 下载 `2ByteASR-lite-<日期>.7z`（约 1 GB，内置 git/ffmpeg/python/uv 与全部 Python 依赖，离线安装）并解压到任意目录（如 `D:\2ByteASR`）
-2. 双击 `setup_2byteasr.bat` —— 内置 git/ffmpeg/python/uv，**无需联网安装任何工具**
-3. 自动完成：Python 环境（本地安装）→ 依赖包（清华镜像）→ 模型下载（hf-mirror 国内镜像，约 7 GB，可断点续传）
-4. 双击 `2ByteASR.exe`，把视频或音频**拖进窗口**，点击开始
+## 同一句，对照候选再采用
 
-> 完整离线便携包（约 9.9 GB，**含全部模型、零下载解压即用**）因超过 GitHub 单文件限制，走网盘等渠道分发（见 Releases 说明）。
+“人物”“任务”还是“战术”？在同一条字幕下看清差异与来源，选中后采用，当前字幕随之更新。
 
-### 方式二：安装包
+![比较同句候选，采用任务后当前字幕更新](docs/assets/readme/candidate-review.gif)
 
-1. 从 [Releases](https://github.com/NOTBAD314/2ByteASR/releases) 下载 `2ByteASR-Setup-<版本>.exe` 并安装
-2. 保持勾选「首次配置环境并下载模型」，等待模型下载完成（默认约 7 GB；可选附加 Qwen 复核模型后约 11.7 GB，可断点续传）
-3. 双击桌面「2ByteASR」，把视频或音频**拖进窗口**，点击开始
+## 游戏术语库：整理一次，反复使用
 
-### 方式三：从源码运行
+角色名、别名和常见错词，按游戏归档。核对参考词与来源，确认后再用于识别；换一段素材，不必从头整理。
 
-```bat
-setup_environment.bat    :: 创建 Python 环境并获取固定版本依赖
-download_models.bat      :: 下载模型（输入 YES 确认）
-install_shortcut.bat     :: 安装桌面快捷方式
-```
+![术语库的游戏分类、来源、确认状态与批量维护界面](docs/assets/readme/glossary.png)
 
-之后把媒体文件直接拖到 `2ByteASR.bat` 上即可。
+## 直播切片与特效字幕
 
-### 系统要求
+**先找到值得剪的片段。** 结合直播弹幕 XML 和字幕，找到“残血反杀”“翻车爆笑”“弹幕集中”等候选。选择左侧片段，右侧理由和时间轴选区一起更新，选好后加入剪辑。
 
-- Windows 10/11 x64
-- NVIDIA 显卡（建议 8GB+ 显存；**显存更低或显卡稍弱也能运行，只是更慢**）
-- 模型默认约 7 GB（含可选 Qwen 约 11.7 GB），建议安装盘预留 15GB 以上
+![切换直播候选、查看理由与时间轴选区，再加入剪辑](docs/assets/readme/live-clips.gif)
 
-### 🌐 国内网络
+**再让一句话有自己的表情。** 字体、材质、入场与退场一起构成字幕作品。已有样式可以复用，也可以配置 AI 设计服务生成并修改。字幕设计和直播切片可以分别使用。
 
-安装流程已针对国内网络优化，无需额外配置：
+![木刻压印与 CRT 计分屏完整入场、停留和退场](docs/assets/readme/caption-effects.gif)
 
-- **模型下载**：默认走 HuggingFace 国内镜像（hf-mirror.com）；如需官方源，设置环境变量 `HF_ENDPOINT=https://huggingface.co`
-- **模型组合**：默认约 7GB（MOSS 转写/说话人、FireRed 字级时间轴、声纹）；安装时提示可选附加 Qwen3-ASR 复核模型（+4.7GB，提升准确度）——不选也能正常出字幕，可后续用 `download_models.bat` 补下（或设置 `2BYTEASR_INCLUDE_QWEN=1` 跳过提示）
-- **Python 依赖**：默认走清华 PyPI 镜像；可用 `UV_DEFAULT_INDEX` 覆盖
-- **Python 本体**：python.org 官方与华为云镜像自动切换
-- **离线安装**：网络确实很差的机器，可下载离线素材包（`models/` + `third_party/`，约 12GB，见 Releases 附件说明）。用法：解压后把 `models` 和 `third_party` 两个文件夹复制到安装目录（便携版解压目录，或安装版 `%LOCALAPPDATA%\Programs\2ByteASR\`），再运行 `setup_2byteasr.bat` 会自动跳过模型与源码下载（首次仍会安装 Python 环境，约几分钟）
+*木刻压印：木板扣合、刻印显字、收拢退场。CRT 计分屏：通电、磷光显字、关屏退场。*
 
-#### 环境变量一览
+## 下载与快速开始
 
-| 变量 | 作用 | 默认 |
-|---|---|---|
-| `HF_ENDPOINT` | HuggingFace 下载源 | `https://hf-mirror.com` |
-| `UV_DEFAULT_INDEX` | Python 依赖源 | 清华 PyPI 镜像 |
-| `UV_CACHE_DIR` | 依赖缓存目录（避免占系统盘） | 项目内 `.uv-cache` |
-| `2BYTEASR_INCLUDE_QWEN` | `=1` 时跳过提问、直接包含 Qwen 复核模型 | 未设置（交互提问） |
-| `2BYTEASR_NO_QWEN` | `=1` 时跳过提问且不下载 Qwen | 未设置 |
-| `2BYTEASR_CPU_ONLY` | `=1` 时即使有 NVIDIA 显卡也不升级 CUDA torch | 未设置（自动检测） |
-| `2BYTEASR_FORCE_SETUP` | `=1` 时强制重装（重建环境；正常重跑会自动跳过已配置项） | 未设置 |
+适用于 **Windows x64**。[查看版本与下载](https://github.com/NOTBAD314/2ByteASR/releases)。
 
-## 🗣️ 主播声纹（可选）
+1. **安装程序。** 从版本页获取对应安装包，运行 Setup 完成安装。
+2. **准备识别方案。** 在模型工坊准备本地模型，或配置自己的在线服务。
+3. **导入并识别。** 选择素材、内容与词库，检查转写、字词时间和说话人结果。
+4. **进入兔白字幕 Studio。** 校对、拆分或合并，调整字幕与画面，再导出字幕、文稿或压制成片。
 
-想让人名跟着声音走？每人放一段 5–14 秒的清晰独白 WAV 到 `%LOCALAPPDATA%\2ByteASR\host_voiceprints\samples\`，然后运行：
+默认采用**深葡萄紫**主题，也可以在外观设置中选择喜欢的配色。
 
-```bat
-.venv-main\Scripts\python.exe register_host_voiceprint.py
-```
+### 必要条件
 
-不注册也可以分轨，只是跨视频时 `S01/S02` 标签不保证对应同一位主播。
+- **系统：** Windows 10 22H2（19045）及以上的 x64 系统。
+- **本地识别：** 模型权重在模型工坊按需下载。SenseVoice 支持 CPU；MOSS 等方案使用 NVIDIA CUDA，配置要求可在模型工坊查看。
+- **在线服务：** 使用自己的账号或 API 密钥，按服务提供方的规则计费。
+- **输出：** SRT、ASS、TXT、JSON、说话人分轨，以及 MP4、MKV、MOV 视频。
 
-## ☁️ 云端数据
+[安装与首次使用](docs/product-guide.zh-CN.md#安装与准备) · [模型、格式与高级使用](docs/product-guide.zh-CN.md) · [版本记录](https://github.com/NOTBAD314/2ByteASR/releases)
 
-本地模型不联网。开启云端校对与全文断句时，转写文本会发送到你选择的 OpenAI 兼容服务（默认阿里云百炼），并附带只读提示词；API 密钥仅保存在本机（DPAPI 加密），报告与日志不含密钥。
+## 更多文档与反馈
 
-## 🛠️ 开发
+[界面与功能展示](docs/product-demo.zh-CN.md) · [从源码运行与构建](docs/product-guide.zh-CN.md#从源码运行与构建) · [架构](ARCHITECTURE.md) · [反馈问题](https://github.com/NOTBAD314/2ByteASR/issues)
 
-```bat
-run_tests.bat                                    :: 离线单元测试（无需 GPU/网络）
-python scripts\check_release_hygiene.py          :: 发布前检查
-```
+反馈时附上版本、模型、复现步骤和截图，方便定位问题。
 
-详细文档：[架构](ARCHITECTURE.md) · [配置](CONFIGURATION.md) · [更新维护](UPDATING.md) · [安全](SECURITY.md)
-
-## 📄 许可证
-
-[Apache-2.0](LICENSE) · 第三方归属见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+项目许可证见 [LICENSE](LICENSE)，第三方组件见 [第三方说明](THIRD_PARTY_NOTICES.md)。
