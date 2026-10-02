@@ -1,9 +1,13 @@
 ﻿[CmdletBinding()]
-param()
+param(
+    [switch]$SkipBuild
+)
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-& (Join-Path $PSScriptRoot "build_launcher.ps1")
+if (-not $SkipBuild) {
+    & (Join-Path $PSScriptRoot "build_launcher.ps1")
+}
 
 $LauncherPath = Join-Path $ProjectRoot "2ByteASR.exe"
 $IconPath = Join-Path $ProjectRoot "assets\2byteasr.ico"

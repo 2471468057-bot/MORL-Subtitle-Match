@@ -1,0 +1,762 @@
+===NAME===
+冥滩孤立·开罗尔工业重载
+===CONCEPT===
+设计概念：
+汲取《死亡搁浅》（Death Stranding）标志性的黯淡冥滩虚空、工业重载箱体与超自然搁浅异象。全景构建三层景深体系：背景氛围层以极低不透明度的冥滩暗角与海潮薄雾铺底；中景环境层布置垂天黑索、逆重力时间雨水滴与滩涂五指印；前景字幕带则以布里吉斯（Bridges）重装货箱底座为核心锚点，集成可动欧卓德克（Odradek）扫描爪与手性开罗尔晶簇。
+入场联动具有强烈的物理与超自然机制：入场瞬间，左上角欧卓德克机械侦测爪从锁闭姿态猛烈弹起，四片感应翼扇面急促咬合旋转，激发出金黄色的拓扑开罗尔扫描光波横切底板；货箱底板与减震锁扣受电磁牵引自焦油中刚性升起闭锁；文字跟随扫描脉冲的波前自左向右逐字产生开罗尔金闪与电离激化，瞬间凝结为冷冽高对比哑光钢白。出场时侦测爪闭合待机，底板受时间雨潮汐下沉溶蚀，文字呈反重力向上蒸散。严格遵循 70/25/5 配色铁律与质感优先原则：大面积炭黑耐磨涂层、冷轧钢压纹与微倒角，高饱和开罗尔金仅用于扫描脉冲波、结晶尖端与状态指示灯。
+
+实现承诺清单：
+垂天搁浅黑索 .strand-tether；冥滩逆重力时间雨 .timefall-drizzle；滩涂焦油五指印 .tar-handprint；广域开罗尔地形扫描线 .stage-scanline；欧卓德克机械侦测爪 .odradek-arm；侦测爪四瓣感应翼 .odradek-petal；开罗尔拓扑脉冲波 .chiral-pulse；布里吉斯抗侵蚀货箱底板 .cargo-plate；工业重载铆接外框架 .cargo-cradle；开罗尔手性晶簇 .chiral-cluster；搬运人身份编号徽标 .speaker-badge；密闭货箱减震锁扣 .cradle-clamp
+===PALETTE===
+primary=#15181b secondary=#3b424c background=#08090b accent=#df981e text=#e2e5e9
+===APPEARANCE===
+fontFamily="Cascadia Mono", "LXGW WenKai Mono", "Noto Sans SC", monospace
+fontSize=56
+color=#e2e5e9
+strokeColor=#08090b
+strokeWidth=3.2
+letterSpacing=1
+===STAGE_HTML===
+<div class="stage-vignette"></div>
+
+<div class="stage-scanline"></div>
+
+<div class="strand-tether strand-tether--1">
+  <svg viewBox="0 0 50 600" preserveAspectRatio="none">
+    <path d="M25,0 C12,180 38,360 20,600" />
+  </svg>
+</div>
+<div class="strand-tether strand-tether--2">
+  <svg viewBox="0 0 50 750" preserveAspectRatio="none">
+    <path d="M25,0 C38,220 10,480 30,750" />
+  </svg>
+</div>
+<div class="strand-tether strand-tether--3">
+  <svg viewBox="0 0 50 550" preserveAspectRatio="none">
+    <path d="M25,0 C10,150 40,320 18,550" />
+  </svg>
+</div>
+
+<div class="timefall-drizzle">
+  <i class="timefall-particle p-1"></i>
+  <i class="timefall-particle p-2"></i>
+  <i class="timefall-particle p-3"></i>
+  <i class="timefall-particle p-4"></i>
+  <i class="timefall-particle p-5"></i>
+  <i class="timefall-particle p-6"></i>
+  <i class="timefall-particle p-7"></i>
+  <i class="timefall-particle p-8"></i>
+</div>
+
+<div class="tar-handprint tar-handprint--left">
+  <svg viewBox="0 0 120 150">
+    <path d="M24,85 C14,75 12,58 20,50 C26,44 32,48 34,58 C35,65 37,73 38,79 M38,70 C34,50 34,26 42,18 C47,13 53,17 54,29 C55,42 55,56 54,68 M55,66 C56,43 59,16 66,11 C72,7 78,11 77,27 C76,43 73,59 72,68 M73,69 C76,48 81,29 89,24 C94,21 99,25 97,38 C95,52 91,64 88,74 M89,78 C94,64 100,48 107,46 C112,45 115,51 112,62 C109,74 101,87 97,95 C100,113 95,130 79,138 C62,145 39,142 27,128 C19,117 21,98 24,85 Z" />
+    <path d="M38,138 C37,144 36,150 38,150 C40,150 41,144 41,138 Z M62,143 C61,147 60,150 62,150 C64,150 65,147 65,143 Z M82,136 C81,141 80,146 82,146 C84,146 85,141 85,136 Z" />
+  </svg>
+</div>
+
+<div class="tar-handprint tar-handprint--right">
+  <svg viewBox="0 0 120 150">
+    <path d="M24,85 C14,75 12,58 20,50 C26,44 32,48 34,58 C35,65 37,73 38,79 M38,70 C34,50 34,26 42,18 C47,13 53,17 54,29 C55,42 55,56 54,68 M55,66 C56,43 59,16 66,11 C72,7 78,11 77,27 C76,43 73,59 72,68 M73,69 C76,48 81,29 89,24 C94,21 99,25 97,38 C95,52 91,64 88,74 M89,78 C94,64 100,48 107,46 C112,45 115,51 112,62 C109,74 101,87 97,95 C100,113 95,130 79,138 C62,145 39,142 27,128 C19,117 21,98 24,85 Z" />
+    <path d="M38,138 C37,144 36,150 38,150 C40,150 41,144 41,138 Z M62,143 C61,147 60,150 62,150 C64,150 65,147 65,143 Z M82,136 C81,141 80,146 82,146 C84,146 85,141 85,136 Z" />
+  </svg>
+</div>
+===STAGE_CSS===
+.wt-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.stage-vignette {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(8, 10, 13, 0.22) 80%, rgba(4, 5, 7, 0.4) 100%);
+}
+
+.stage-scanline {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: calc(0.15 * var(--wt-u));
+  background: linear-gradient(90deg, transparent 0%, rgba(223, 152, 30, 0.12) 30%, rgba(223, 152, 30, 0.45) 50%, rgba(223, 152, 30, 0.12) 70%, transparent 100%);
+  filter: drop-shadow(0 0 calc(0.5 * var(--wt-u)) rgba(223, 152, 30, 0.3));
+  opacity: 0;
+  animation: wt-stage-sweep 11s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.strand-tether {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  opacity: 0.32;
+}
+.strand-tether--1 {
+  left: 14%;
+  width: calc(3.5 * var(--wt-u));
+  height: calc(48 * var(--wt-u));
+  animation: wt-strand-drift 8.5s ease-in-out infinite alternate;
+}
+.strand-tether--2 {
+  left: 48%;
+  width: calc(3.5 * var(--wt-u));
+  height: calc(60 * var(--wt-u));
+  animation: wt-strand-drift-rev 10s ease-in-out 1.2s infinite alternate;
+}
+.strand-tether--3 {
+  right: 16%;
+  width: calc(3.5 * var(--wt-u));
+  height: calc(44 * var(--wt-u));
+  animation: wt-strand-drift 7.8s ease-in-out 0.6s infinite alternate;
+}
+.strand-tether svg {
+  width: 100%;
+  height: 100%;
+}
+.strand-tether path {
+  stroke: #0a0c0f;
+  stroke-width: calc(0.28 * var(--wt-u));
+  fill: none;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 calc(0.4 * var(--wt-u)) rgba(0, 0, 0, 0.8));
+}
+
+.timefall-drizzle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.timefall-particle {
+  position: absolute;
+  width: calc(0.12 * var(--wt-u));
+  height: calc(1.8 * var(--wt-u));
+  background: linear-gradient(0deg, rgba(223, 152, 30, 0.45) 0%, rgba(185, 195, 205, 0.25) 70%, transparent 100%);
+  opacity: 0;
+  border-radius: calc(0.1 * var(--wt-u));
+}
+.p-1 { left: 10%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 5.5s linear 0.2s infinite; }
+.p-2 { left: 22%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 6.8s linear 1.8s infinite; }
+.p-3 { left: 35%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 5.2s linear 0.9s infinite; }
+.p-4 { left: 47%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 7.2s linear 2.5s infinite; }
+.p-5 { left: 63%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 5.9s linear 1.4s infinite; }
+.p-6 { left: 74%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 6.4s linear 0.5s infinite; }
+.p-7 { left: 86%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 5.6s linear 2.1s infinite; }
+.p-8 { left: 93%; bottom: calc(-2 * var(--wt-u)); animation: wt-timefall-ascend 6.1s linear 3.2s infinite; }
+
+.tar-handprint {
+  position: absolute;
+  width: calc(8.5 * var(--wt-u));
+  height: calc(10.5 * var(--wt-u));
+  opacity: 0.28;
+  pointer-events: none;
+}
+.tar-handprint--left {
+  bottom: calc(3 * var(--wt-u));
+  left: calc(4 * var(--wt-u));
+  transform: rotate(-14deg);
+  animation: wt-tar-ebb 5.6s ease-in-out infinite alternate;
+}
+.tar-handprint--right {
+  bottom: calc(4 * var(--wt-u));
+  right: calc(4.5 * var(--wt-u));
+  transform: scaleX(-1) rotate(-18deg);
+  animation: wt-tar-ebb 6.2s ease-in-out 1s infinite alternate;
+}
+.tar-handprint svg {
+  width: 100%;
+  height: 100%;
+}
+.tar-handprint path {
+  fill: #090b0d;
+  filter: drop-shadow(0 0 calc(0.3 * var(--wt-u)) rgba(0, 0, 0, 0.9));
+}
+
+@keyframes wt-stage-sweep {
+  0% { top: 10%; opacity: 0; }
+  10% { opacity: 0.7; }
+  45% { top: 88%; opacity: 0.8; }
+  50% { top: 92%; opacity: 0; }
+  100% { top: 92%; opacity: 0; }
+}
+
+@keyframes wt-strand-drift {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(calc(0.8 * var(--wt-u)), calc(-0.4 * var(--wt-u))) rotate(1.2deg); }
+  100% { transform: translate(calc(-0.6 * var(--wt-u)), calc(0.5 * var(--wt-u))) rotate(-1.5deg); }
+}
+
+@keyframes wt-strand-drift-rev {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(calc(-0.9 * var(--wt-u)), calc(0.6 * var(--wt-u))) rotate(-1.4deg); }
+  100% { transform: translate(calc(0.7 * var(--wt-u)), calc(-0.5 * var(--wt-u))) rotate(1.1deg); }
+}
+
+@keyframes wt-timefall-ascend {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: 0.45; }
+  85% { opacity: 0.35; }
+  100% { transform: translateY(calc(-95 * var(--wt-u))); opacity: 0; }
+}
+
+@keyframes wt-tar-ebb {
+  0% { opacity: 0.2; filter: blur(calc(0.08 * var(--wt-u))); }
+  50% { opacity: 0.36; filter: blur(0); }
+  100% { opacity: 0.22; filter: blur(calc(0.06 * var(--wt-u))); }
+}
+===CUE_HTML===
+<div class="cargo-cradle">
+  <div class="cradle-clamp cradle-clamp--tl"></div>
+  <div class="cradle-clamp cradle-clamp--tr"></div>
+  <div class="cradle-clamp cradle-clamp--bl"></div>
+  <div class="cradle-clamp cradle-clamp--br"></div>
+
+  <div class="cradle-header">
+    <div class="speaker-badge">{{speaker}}</div>
+    <div class="chiral-telemetry">
+      <span class="telemetry-item">// BRIDGES ID: 084-DS</span>
+      <span class="telemetry-item">CHIRALIUM: 79.4 cg/m³</span>
+      <span class="status-dot"></span>
+    </div>
+  </div>
+
+  <div class="cargo-plate">
+    <div class="chiral-pulse"></div>
+    <div class="hazard-stripe hazard-stripe--left"></div>
+    <div class="plate-rivets plate-rivets--top"></div>
+    
+    <div class="content-wrap">
+      <div class="line">{{words}}</div>
+    </div>
+
+    <div class="plate-rivets plate-rivets--bottom"></div>
+    <div class="hazard-stripe hazard-stripe--right"></div>
+  </div>
+
+  <div class="odradek-arm">
+    <div class="odradek-joint"></div>
+    <div class="odradek-head">
+      <div class="odradek-petal petal-1"></div>
+      <div class="odradek-petal petal-2"></div>
+      <div class="odradek-petal petal-3"></div>
+      <div class="odradek-petal petal-4"></div>
+      <div class="odradek-core"></div>
+    </div>
+  </div>
+
+  <div class="chiral-cluster">
+    <svg viewBox="0 0 80 90">
+      <defs>
+        <linearGradient id="chiral-gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#ffe382" />
+          <stop offset="35%" stop-color="#df981e" />
+          <stop offset="75%" stop-color="#8a5308" />
+          <stop offset="100%" stop-color="#3d2100" />
+        </linearGradient>
+        <linearGradient id="chiral-gold-facet" x1="100%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.8" />
+          <stop offset="45%" stop-color="#f5aa27" />
+          <stop offset="100%" stop-color="#5a3300" />
+        </linearGradient>
+      </defs>
+      <polygon points="40,8 52,42 40,78 28,42" fill="url(#chiral-gold-grad)" />
+      <polygon points="40,8 52,42 40,78" fill="url(#chiral-gold-facet)" opacity="0.85" />
+      <polygon points="18,25 32,50 22,80 12,54" fill="url(#chiral-gold-grad)" />
+      <polygon points="18,25 32,50 22,80" fill="url(#chiral-gold-facet)" opacity="0.75" />
+      <polygon points="62,28 72,55 60,82 50,52" fill="url(#chiral-gold-grad)" />
+      <polygon points="62,28 72,55 60,82" fill="url(#chiral-gold-facet)" opacity="0.9" />
+      <circle cx="40" cy="14" r="3" fill="#ffffff" />
+    </svg>
+  </div>
+</div>
+===CUE_CSS===
+.wt-cue {
+  position: absolute;
+  bottom: calc(5.5 * var(--wt-u));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(112 * var(--wt-u)), 86%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.cargo-cradle {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation:
+    wt-cradle-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) 0s forwards,
+    wt-cradle-out 0.4s cubic-bezier(0.7, 0, 0.84, 0) calc(var(--wt-dur) - 0.4s) forwards;
+}
+
+.cradle-clamp {
+  position: absolute;
+  width: calc(1.3 * var(--wt-u));
+  height: calc(1.7 * var(--wt-u));
+  background: linear-gradient(180deg, #4f5763 0%, #1e2227 100%);
+  border: calc(0.08 * var(--wt-u)) solid #738091;
+  box-shadow:
+    inset 0 calc(0.08 * var(--wt-u)) 0 rgba(255, 255, 255, 0.22),
+    0 calc(0.2 * var(--wt-u)) calc(0.4 * var(--wt-u)) rgba(0, 0, 0, 0.65);
+  z-index: 15;
+}
+.cradle-clamp--tl { top: calc(2 * var(--wt-u)); left: calc(-0.55 * var(--wt-u)); border-radius: calc(0.15 * var(--wt-u)) 0 0 calc(0.15 * var(--wt-u)); }
+.cradle-clamp--tr { top: calc(2 * var(--wt-u)); right: calc(-0.55 * var(--wt-u)); border-radius: 0 calc(0.15 * var(--wt-u)) calc(0.15 * var(--wt-u)) 0; }
+.cradle-clamp--bl { bottom: calc(-0.35 * var(--wt-u)); left: calc(-0.55 * var(--wt-u)); border-radius: calc(0.15 * var(--wt-u)) 0 0 calc(0.15 * var(--wt-u)); }
+.cradle-clamp--br { bottom: calc(-0.35 * var(--wt-u)); right: calc(-0.55 * var(--wt-u)); border-radius: 0 calc(0.15 * var(--wt-u)) calc(0.15 * var(--wt-u)) 0; }
+
+.cradle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 calc(0.8 * var(--wt-u)) calc(0.35 * var(--wt-u)) calc(0.8 * var(--wt-u));
+  box-sizing: border-box;
+}
+
+.speaker-badge {
+  display: inline-flex;
+  align-items: center;
+  height: calc(1.5 * var(--wt-u));
+  padding: 0 calc(0.7 * var(--wt-u));
+  background: linear-gradient(90deg, #1c2025 0%, #14171a 100%);
+  border-left: calc(0.25 * var(--wt-u)) solid #df981e;
+  border-top: calc(0.08 * var(--wt-u)) solid rgba(95, 106, 120, 0.4);
+  border-right: calc(0.08 * var(--wt-u)) solid rgba(95, 106, 120, 0.4);
+  border-bottom: calc(0.08 * var(--wt-u)) solid rgba(95, 106, 120, 0.4);
+  color: #d8dde3;
+  font-family: var(--wt-font);
+  font-size: calc(1.05 * var(--wt-u));
+  font-weight: 700;
+  letter-spacing: calc(0.08 * var(--wt-u));
+  text-transform: uppercase;
+  box-shadow: inset 0 calc(0.08 * var(--wt-u)) 0 rgba(255, 255, 255, 0.08);
+}
+.speaker-badge:empty {
+  display: none;
+}
+
+.chiral-telemetry {
+  display: flex;
+  align-items: center;
+  gap: calc(0.8 * var(--wt-u));
+  font-family: var(--wt-font);
+  font-size: calc(0.82 * var(--wt-u));
+  color: #728091;
+  letter-spacing: calc(0.06 * var(--wt-u));
+}
+.status-dot {
+  width: calc(0.48 * var(--wt-u));
+  height: calc(0.48 * var(--wt-u));
+  border-radius: 50%;
+  background: #df981e;
+  box-shadow: 0 0 calc(0.4 * var(--wt-u)) #df981e;
+  animation: wt-status-blink 1.8s ease-in-out infinite alternate;
+}
+
+.cargo-plate {
+  position: relative;
+  width: 100%;
+  padding: calc(1.3 * var(--wt-u)) calc(3.4 * var(--wt-u));
+  box-sizing: border-box;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.016) 0,
+      rgba(255, 255, 255, 0.016) calc(0.08 * var(--wt-u)),
+      transparent calc(0.08 * var(--wt-u)),
+      transparent calc(1.2 * var(--wt-u))
+    ),
+    linear-gradient(
+      180deg,
+      rgba(35, 41, 49, 0.96) 0%,
+      rgba(19, 23, 27, 0.95) 45%,
+      rgba(11, 13, 16, 0.98) 100%
+    );
+  border: calc(0.12 * var(--wt-u)) solid rgba(76, 88, 104, 0.52);
+  border-radius: calc(0.3 * var(--wt-u));
+  box-shadow:
+    inset 0 calc(0.1 * var(--wt-u)) 0 rgba(255, 255, 255, 0.14),
+    inset 0 calc(-0.1 * var(--wt-u)) 0 rgba(0, 0, 0, 0.9),
+    inset calc(0.2 * var(--wt-u)) 0 0 rgba(223, 152, 30, 0.3),
+    inset calc(-0.2 * var(--wt-u)) 0 0 rgba(223, 152, 30, 0.3),
+    0 calc(0.8 * var(--wt-u)) calc(2.4 * var(--wt-u)) rgba(0, 0, 0, 0.72);
+  overflow: hidden;
+}
+
+.hazard-stripe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(1.4 * var(--wt-u));
+  opacity: 0.55;
+}
+.hazard-stripe--left {
+  left: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(223, 152, 30, 0.8) 0,
+    rgba(223, 152, 30, 0.8) calc(0.3 * var(--wt-u)),
+    rgba(18, 21, 25, 0.92) calc(0.3 * var(--wt-u)),
+    rgba(18, 21, 25, 0.92) calc(0.6 * var(--wt-u))
+  );
+  border-right: calc(0.08 * var(--wt-u)) solid rgba(223, 152, 30, 0.45);
+}
+.hazard-stripe--right {
+  right: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(223, 152, 30, 0.8) 0,
+    rgba(223, 152, 30, 0.8) calc(0.3 * var(--wt-u)),
+    rgba(18, 21, 25, 0.92) calc(0.3 * var(--wt-u)),
+    rgba(18, 21, 25, 0.92) calc(0.6 * var(--wt-u))
+  );
+  border-left: calc(0.08 * var(--wt-u)) solid rgba(223, 152, 30, 0.45);
+}
+
+.plate-rivets {
+  position: absolute;
+  left: calc(2.2 * var(--wt-u));
+  right: calc(2.2 * var(--wt-u));
+  height: calc(0.2 * var(--wt-u));
+  background-image: radial-gradient(circle, #7d8b9c calc(0.08 * var(--wt-u)), transparent calc(0.09 * var(--wt-u)));
+  background-size: calc(2.4 * var(--wt-u)) 100%;
+  opacity: 0.5;
+}
+.plate-rivets--top { top: calc(0.3 * var(--wt-u)); }
+.plate-rivets--bottom { bottom: calc(0.3 * var(--wt-u)); }
+
+.chiral-pulse {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(18 * var(--wt-u));
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(223, 152, 30, 0.06) 40%,
+    rgba(223, 152, 30, 0.32) 85%,
+    rgba(255, 235, 160, 0.75) 98%,
+    transparent 100%
+  );
+  filter: drop-shadow(0 0 calc(0.8 * var(--wt-u)) rgba(223, 152, 30, 0.6));
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  animation: wt-pulse-sweep 0.48s cubic-bezier(0.2, 0.7, 0.3, 1) 0.12s forwards;
+}
+
+.content-wrap {
+  position: relative;
+  z-index: 5;
+  text-align: center;
+  width: 100%;
+}
+
+.line {
+  font-family: var(--wt-font);
+  font-size: var(--wt-size);
+  line-height: 1.35;
+  letter-spacing: calc(0.12 * var(--wt-u));
+  white-space: normal;
+  word-break: break-word;
+}
+
+.wt-w {
+  display: inline-block;
+  color: var(--wt-color, #e2e5e9);
+  font-weight: 700;
+  text-shadow:
+    calc(0.12 * var(--wt-u)) calc(0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+    calc(-0.12 * var(--wt-u)) calc(-0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+    calc(0.12 * var(--wt-u)) calc(-0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+    calc(-0.12 * var(--wt-u)) calc(0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+    0 calc(0.25 * var(--wt-u)) calc(0.6 * var(--wt-u)) rgba(0, 0, 0, 0.95);
+  opacity: 0;
+  transform: translateY(calc(0.4 * var(--wt-u))) scale(0.92);
+  animation-name: wt-word-reveal;
+  animation-duration: 0.32s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: forwards;
+}
+
+.wt-w:nth-child(1) { animation-delay: 0.16s; }
+.wt-w:nth-child(2) { animation-delay: 0.19s; }
+.wt-w:nth-child(3) { animation-delay: 0.22s; }
+.wt-w:nth-child(4) { animation-delay: 0.25s; }
+.wt-w:nth-child(5) { animation-delay: 0.28s; }
+.wt-w:nth-child(6) { animation-delay: 0.31s; }
+.wt-w:nth-child(7) { animation-delay: 0.34s; }
+.wt-w:nth-child(8) { animation-delay: 0.37s; }
+.wt-w:nth-child(9) { animation-delay: 0.40s; }
+.wt-w:nth-child(10) { animation-delay: 0.43s; }
+.wt-w:nth-child(11) { animation-delay: 0.46s; }
+.wt-w:nth-child(12) { animation-delay: 0.49s; }
+.wt-w:nth-child(13) { animation-delay: 0.52s; }
+.wt-w:nth-child(14) { animation-delay: 0.55s; }
+.wt-w:nth-child(15) { animation-delay: 0.58s; }
+.wt-w:nth-child(16) { animation-delay: 0.61s; }
+.wt-w:nth-child(17) { animation-delay: 0.64s; }
+.wt-w:nth-child(18) { animation-delay: 0.67s; }
+.wt-w:nth-child(19) { animation-delay: 0.70s; }
+.wt-w:nth-child(20) { animation-delay: 0.73s; }
+.wt-w:nth-child(21) { animation-delay: 0.76s; }
+.wt-w:nth-child(22) { animation-delay: 0.79s; }
+.wt-w:nth-child(23) { animation-delay: 0.82s; }
+.wt-w:nth-child(24) { animation-delay: 0.85s; }
+.wt-w:nth-child(25) { animation-delay: 0.88s; }
+.wt-w:nth-child(26) { animation-delay: 0.91s; }
+.wt-w:nth-child(27) { animation-delay: 0.94s; }
+.wt-w:nth-child(28) { animation-delay: 0.97s; }
+.wt-w:nth-child(29) { animation-delay: 1.00s; }
+.wt-w:nth-child(30) { animation-delay: 1.03s; }
+.wt-w:nth-child(31) { animation-delay: 1.06s; }
+.wt-w:nth-child(32) { animation-delay: 1.09s; }
+.wt-w:nth-child(33) { animation-delay: 1.12s; }
+.wt-w:nth-child(34) { animation-delay: 1.15s; }
+.wt-w:nth-child(35) { animation-delay: 1.18s; }
+.wt-w:nth-child(36) { animation-delay: 1.21s; }
+
+.odradek-arm {
+  position: absolute;
+  top: calc(-5.2 * var(--wt-u));
+  left: calc(2.4 * var(--wt-u));
+  width: calc(6.5 * var(--wt-u));
+  height: calc(6.5 * var(--wt-u));
+  z-index: 20;
+  pointer-events: none;
+  animation:
+    wt-odradek-deploy 0.48s cubic-bezier(0.34, 1.56, 0.64, 1) 0.05s forwards,
+    wt-odradek-retract 0.36s cubic-bezier(0.7, 0, 0.84, 0) calc(var(--wt-dur) - 0.38s) forwards;
+}
+
+.odradek-joint {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(1.8 * var(--wt-u));
+  height: calc(1.2 * var(--wt-u));
+  background: linear-gradient(180deg, #424953 0%, #1a1e23 100%);
+  border: calc(0.08 * var(--wt-u)) solid #636d7a;
+  border-radius: calc(0.2 * var(--wt-u));
+  box-shadow: inset 0 calc(0.08 * var(--wt-u)) 0 rgba(255, 255, 255, 0.2);
+}
+
+.odradek-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(4.8 * var(--wt-u));
+  height: calc(4.8 * var(--wt-u));
+}
+
+.odradek-petal {
+  position: absolute;
+  width: calc(2.2 * var(--wt-u));
+  height: calc(1.5 * var(--wt-u));
+  background: linear-gradient(135deg, #323842 0%, #15181b 100%);
+  border: calc(0.08 * var(--wt-u)) solid #5a6575;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  transform-origin: 50% 100%;
+}
+
+.petal-1 {
+  top: 0;
+  left: calc(1.3 * var(--wt-u));
+  transform-origin: 50% 100%;
+  animation: wt-petal-1 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.3) 0.12s forwards, wt-petal-idle-1 3.2s ease-in-out 0.6s infinite alternate;
+}
+.petal-2 {
+  bottom: calc(1.3 * var(--wt-u));
+  right: 0;
+  transform: rotate(90deg);
+  transform-origin: 50% 100%;
+  animation: wt-petal-2 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.3) 0.12s forwards, wt-petal-idle-2 3.2s ease-in-out 0.6s infinite alternate;
+}
+.petal-3 {
+  bottom: 0;
+  left: calc(1.3 * var(--wt-u));
+  transform: rotate(180deg);
+  transform-origin: 50% 100%;
+  animation: wt-petal-3 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.3) 0.12s forwards, wt-petal-idle-1 3.2s ease-in-out 0.6s infinite alternate;
+}
+.petal-4 {
+  bottom: calc(1.3 * var(--wt-u));
+  left: 0;
+  transform: rotate(270deg);
+  transform-origin: 50% 100%;
+  animation: wt-petal-4 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.3) 0.12s forwards, wt-petal-idle-2 3.2s ease-in-out 0.6s infinite alternate;
+}
+
+.odradek-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(1.2 * var(--wt-u));
+  height: calc(1.2 * var(--wt-u));
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff3c4 0%, #df981e 65%, #6e4302 100%);
+  box-shadow: 0 0 calc(0.8 * var(--wt-u)) rgba(223, 152, 30, 0.85);
+  border: calc(0.08 * var(--wt-u)) solid #ffffff;
+}
+
+.chiral-cluster {
+  position: absolute;
+  top: calc(-4.2 * var(--wt-u));
+  right: calc(2.8 * var(--wt-u));
+  width: calc(5.2 * var(--wt-u));
+  height: calc(5.8 * var(--wt-u));
+  z-index: 20;
+  pointer-events: none;
+  animation:
+    wt-cluster-grow 0.42s cubic-bezier(0.18, 0.89, 0.32, 1.28) 0.1s forwards,
+    wt-cluster-shimmer 3.5s ease-in-out 0.6s infinite alternate;
+}
+.chiral-cluster svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 calc(0.2 * var(--wt-u)) calc(0.6 * var(--wt-u)) rgba(0, 0, 0, 0.8));
+}
+
+@keyframes wt-cradle-in {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(3 * var(--wt-u))) scale(0.96);
+    filter: drop-shadow(0 0 0 rgba(0, 0, 0, 0));
+  }
+  70% {
+    transform: translateY(calc(-0.2 * var(--wt-u))) scale(1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 calc(1 * var(--wt-u)) calc(2.5 * var(--wt-u)) rgba(0, 0, 0, 0.75));
+  }
+}
+
+@keyframes wt-cradle-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 calc(1 * var(--wt-u)) calc(2.5 * var(--wt-u)) rgba(0, 0, 0, 0.75));
+  }
+  30% {
+    transform: translateY(calc(-0.15 * var(--wt-u))) scale(1.005);
+    filter: drop-shadow(0 0 calc(1 * var(--wt-u)) rgba(223, 152, 30, 0.4));
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(calc(3.5 * var(--wt-u))) scale(0.95);
+    filter: drop-shadow(0 0 0 rgba(0, 0, 0, 0)) blur(calc(0.3 * var(--wt-u)));
+  }
+}
+
+@keyframes wt-odradek-deploy {
+  0% { opacity: 0; transform: translateX(-50%) translateY(calc(2.5 * var(--wt-u))) scale(0.6) rotate(-35deg); }
+  60% { transform: translateX(-50%) translateY(calc(-0.3 * var(--wt-u))) scale(1.08) rotate(6deg); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1) rotate(0deg); }
+}
+
+@keyframes wt-odradek-retract {
+  0% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(calc(2.5 * var(--wt-u))) scale(0.6) rotate(-30deg); }
+}
+
+@keyframes wt-petal-1 {
+  0% { transform: translateY(calc(0.8 * var(--wt-u))) scale(0.5); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes wt-petal-2 {
+  0% { transform: rotate(90deg) translateY(calc(0.8 * var(--wt-u))) scale(0.5); }
+  100% { transform: rotate(90deg) translateY(0) scale(1); }
+}
+@keyframes wt-petal-3 {
+  0% { transform: rotate(180deg) translateY(calc(0.8 * var(--wt-u))) scale(0.5); }
+  100% { transform: rotate(180deg) translateY(0) scale(1); }
+}
+@keyframes wt-petal-4 {
+  0% { transform: rotate(270deg) translateY(calc(0.8 * var(--wt-u))) scale(0.5); }
+  100% { transform: rotate(270deg) translateY(0) scale(1); }
+}
+
+@keyframes wt-petal-idle-1 {
+  0% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(calc(-0.2 * var(--wt-u))) rotate(6deg); }
+  100% { transform: translateY(calc(0.1 * var(--wt-u))) rotate(-5deg); }
+}
+@keyframes wt-petal-idle-2 {
+  0% { transform: rotate(90deg) translateY(0); }
+  50% { transform: rotate(96deg) translateY(calc(-0.2 * var(--wt-u))); }
+  100% { transform: rotate(84deg) translateY(calc(0.1 * var(--wt-u))); }
+}
+
+@keyframes wt-pulse-sweep {
+  0% { left: -15%; opacity: 0; }
+  15% { opacity: 0.9; }
+  85% { opacity: 0.9; }
+  100% { left: 110%; opacity: 0; }
+}
+
+@keyframes wt-word-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(0.4 * var(--wt-u))) scale(0.92);
+    filter: brightness(0.6) blur(calc(0.1 * var(--wt-u)));
+  }
+  50% {
+    opacity: 1;
+    color: #f5aa27;
+    text-shadow:
+      0 0 calc(0.6 * var(--wt-u)) rgba(223, 152, 30, 0.8),
+      calc(0.12 * var(--wt-u)) calc(0.12 * var(--wt-u)) 0 #08090b;
+    transform: translateY(calc(-0.08 * var(--wt-u))) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    color: var(--wt-color, #e2e5e9);
+    text-shadow:
+      calc(0.12 * var(--wt-u)) calc(0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+      calc(-0.12 * var(--wt-u)) calc(-0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+      calc(0.12 * var(--wt-u)) calc(-0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+      calc(-0.12 * var(--wt-u)) calc(0.12 * var(--wt-u)) 0 var(--wt-stroke, #08090b),
+      0 calc(0.25 * var(--wt-u)) calc(0.6 * var(--wt-u)) rgba(0, 0, 0, 0.95);
+    transform: translateY(0) scale(1);
+    filter: none;
+  }
+}
+
+@keyframes wt-cluster-grow {
+  0% { opacity: 0; transform: scale(0.3) translateY(calc(1.5 * var(--wt-u))); }
+  70% { transform: scale(1.08) translateY(calc(-0.2 * var(--wt-u))); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes wt-cluster-shimmer {
+  0% { filter: drop-shadow(0 calc(0.2 * var(--wt-u)) calc(0.5 * var(--wt-u)) rgba(223, 152, 30, 0.3)); }
+  50% { filter: drop-shadow(0 calc(0.2 * var(--wt-u)) calc(1 * var(--wt-u)) rgba(245, 170, 39, 0.8)); }
+  100% { filter: drop-shadow(0 calc(0.2 * var(--wt-u)) calc(0.4 * var(--wt-u)) rgba(223, 152, 30, 0.25)); }
+}
+
+@keyframes wt-status-blink {
+  0% { opacity: 0.35; filter: drop-shadow(0 0 0 transparent); }
+  100% { opacity: 1; filter: drop-shadow(0 0 calc(0.4 * var(--wt-u)) #df981e); }
+}
+===NOTES=== 
+以《死亡搁浅》黯淡冥滩与布里吉斯货箱为底本，通过肩挂欧卓德克侦测爪弹开翻转联动开罗尔拓扑扫描波逐字激发显影，配合逆重力时间雨与黑索构筑克制而极具张力的超自然工业电影感。

@@ -1,5 +1,10 @@
 ﻿"""Local ASR-consensus checks and correction edit safety decisions."""
 
+import re
+import time
+from collections import Counter
+from difflib import SequenceMatcher
+
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.term_constants import (
     ASR_CONSENSUS_PROTECTED_PHRASES,
@@ -21,6 +26,7 @@ __all__ = [
     "hinted_domain_term_change_is_supported",
     "nearby_glossary_candidates",
     "normalize_asr_supports",
+    "count_independent_asr_supports",
     "correction_is_safe",
     "decompose_broad_edit",
     "find_unique_patch_span",
@@ -75,9 +81,37 @@ def reference_consensus_edits(primary, independent_references):
         return []
 
     support = Counter()
+    # 跨度集合与全句音串按“值”只算一次：此前每个候选跨度都对每个参考重算
+    # _reference_replacement_spans + 全句拼音 + 全句相似度，是 2026-09-03
+    # run eca757 中 242 段共识单核跑 8 分钟的主要来源。投票仍按参考“槽位”
+    # 计数——FireRed 与 Qwen3 文本完全一致时两票都必须计入，不能按值去重。
+    spans_by_reference = {}
     for reference in references:
-        for span in _reference_replacement_spans(primary_content, reference):
+        spans = spans_by_reference.get(reference)
+        if spans is None:
+            spans = spans_by_reference[reference] = (
+                _reference_replacement_spans(primary_content, reference)
+            )
+        for span in spans:
             support[span] += 1
+
+    primary_sound = None
+    full_sound_by_reference = {}
+
+    def _full_sound(reference):
+        nonlocal primary_sound
+        cached = full_sound_by_reference.get(reference)
+        if cached is None:
+            if primary_sound is None:
+                primary_sound = phonetic_text(primary_content)
+            cached = SequenceMatcher(
+                None,
+                primary_sound,
+                phonetic_text(reference),
+                autojunk=False,
+            ).ratio()
+            full_sound_by_reference[reference] = cached
+        return cached
 
     accepted = []
     occupied = set()
@@ -105,15 +139,9 @@ def reference_consensus_edits(primary, independent_references):
             autojunk=False,
         ).ratio()
         full_sound = max(
-            SequenceMatcher(
-                None,
-                phonetic_text(primary_content),
-                phonetic_text(reference),
-                autojunk=False,
-            ).ratio()
+            _full_sound(reference)
             for reference in references
-            if (start, end, source, target)
-            in _reference_replacement_spans(primary_content, reference)
+            if (start, end, source, target) in spans_by_reference[reference]
         )
         # Most corrections are homophones.  A less similar one-character patch is
         # accepted only when both complete independent transcripts remain nearly
@@ -137,12 +165,32 @@ def reference_consensus_edits(primary, independent_references):
 def apply_reference_consensus_corrections(segments):
     """Apply only the local spans jointly supported by FireRed and Qwen3-ASR."""
     changes = []
-    for segment in segments:
+    total = len(segments)
+    started_at = time.perf_counter()
+    if total >= 40:
+        print(f"   [三路仲裁] 本地双模型共识核对 {total} 段（每 40 段报告一次进度）…")
+    for index, segment in enumerate(segments, 1):
+        if total >= 80 and index % 40 == 0 and index < total:
+            print(f"   [三路仲裁] 进度 {index}/{total} 段。")
         primary = content_exact(segment.text)
         edits = reference_consensus_edits(
             primary,
             (segment.firered_text or segment.alternate_text, segment.qwen_asr_text),
         )
+        from .caption_arbitration import arbitrate
+        decision = arbitrate(segment.moss_text or segment.text,
+            segment.firered_text or segment.alternate_text,segment.qwen_asr_text,
+            manual_text=getattr(segment,'manual_text',None),
+            start_ms=round(segment.start*1000),end_ms=round(segment.end*1000))
+        segment.caption_arbitration = decision
+        if decision['reason'] == '用户手动确认':
+            segment.text = decision['selected_text']
+            continue
+        if decision['accepted_spans']:
+            if primary == content_exact(segment.moss_text or segment.text):
+                new_edits = decision['accepted_spans']
+                occupied = {i for row in new_edits for i in range(row['start'],max(row['end'],row['start']+1))}
+                edits = sorted(new_edits + [row for row in edits if not any(i in occupied for i in range(row['start'],row['end']))], key=lambda row:row['start'])
         if not edits:
             continue
         corrected = primary
@@ -156,6 +204,7 @@ def apply_reference_consensus_corrections(segments):
             continue
         before = segment.text
         segment.text = clean_subtitle_text(corrected)
+        decision.update(selected_text=segment.text,reason='FireRed+Qwen片段共识',accepted_spans=edits)
         segment.primary_source = f"{segment.primary_source}+local-consensus"
         changes.extend(
             (segment.segment_id, edit["from"], edit["to"], before, segment.text)
@@ -169,10 +218,19 @@ def apply_reference_consensus_corrections(segments):
         record_run_event(
             "local_reference_consensus_applied",
             count=len(changes),
+            segments_scanned=total,
+            elapsed_seconds=round(time.perf_counter() - started_at, 3),
             edits=[
                 {"cue_id": cue_id, "from": source, "to": target}
                 for cue_id, source, target, _, _ in changes
             ],
+        )
+    else:
+        record_run_event(
+            "local_reference_consensus_skipped",
+            count=0,
+            segments_scanned=total,
+            elapsed_seconds=round(time.perf_counter() - started_at, 3),
         )
     return segments
 
@@ -266,7 +324,7 @@ def build_asr_difference_hints(primary, alternate):
     """把两套 ASR 的每处差异显式列给 Qwen，避免只修正第一个错词。"""
     primary_content = content_only(primary)
     alternate_content = content_only(alternate)
-    if not primary_content or not alternate_content:
+    if not primary_content or not alternate_content or primary_content == alternate_content:
         return []
     hints = []
     matcher = SequenceMatcher(
@@ -437,6 +495,54 @@ def nearby_glossary_candidates(text, glossary):
         if best >= 0.78:
             candidates.append(term)
     return candidates
+
+
+def count_independent_asr_supports(target, sources, threshold=None):
+    """统计支持 target 的独立 ASR 证据家族数（P1-2 单一计数入口）。
+
+    ``sources`` 为 ``(family, text)`` 二元组列表；同一 family 最多贡献
+    1 票，不同 family 即使文本完全相同也各计 1 票（FireRed-AED 与
+    复核 ASR 都转出"洛克王国" = 2 票）。
+
+    family 语义（由调用方标注，派生证据不要传入）：
+    - ``firered``：FireRed-AED（独立）
+    - ``review``：Qwen3-ASR / Whisper / FunASR 等互斥复核后端（独立）
+    - 其它：非 MOSS 主稿路径的 primary 参考等现状来源
+
+    ``threshold=None`` 时用精确包含（``target in text``）判定；
+    否则用文字/读音相似度判定，每家族取最高相似度
+    （与 ``asr_candidate_support_count`` 的阈值语义一致）。
+    """
+    target_content = content_only(target)
+    if not target_content:
+        return 0
+    grouped = {}
+    for family, text in sources or []:
+        candidate = content_only(text)
+        if not candidate:
+            continue
+        grouped.setdefault(str(family or ""), []).append(candidate)
+    votes = 0
+    for texts in grouped.values():
+        if threshold is None:
+            if any(target_content in value for value in texts):
+                votes += 1
+            continue
+        best = 0.0
+        for value in texts:
+            text_score = SequenceMatcher(
+                None, target_content, value, autojunk=False
+            ).ratio()
+            sound_score = SequenceMatcher(
+                None,
+                phonetic_text(target_content),
+                phonetic_text(value),
+                autojunk=False,
+            ).ratio()
+            best = max(best, max(text_score, sound_score))
+        if best >= threshold:
+            votes += 1
+    return votes
 
 
 def normalize_asr_supports(alternates):
@@ -652,6 +758,7 @@ def apply_correction_edits(
     original,
     alternates,
     edits,
+    *,
     allow_broad_consensus=False,
     consensus_alternates=(),
     gacha_quantity_hints=(),
@@ -660,8 +767,16 @@ def apply_correction_edits(
     protected_domain_terms=(),
     approved_global_mappings=(),
     verified_terms=(),
+    independent_sources,
 ):
-    """只执行 Qwen 明确指出的唯一局部替换；每个补丁单独过安全门。"""
+    """只执行 Qwen 明确指出的唯一局部替换；每个补丁单独过安全门。
+
+    ``alternates`` 保留全部证据文本（含派生副本），供相似度佐证判断使用。
+    ``independent_sources`` 为**必填** keyword-only 参数：带家族标注的
+    ``(family, text)`` 列表，只含可投票的独立 ASR 证据（P1-2）。
+    漏传会直接 TypeError——安全门函数不允许静默回退到旧的
+    "文本份数计票"语义（同源副本会凑满多票）。
+    """
     if not isinstance(edits, list):
         return clean_subtitle_text(original), []
 
@@ -669,6 +784,14 @@ def apply_correction_edits(
     applied = []
     pending = list(edits[:6])
     processed = 0
+    grouped = {}
+    for family, evidence in independent_sources:
+        candidate = content_only(evidence)
+        if candidate:
+            grouped.setdefault(str(family or ""), []).append(candidate)
+    vote_sources = independent_sources
+    # 每家族取第一份非空文本，供相似度型计数（hinted / 数字 / 数量）使用。
+    independent_alternates = [texts[0] for texts in grouped.values()]
     while pending and processed < 12:
         edit = pending.pop(0)
         processed += 1
@@ -699,10 +822,8 @@ def apply_correction_edits(
             target_content in term or term in target_content
             for term in verified_contents
         )
-        exact_target_support = sum(
-            target_content in content_only(value)
-            for value in (alternates or [])
-            if content_only(value)
+        exact_target_support = count_independent_asr_supports(
+            target_content, vote_sources
         )
         approved_pair = (source_content, target_content) in {
             (content_only(item.get("from", "")), content_only(item.get("to", "")))
@@ -769,6 +890,11 @@ def apply_correction_edits(
             )
             continue
         cue_length = display_length(text)
+        from .number_fidelity import numeric_event_values
+        if numeric_event_values(text) != numeric_event_values(candidate_preview):
+            record_run_event('numeric_edit_rejected', source=text, proposed=candidate_preview,
+                             reason='ordered_numeric_events_changed')
+            continue
         unwanted_formats = unwanted_arabic_format_values(text, candidate_preview)
         if unwanted_formats:
             values = ",".join(sorted(unwanted_formats))
@@ -781,7 +907,7 @@ def apply_correction_edits(
             source,
             target,
             gacha_quantity_hints,
-            alternates,
+            independent_alternates,
         )
         domain_hint_supported = hinted_domain_term_change_is_supported(
             source,
@@ -795,9 +921,8 @@ def apply_correction_edits(
             and phrase not in content_only(candidate_preview)
         ]
         if lost_protected_phrases:
-            exact_target_support = sum(
-                bool(target_content) and target_content in content_only(value)
-                for value in (alternates or [])
+            exact_target_support = count_independent_asr_supports(
+                target_content, vote_sources
             )
             if exact_target_support < 2:
                 print(
@@ -829,12 +954,12 @@ def apply_correction_edits(
         unsupported_numerals = introduces_unverified_numeral(
             source,
             target,
-            alternates,
+            independent_alternates,
         )
         if unsupported_numerals and contextual_quantity_change_is_supported(
             text,
             candidate_preview,
-            alternates,
+            independent_alternates,
         ):
             unsupported_numerals = set()
         if unsupported_numerals and quantity_hint_supported:
@@ -856,7 +981,7 @@ def apply_correction_edits(
         if lost_quantities and not contextual_quantity_change_is_supported(
             text,
             candidate_preview,
-            alternates,
+            independent_alternates,
         ):
             values = ",".join(
                 f"{number}{unit}" for number, unit in sorted(lost_quantities)

@@ -60,7 +60,8 @@ def repair_overlong_cues_from_source(cues, segments, firered_tokens=()):
         source_text = content_only("".join(segment.text for segment in candidates))
         cue_text = content_only(cue.text)
         if not candidates or source_text != cue_text:
-            repaired.append(cue)
+            repaired.extend(_repair_cue_on_own_timeline(cue))
+            repaired_count += 1
             continue
 
         for segment in candidates:
@@ -78,8 +79,8 @@ def repair_overlong_cues_from_source(cues, segments, firered_tokens=()):
                     )
                 ]
             else:
-                units = segment_content_timeline(segment, firered_tokens)
-                pieces = locally_repair_resegmented_cue(segment.text, units)
+                units = _segment_content_timeline(segment, firered_tokens)
+                pieces = _locally_repair_resegmented_cue(segment.text, units)
             for piece in pieces:
                 piece.timing_locked = bool(
                     cue.timing_locked or segment.timing_locked
@@ -106,6 +107,66 @@ def repair_overlong_cues_from_source(cues, segments, firered_tokens=()):
     return repaired
 
 
+def _repair_cue_on_own_timeline(cue):
+    """Last-resort split that conserves a cue's text when source matching fails."""
+    chars = content_exact(cue.text)
+    count = len(chars)
+    if count <= 0 or cue.end <= cue.start:
+        return [cue]
+    if count == 1:
+        return [
+            SubtitleCue(
+                cue_id=0,
+                start=float(cue.start),
+                end=min(float(cue.end), float(cue.start) + MAX_SUBTITLE_SECONDS),
+                text=clean_subtitle_text(cue.text),
+                timing_locked=bool(cue.timing_locked),
+                speaker=cue.speaker or "S00",
+            )
+        ]
+    duration = max(MIN_SUBTITLE_SECONDS, float(cue.end) - float(cue.start))
+    step = duration / count
+    units = [
+        WordUnit(
+            float(cue.start) + step * index,
+            float(cue.start) + step * (index + 1),
+            char,
+            0.0,
+        )
+        for index, char in enumerate(chars)
+    ]
+    try:
+        pieces = _locally_repair_resegmented_cue(cue.text, units)
+    except ValueError:
+        # Extremely sparse ASR output can assign more than five seconds to a
+        # single character. Preserve every character and cap only display time.
+        pieces = []
+        for index, char in enumerate(chars):
+            start = float(cue.start) + step * index
+            pieces.append(
+                SubtitleCue(0, start, min(start + MAX_SUBTITLE_SECONDS, start + step), char)
+            )
+    for piece in pieces:
+        piece.speaker = cue.speaker or "S00"
+        piece.timing_locked = bool(cue.timing_locked)
+    return pieces
+
+
+def _segment_content_timeline(*args, **kwargs):
+    """延迟导入：见 _firered_token_start 的说明——这两个符号定义在
+    segmentation/segmentation_alignment 尾部，经 segmentation 的尾部回写
+    才进入 subtitle_core；本模块顶部 star import 的时机早于该回写。"""
+    from twobyteasr.segmentation_alignment import segment_content_timeline
+
+    return segment_content_timeline(*args, **kwargs)
+
+
+def _locally_repair_resegmented_cue(*args, **kwargs):
+    from twobyteasr.segmentation import locally_repair_resegmented_cue
+
+    return locally_repair_resegmented_cue(*args, **kwargs)
+
+
 def build_local_source_cues(segments, firered_tokens=()):
     """Rebuild a conservative cue list from source segments with no cloud output."""
     cues = []
@@ -129,8 +190,8 @@ def build_local_source_cues(segments, firered_tokens=()):
                 )
             ]
         else:
-            units = segment_content_timeline(segment, firered_tokens)
-            pieces = locally_repair_resegmented_cue(segment.text, units)
+            units = _segment_content_timeline(segment, firered_tokens)
+            pieces = _locally_repair_resegmented_cue(segment.text, units)
         for piece in pieces:
             piece.speaker = segment.speaker or "S00"
             piece.timing_locked = bool(segment.timing_locked)
@@ -141,10 +202,24 @@ def build_local_source_cues(segments, firered_tokens=()):
 
 def normalize_cue_times(cues, timeline_fps=TIMELINE_FPS):
     minimum_frames = max(1, int(round(MIN_SUBTITLE_SECONDS * timeline_fps)))
+    max_duration_frames = max(1, int(round(MAX_SUBTITLE_SECONDS * timeline_fps)))
+
+    def budgeted_minimum_frames(cue):
+        # 碰撞推挤/量化可能把多条字幕压成 0.35s 阶梯串（23~43 字/秒闪现）。
+        # 每条至少要拿到“字数/阅读率”的时长，上限仍守 5 秒。
+        length = display_length(cue.text)
+        if length <= 0:
+            return minimum_frames
+        reading_frames = int(round(length / NORMALIZE_MAX_CHARS_PER_SECOND * timeline_fps))
+        return max(
+            minimum_frames,
+            min(max_duration_frames, reading_frames),
+        )
+
     for cue in cues:
         start_frame = max(0, int(round(max(0.0, cue.start) * timeline_fps)))
         end_frame = int(round(max(cue.end, cue.start) * timeline_fps))
-        end_frame = max(end_frame, start_frame + minimum_frames)
+        end_frame = max(end_frame, start_frame + budgeted_minimum_frames(cue))
         cue.start = start_frame / timeline_fps
         cue.end = end_frame / timeline_fps
 
@@ -169,12 +244,18 @@ def normalize_cue_times(cues, timeline_fps=TIMELINE_FPS):
                     previous.end = current.start
                 elif previous.timing_locked:
                     current.start = previous.end
-                    current.end = max(current.end, current.start + minimum_seconds)
+                    current.end = max(
+                        current.end,
+                        previous.end + budgeted_minimum_frames(current) / timeline_fps,
+                    )
                 elif current.start - previous.start >= minimum_seconds:
                     previous.end = current.start
                 else:
                     current.start = previous.end
-                    current.end = max(current.end, current.start + minimum_seconds)
+                    current.end = max(
+                        current.end,
+                        previous.end + budgeted_minimum_frames(current) / timeline_fps,
+                    )
 
             gap = current.start - previous.end
             if (
@@ -370,11 +451,21 @@ def bridge_short_display_gaps(
     return cues
 
 
+def _firered_token_start(token):
+    """延迟导入：firered_token_start 定义在 segmentation_alignment 尾部，
+    经 segmentation 的尾部回写才进入 subtitle_core。本模块顶部 ``import *``
+    的时机早于该回写（循环导入时序），直接顶部导入或使用泄漏名会在特定
+    入口顺序下 NameError；调用时导入则所有模块都已初始化完毕。"""
+    from twobyteasr.segmentation_alignment import firered_token_start
+
+    return firered_token_start(token)
+
+
 def firered_anchor_coverage(segment, firered_tokens=()):
     target = [phonetic_text(char) or char.lower() for char in content_only(segment.text)]
     candidates = []
     for token in firered_tokens or ():
-        start = firered_token_start(token)
+        start = _firered_token_start(token)
         end = max(start + 0.001, float(token["end"]))
         if (
             start > segment.end + FIRERED_EFFECTIVE_TOKEN_OUTSIDE_TOLERANCE_SECONDS
@@ -457,6 +548,7 @@ def collect_review_items(segments, cues, speech_regions, firered_tokens=()):
                 ),
                 segment.text,
                 priority=2,
+                severity="info",
             )
 
     if anchor_coverages:

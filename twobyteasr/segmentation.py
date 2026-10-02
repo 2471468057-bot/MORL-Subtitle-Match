@@ -1,6 +1,7 @@
 ﻿"""segmentation stage implementation extracted from subtitle_core."""
 
 import re
+import warnings
 
 # The core owns runtime configuration; these imports preserve the existing public contract.
 from subtitle_core import *  # noqa: F401,F403
@@ -275,6 +276,14 @@ def refine_resegmented_texts(segment_batch, proposed_texts, firered_tokens=()):
     if cursor != total_length:
         return proposed_texts
 
+    from .subtitle_fidelity import independent_response
+    response_boundaries = set()
+    response_cursor = 0
+    for text in proposed_texts:
+        next_cursor = response_cursor + display_length(text)
+        if independent_response(text):
+            response_boundaries.update((response_cursor, next_cursor))
+        response_cursor = next_cursor
     changed = False
     semantic_required_offsets = set()
     required_boundaries = hard_break_character_offsets(
@@ -367,6 +376,7 @@ def refine_resegmented_texts(segment_batch, proposed_texts, firered_tokens=()):
         boundaries = set(snapped)
         boundaries.add(total_length)
         changed = True
+    boundaries.update(offset for offset in response_boundaries if 0 < offset < total_length)
     normalized = sorted(boundaries)
     ranges = []
     start = 0
@@ -437,6 +447,8 @@ def lexical_boundary_terms():
 def lexical_forbidden_boundary_offsets(text):
     source = content_exact(text)
     forbidden = set()
+    for start,end,_ in structural_cohesion_spans(text):
+        forbidden.update(range(start+1,end))
     for term in lexical_boundary_terms():
         start = source.find(term)
         while start >= 0:
@@ -452,7 +464,13 @@ def chinese_word_spans(source_text):
     if not source:
         return []
     try:
-        import jieba
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"pkg_resources is deprecated as an API.*",
+                category=UserWarning,
+            )
+            import jieba
 
         words = [word for word in jieba.lcut(source) if word]
     except Exception:
@@ -519,6 +537,9 @@ def structural_cohesion_spans(source_text):
         re.compile(r"(?:今天是|日期是|时间是)?\d{4}年\d{1,2}月\d{1,2}日"),
         re.compile(r"[\u3400-\u9fff]{2}嘉年华"),
         re.compile(r"剧情线"),
+        re.compile(r"的时候|能不能|可不可以|会不会|是不是|有没有"),
+        re.compile(r"(?:百分之)?[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?(?:张|卡|局|秒|分|元|颗)?"),
+        re.compile(r"\d+(?:\.\d+)*(?:%|张|卡|局|秒|分|元|颗)?"),
         re.compile(r"为主题"),
         # 常见趋向/尝试补语是一个完整口语动作，禁止切成“看｜一下”。
         re.compile(r"[\u3400-\u9fff]一下"),
@@ -984,7 +1005,7 @@ AWKWARD_BOUNDARY_LEFT_SUFFIXES = (
     "因为", "所以", "然后", "但是", "如果", "或者", "可能",
     "要", "再", "把", "给", "让", "跟", "和", "与", "从", "向",
     "得", "能", "想", "觉得", "感觉", "准备", "上我们的",
-    "应该", "还是",
+    "应该", "还是", "估计",
     "还",
     # 未完成的指量/修饰尾巴：后接中心语时应并到同一条或改切点。
     "一个", "这个", "那个", "哪个", "什么", "哪种", "这种", "那种",
@@ -1217,7 +1238,6 @@ def repair_category_field_list_cues(cues):
         total_len = left_len + right_len
         window_start = min(left.start, right.start)
         window_end = max(left.end, right.end)
-        span = max(MIN_SUBTITLE_SECONDS, window_end - window_start)
         split_at = window_start + span * left_len / total_len
         split_at = min(
             max(split_at, window_start + MIN_SUBTITLE_SECONDS * 0.5),
@@ -1518,8 +1538,13 @@ def segmenter_forbidden_boundary_offsets(text):
     return forbidden
 
 
-def repair_mid_word_adjacent_cues(cues):
-    """最后兜底：相邻字幕把一个词左右切开时，挪切点或合并。"""
+def repair_mid_word_adjacent_cues(cues, segments=(), firered_tokens=()):
+    """最后兜底：相邻字幕把一个词左右切开时，挪切点或合并。
+
+    挪切点（把跨界词整体归左或归右）不合并两条字幕，因此允许跨换气级
+    间隙（≤ MID_WORD_MOVE_MAX_GAP_SECONDS）；真正把两条并成一条的兜底
+    仍受“近乎连读”原门约束，防止跨长静音/插话合并出超长字幕。
+    """
     if not cues or len(cues) < 2:
         return cues
     rows = sorted(
@@ -1536,16 +1561,13 @@ def repair_mid_word_adjacent_cues(cues):
             continue
         gap = right.start - left.end
         combined_duration = max(left.end, right.end) - min(left.start, right.start)
-        # 这里只能修复真正相邻、近乎连读的词内切点。过去仅检查说话人和
-        # 文字，会把同一主播跨过十几秒静音及另一主播插话的两句重新合并，
-        # 最终制造出超过 5 秒的字幕并让整批任务失败。
-        if (
-            gap < -0.20
-            or gap > PROTECTED_SOURCE_GAP_SECONDS
-            or combined_duration > MAX_SUBTITLE_SECONDS + 0.05
-        ):
-            index += 1
-            continue
+        # 只有“真正相邻、近乎连读”的词内切点才允许合并两条；挪切点走下面的
+        # 放宽门。过去仅检查说话人和文字，会把同一主播跨过十几秒静音及另一
+        # 主播插话的两句重新合并，最终制造出超过 5 秒的字幕并让整批任务失败。
+        contiguous = (
+            -0.20 <= gap <= PROTECTED_SOURCE_GAP_SECONDS
+            and combined_duration <= MAX_SUBTITLE_SECONDS + 0.05
+        )
         left_text = clean_subtitle_text(left.text)
         right_text = clean_subtitle_text(right.text)
         if not left_text or not right_text:
@@ -1566,7 +1588,7 @@ def repair_mid_word_adjacent_cues(cues):
         hit = next(
             (
                 (start, end, word)
-                for start, end, word in chinese_word_spans(joined)
+                for start, end, word in boundary_word_spans(joined)
                 if end - start >= 2 and start < cut < end
             ),
             None,
@@ -1602,6 +1624,9 @@ def repair_mid_word_adjacent_cues(cues):
                 )
             )
         if not options:
+            if not contiguous:
+                index += 1
+                continue
             merged_text = clean_subtitle_text(left_text + right_text)
             if display_length(merged_text) <= MAX_SUBTITLE_CHARS + 2:
                 left.text = merged_text
@@ -1612,27 +1637,52 @@ def repair_mid_word_adjacent_cues(cues):
                 continue
             index += 1
             continue
+        # 挪切点放宽门：跨换气级间隙也修（不合并、只挪字），但说话人重叠
+        # 锁定段的时间冻结契约优先，超窗的长静音也不动。
+        if (
+            gap > MID_WORD_MOVE_MAX_GAP_SECONDS
+            or getattr(left, "timing_locked", False)
+            or getattr(right, "timing_locked", False)
+        ):
+            index += 1
+            continue
         options.sort()
-        _, _, _, _, target, new_left, new_right = options[0]
-        left_len = max(1, display_length(new_left))
-        right_len = max(1, display_length(new_right))
-        total_len = left_len + right_len
+        applied = False
         window_start = min(left.start, right.start)
         window_end = max(left.end, right.end)
         span = max(MIN_SUBTITLE_SECONDS, window_end - window_start)
-        split_at = window_start + span * left_len / total_len
-        # 保持两句都有最小时长。
-        split_at = min(
-            max(split_at, window_start + MIN_SUBTITLE_SECONDS * 0.5),
-            window_end - MIN_SUBTITLE_SECONDS * 0.5,
-        )
-        left.text = clean_subtitle_text(new_left)
-        right.text = clean_subtitle_text(new_right)
-        left.start = window_start
-        left.end = split_at
-        right.start = split_at
-        right.end = window_end
-        changed += 1
+        for _rank, _balance, _pref, _neg, target, new_left, new_right in options:
+            from .subtitle_fidelity import aligned_boundary_time
+            split_at = aligned_boundary_time(left, right, target, segments, firered_tokens)
+            if split_at is None:
+                # A whole cue span is known; invented per-character timestamps
+                # are not. Preserve it by a bounded merge when that is readable.
+                if contiguous and display_length(joined) <= MAX_SUBTITLE_CHARS:
+                    left.text = clean_subtitle_text(left_text + right_text)
+                    left.end = window_end
+                    rows.pop(index + 1)
+                    record_run_event('boundary_alignment_degraded', reason='no_word_alignment_bounded_merge',
+                                     start=window_start, end=window_end, text=left.text)
+                    applied = True
+                break
+            # 保持两句都有最小时长，且任一侧都不得超过成片 5 秒上限。
+            if not window_start < split_at < window_end:
+                continue
+            if (
+                split_at - window_start > MAX_SUBTITLE_SECONDS + 0.05
+                or window_end - split_at > MAX_SUBTITLE_SECONDS + 0.05
+            ):
+                continue
+            left.text = clean_subtitle_text(new_left)
+            right.text = clean_subtitle_text(new_right)
+            left.start = window_start
+            left.end = split_at
+            right.start = split_at
+            right.end = window_end
+            applied = True
+            break
+        if applied:
+            changed += 1
         index += 1
     if changed:
         print(f"   [词边界兜底] 修正 {changed} 处相邻字幕词中切开。")
@@ -1644,6 +1694,7 @@ def locally_repair_resegmented_cue(
     units,
     forced_boundaries=None,
     preferred_boundaries=None,
+    comfort_max_chars=None,
 ):
     """只修复 Qwen 输出中过长/跨停顿的单条，不丢弃同批其他有效断句。"""
     # 词内强制切点（如 进|入）先贴到词边界；否则 DP 只能在词中切开。
@@ -1697,6 +1748,9 @@ def locally_repair_resegmented_cue(
             # 超过常规 12 的完整短语略罚，但仍优于残尾两刀。
             if length > MAX_SUBTITLE_CHARS:
                 cost += 6.0 * (length - MAX_SUBTITLE_CHARS) ** 2
+            # 回退舒适模式：超舒适长度的整段重罚，逼 DP 落到 ~8-12 字两刀。
+            if comfort_max_chars is not None and length > comfort_max_chars:
+                cost += 30.0 * (length - comfort_max_chars)
             if end_index < count:
                 gap = max(0.0, units[end_index].start - units[end_index - 1].end)
                 cost -= min(10.0, gap * 20.0)
@@ -1727,7 +1781,33 @@ def locally_repair_resegmented_cue(
                 best_next[start_index] = end_index
 
     if best_next[0] is None:
-        raise ValueError("Qwen 单条过长，本地也找不到合法切点。")
+        # Quality guards must not discard a completed file. Conservatively hard
+        # split sparse/fully-protected timelines and preserve every character.
+        ranges = []
+        start_index = 0
+        while start_index < count:
+            forced_after = min((b for b in forced_boundaries if b > start_index), default=count)
+            limit = min(count, forced_after, start_index + COMPLETE_PHRASE_SOFT_MAX_CHARS)
+            end_index = start_index
+            while end_index < limit:
+                candidate = end_index + 1
+                duration = units[candidate - 1].end - units[start_index].start
+                if candidate > start_index + 1 and duration > MAX_SUBTITLE_SECONDS + 0.05:
+                    break
+                end_index = candidate
+                if duration > MAX_SUBTITLE_SECONDS + 0.05:
+                    break
+            end_index = max(end_index, min(count, start_index + 1))
+            ranges.append((start_index, end_index))
+            start_index = end_index
+        cues = []
+        for part, (start_index, end_index) in zip(split_text_at_content_ranges(text, ranges), ranges):
+            start = units[start_index].start
+            acoustic_end = max(units[end_index - 1].end, start + MIN_SUBTITLE_SECONDS)
+            cues.append(SubtitleCue(0, start, min(acoustic_end, start + MAX_SUBTITLE_SECONDS), part))
+        print(f"   [硬切兜底] 常规词边界无法满足字幕上限，已保全文字并拆为 {len(cues)} 条。")
+        record_run_event("local_hard_split_recovery", cue_count=len(cues), character_count=count)
+        return cues
 
     ranges = []
     index = 0
@@ -1792,6 +1872,9 @@ def group_subtitles(
     speech_regions=(),
     protect_all_source_boundaries=False,
     cache_context=None,
+    use_ai=True,
+    provider_snapshot=None,
+    max_workers=None,
 ):
     """兼容旧入口，并把调用方覆盖的断句依赖同步到新实现模块。"""
     import twobyteasr.grouping as grouping_module
@@ -1799,12 +1882,17 @@ def group_subtitles(
     grouping_module.call_grouping_api = call_grouping_api
     grouping_module.PARALLEL_CLOUD_BATCHES = PARALLEL_CLOUD_BATCHES
     grouping_module.CLOUD_BATCH_WORKERS = CLOUD_BATCH_WORKERS
+    grouping_module.GROUP_API_BATCH_MAX_CUES = GROUP_API_BATCH_MAX_CUES
+    grouping_module.GROUP_API_BATCH_MAX_CHARS = GROUP_API_BATCH_MAX_CHARS
     return _group_subtitles_impl(
         segments,
         firered_tokens=firered_tokens,
         speech_regions=speech_regions,
         protect_all_source_boundaries=protect_all_source_boundaries,
         cache_context=cache_context,
+        use_ai=use_ai,
+        provider_snapshot=provider_snapshot,
+        max_workers=max_workers,
     )
 
 

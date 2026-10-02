@@ -1,5 +1,14 @@
 ﻿import subtitle_core
 
+def test_startup_guard_reads_live_facade_state_and_restores_review_items(monkeypatch):
+    import pytest
+    before=list(subtitle_core.RUN_REVIEW_ITEMS)
+    monkeypatch.setattr(subtitle_core,'ISOLATED_CUE_TAIL_SECONDS',0)
+    with pytest.raises(RuntimeError,match='200ms'):
+        subtitle_core.run_startup_self_test()
+    assert subtitle_core.RUN_REVIEW_ITEMS==before
+
+
 def test_startup_self_test_passes():
     result = subtitle_core.run_startup_self_test()
     assert result["id"].startswith("startup-self-test-")

@@ -60,6 +60,29 @@ def test_real_edited_sample_never_keeps_a_nineteen_character_cue():
     assert max(len(item.text) for item in repaired) <= MAX_SUBTITLE_CHARS
 
 
+def test_unmatched_cpu_asr_cue_uses_its_own_timeline_as_final_fallback():
+    # SenseVoice/Whisper can produce a cue whose text no longer maps one-to-one
+    # to the original coarse source segment after local cleanup.
+    segment = SpeechSegment(1, 10.0, 18.0, "原始识别内容与清理后不同", 0.8, [], speaker="S00")
+    cue = SubtitleCue(1, 10.0, 17.88, "一种历史的厚重感啊长夜", speaker="S00")
+
+    repaired = repair_overlong_cues_from_source([cue], [segment])
+
+    assert "".join(item.text for item in repaired) == cue.text
+    assert len(repaired) >= 2
+    assert max(item.end - item.start for item in repaired) <= 5.05
+    assert all(item.speaker == "S00" for item in repaired)
+
+
+def test_short_text_with_long_display_time_is_split_without_losing_text():
+    cue = SubtitleCue(1, 20.0, 26.13, "一个护盾的特效看", speaker="S00")
+
+    repaired = repair_overlong_cues_from_source([cue], [])
+
+    assert "".join(item.text for item in repaired) == cue.text
+    assert max(item.end - item.start for item in repaired) <= 5.05
+
+
 def test_local_source_recovery_restores_per_speaker_text_conservation():
     segments = [
         SpeechSegment(1, 0.0, 1.0, "第一句话", 0.9, [], speaker="S01"),

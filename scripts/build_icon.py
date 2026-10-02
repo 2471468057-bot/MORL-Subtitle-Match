@@ -1,5 +1,6 @@
-"""Build a tight transparent PNG/ICO from the user-supplied square mascot image."""
+"""Build transparent application icons from the approved square mascot art."""
 
+import argparse
 from collections import deque
 from pathlib import Path
 
@@ -7,14 +8,14 @@ from PIL import Image, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "assets" / "2byteasr-icon.jpg"
+SOURCE = ROOT / "assets" / "2byteasr-icon-source.png"
 PNG_OUTPUT = ROOT / "assets" / "2byteasr-icon-transparent.png"
 ICO_OUTPUT = ROOT / "assets" / "2byteasr.ico"
 
 
-def is_edge_white(pixel):
+def is_edge_background(pixel):
     red, green, blue = pixel
-    return min(red, green, blue) >= 228 and max(red, green, blue) - min(red, green, blue) <= 20
+    return max(red, green, blue) <= 8
 
 
 def connected_background_mask(image):
@@ -25,7 +26,7 @@ def connected_background_mask(image):
 
     def enqueue(x, y):
         offset = y * width + x
-        if visited[offset] or not is_edge_white(pixels[x, y]):
+        if visited[offset] or not is_edge_background(pixels[x, y]):
             return
         visited[offset] = 1
         queue.append((x, y))
@@ -60,15 +61,32 @@ def connected_background_mask(image):
 
 
 def main():
-    source = Image.open(SOURCE).convert("RGB")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", type=Path, help="New approved mascot artwork")
+    args = parser.parse_args()
+
+    input_path = args.source.resolve() if args.source else SOURCE
+    source = Image.open(input_path).convert("RGB")
+    if args.source:
+        source.save(SOURCE, format="PNG", optimize=True)
     alpha = connected_background_mask(source)
     rgba = source.convert("RGBA")
     rgba.putalpha(alpha)
 
-    # A modest center crop enlarges the face at taskbar sizes without changing it.
-    inset = max(1, round(min(rgba.size) * 0.025))
-    rgba = rgba.crop((inset, inset, rgba.width - inset, rgba.height - inset))
-    rgba = rgba.resize((512, 512), Image.Resampling.LANCZOS)
+    # Keep the complete silhouette with optical safety space. The same master is
+    # used in the header and for Windows icon sizes, so no ear or hair is clipped.
+    bbox = alpha.getbbox() or (0, 0, rgba.width, rgba.height)
+    visible = rgba.crop(bbox)
+    side = max(visible.width, visible.height)
+    margin = max(1, round(side * 0.055))
+    canvas_side = side + margin * 2
+    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
+    canvas.paste(
+        visible,
+        ((canvas_side - visible.width) // 2, (canvas_side - visible.height) // 2),
+        visible,
+    )
+    rgba = canvas.resize((1200, 1200), Image.Resampling.LANCZOS)
     rgba.save(PNG_OUTPUT, format="PNG", optimize=True)
     rgba.save(
         ICO_OUTPUT,

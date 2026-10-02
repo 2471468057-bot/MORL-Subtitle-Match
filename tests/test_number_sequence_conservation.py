@@ -16,12 +16,14 @@ def test_single_compound_amount_avoids_arabic_chinese_hybrid():
     assert subtitle_core.normalize_output_text("三亿五千万") == "三亿五千万"
 
 
-def test_game_stats_use_arabic_digits_but_spoken_magnitudes_stay_chinese():
-    assert subtitle_core.normalize_output_text("这1万多威力吗") == "这一万多威力吗"
-    assert subtitle_core.normalize_output_text("这百分之1万有问题") == "这百分之一万有问题"
+def test_cleanup_keeps_number_spelling_until_explicit_formatting_stage():
+    from twobyteasr.number_fidelity import format_numbers
+    assert subtitle_core.normalize_output_text("这1万多威力吗") == "这1万多威力吗"
+    assert subtitle_core.normalize_output_text("这百分之1万有问题") == "这百分之1万有问题"
     assert subtitle_core.normalize_output_text("十六层毒") == "十六层毒"
-    assert subtitle_core.normalize_output_text("威力加四十") == "威力加40"
-    assert subtitle_core.normalize_output_text("回复十二生命值") == "回复12生命值"
+    assert format_numbers("威力加四十")[0] == "威力加40"
+    assert format_numbers("回复十二生命值")[0] == "回复12生命值"
+    assert format_numbers("威力加四十",enabled=False)[0] == "威力加四十"
 
 
 def test_spoken_ten_nine_eight_countdown_uses_separate_arabic_digits():

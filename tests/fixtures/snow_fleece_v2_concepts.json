@@ -1,0 +1,150 @@
+{
+  "schema_version": 2,
+  "brief": {
+    "style": "圆润白熊滑雪实况字幕，文字主导，左侧一枚戴滑雪镜的白熊作唯一主符号，雪绒与冰晶镜片统一",
+    "mood": "冷冽轻快、柔软可靠，雪坡刹停后的干净愉悦，不做狂欢",
+    "scope": "subtitle",
+    "anchor": "bottom safe lower third",
+    "foreground": "主字幕「啊感觉他就是你看」贴底水平居中，圆润加粗汉字，字距微松，阅读绝对优先",
+    "midground": "字幕左侧一枚圆润白熊头戴滑雪镜，体量约等于字高，镜片一点冷高光，无第二符号",
+    "background": "全透明画布，无底栏无雾罩；仅字缘内侧极淡霜线，不铺底不扩散",
+    "materials": "字面压实雪绒；熊身短绒毛；镜框哑光深青；镜片冰晶玻璃，高光冷白不溢色",
+    "palette_ratio": "70%暖雪白与绒白字，25%冰青灰与镜框深青，5%镜片冷高光",
+    "typography": "Microsoft YaHei UI / Source Han Sans SC，圆角加粗、字腔饱满，禁用尖细锐角与科技无衬线",
+    "entrance": "熊自左沿浅雪痕滑入刹停，镜片一闪，字幕按阅读序从薄霜落定",
+    "hold": "熊随语气轻点头，绒毛微颤，镜片高光慢移；字幕稳定，无跳动无描边闪烁",
+    "exit": "熊向右滑出带起薄霜，字幕沿滑向溶成细霜消散，干净无残影",
+    "forbidden_patterns": "黑条底、霓虹描边、emoji、多只熊、暴雪粒子、彩虹、金属描边、居中大标题、随机装饰",
+    "performance_level": "medium",
+    "transparent": true,
+    "allow_vignette": false
+  },
+  "concepts": [
+    {
+      "id": "snow-fleece-halt",
+      "name": "雪绒刹停",
+      "subject": "一句贴底居中的圆润加粗实况字幕，左侧仅一枚头戴滑雪镜的圆润白熊头作主符号，体量约等于字高。",
+      "composition": "下三分之一安全区：主字幕「啊感觉他就是你看」水平居中为唯一阅读块；白熊头紧贴首字左侧，不进入字腔、不重复、不对称居中。全透明画布，无底栏、无雾罩、无第二符号。",
+      "palette": "70%暖雪白与绒白字面，25%冰青灰雪痕与熊身阴影，5%镜片冷高光与哑光深青镜框。",
+      "materials": "字面压实雪绒纸感、短绒微粒不扬尘；熊身短绒毛；镜框哑光深青塑料；镜片冰晶玻璃，一点冷白高光不溢色。字缘内侧极淡霜线，不铺底。",
+      "motion": {
+        "entrance": "熊自画面左沿一条浅雪痕滑入，在首字旁刹停；镜片只闪一次；字幕按阅读顺序由薄霜落成实字。",
+        "hold": "熊随语气做极小幅度点头，绒毛轻颤；镜片高光缓慢横移；字幕完全稳定，无跳动、无描边闪烁。",
+        "exit": "熊向右滑出带起一层薄霜；字幕沿同一滑向溶成细霜后消失，干净无残影。"
+      },
+      "signature_elements": [
+        "刹停浅雪痕",
+        "镜片单点冷高光",
+        "字缘内侧霜线"
+      ],
+      "risks": [
+        "熊体量过大抢字",
+        "绒毛动画易滑向粒子狂欢",
+        "圆润造型被读成emoji贴纸"
+      ],
+      "estimated_performance": "medium",
+      "preview_spec": {
+        "layout": "emblem-left",
+        "symbol": "polar-bear",
+        "font_treatment": "rounded",
+        "material": "paper",
+        "foreground": "#F3EEE6",
+        "secondary": "#8A9AA3",
+        "accent": "#1A3C44"
+      },
+      "rule_score": 79,
+      "score_details": {
+        "motion": 20,
+        "identity": 12,
+        "readability": 15,
+        "palette": 15,
+        "performance": 13,
+        "obstruction": 4
+      }
+    },
+    {
+      "id": "ice-lens-type",
+      "name": "冰镜结字",
+      "subject": "以磨砂冰玻璃汉字本身为绝对主体，唯一主符号是枚贴在首字左肩的滑雪镜，不见熊身、不见场景。",
+      "composition": "文字主导的贴底水平居中字带，整句作为单一冷色块；滑雪镜缩小为光学徽记，扣在「啊」字左上外侧，体量小于字高一半，不另开一列、不形成左右分栏。透明底，无框无雾。",
+      "palette": "70%冷青白玻璃字面，25%雾灰磨砂内壁与浅冰影，5%镜片通透高光。",
+      "materials": "每个字是一块厚磨砂冰玻璃，字腔由内壁结霜显形；镜框仍为哑光深青细圈；镜片通透冰晶，高光冷白且不投射到邻字。禁止金属描边与霓虹。",
+      "motion": {
+        "entrance": "字腔由内向外结霜显形，从左至右按阅读序变实；镜片先雾后清，只闪一次对焦光。",
+        "hold": "玻璃内部缓慢冷凝，高光沿字面水平慢移；镜片静止如一枚冻住的瞳孔；字距与字重完全锁死。",
+        "exit": "霜面蒸发回透明，字形失重后碎成无声薄片消散；镜片先起雾再熄灭，不滑行。"
+      },
+      "signature_elements": [
+        "字腔内结霜",
+        "雾-清一闪的单枚镜片"
+      ],
+      "risks": [
+        "磨砂降低对比伤阅读",
+        "编辑体易滑向尖细科技无衬线",
+        "镜片过大变成第二焦点"
+      ],
+      "estimated_performance": "medium",
+      "preview_spec": {
+        "layout": "type-led",
+        "symbol": "goggles",
+        "font_treatment": "editorial",
+        "material": "frosted-glass",
+        "foreground": "#E7F0F4",
+        "secondary": "#6A7E88",
+        "accent": "#B9E3EE"
+      },
+      "rule_score": 65,
+      "score_details": {
+        "motion": 20,
+        "identity": 8,
+        "readability": 5,
+        "palette": 15,
+        "performance": 13,
+        "obstruction": 4
+      }
+    },
+    {
+      "id": "shard-brake-cadence",
+      "name": "刃停冰棱",
+      "subject": "冷凝紧缩的加粗汉字被右侧一枚竖立冰棱收住，像雪坡边缘的刹车刃，无角色、无镜面拟人。",
+      "composition": "下三分之一不对称：字幕偏左贴底成一条紧凑字带；右侧一枚瘦长冰棱作唯一主符号，高度略超字高，像画框右边的静音标点。字与棱之间留一指空隙，互不重叠。全透明，无底栏。",
+      "palette": "70%银白拉丝字面，25%石墨青灰冰棱体块，5%刃口一线电青。",
+      "materials": "字面为水平拉丝冰金属——细密刷痕长在字面里，不是外轮廓描边；冰棱半透明晶体，截面可见拉丝层理；刃口一条冷高光。字缘无霜雾扩散。",
+      "motion": {
+        "entrance": "冰棱自上方垂直插入钉住右缘；字幕被刃口从右向左切开霜面后展开落定，无滑行角色。",
+        "hold": "冰棱内部一条细高光垂直缓慢下行；字幕如铭刻静止，无点头、无颤动、无描边闪。",
+        "exit": "冰棱向上抽离；字幕沿刃口方向被削成细条，随抽离方向消散，不向右滑、不扬雪。"
+      },
+      "signature_elements": [
+        "右侧竖立冰棱",
+        "字面水平拉丝",
+        "刃口一线电青"
+      ],
+      "risks": [
+        "拉丝被误读成禁用金属描边",
+        "紧缩字重伤实况阅读",
+        "右侧符号违背「符号在左」的第一直觉"
+      ],
+      "estimated_performance": "low",
+      "preview_spec": {
+        "layout": "framed-right",
+        "symbol": "ice-shard",
+        "font_treatment": "condensed",
+        "material": "brushed-metal",
+        "foreground": "#F5F8FA",
+        "secondary": "#2F3C44",
+        "accent": "#5FBFCF"
+      },
+      "rule_score": 76,
+      "score_details": {
+        "motion": 20,
+        "identity": 12,
+        "readability": 5,
+        "palette": 15,
+        "performance": 20,
+        "obstruction": 4
+      }
+    }
+  ],
+  "selected_concept_id": ""
+}

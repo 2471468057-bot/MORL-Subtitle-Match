@@ -22,6 +22,19 @@ def _units(text):
     return units
 
 
+def test_local_repair_hard_fallback_never_discards_file_when_units_are_sparse():
+    text = "\u4e00\u4e8c\u4e09\u56db"
+    units = [
+        WordUnit(index * 6.0, (index + 1) * 6.0, char, 1.0)
+        for index, char in enumerate(text)
+    ]
+
+    cues = locally_repair_resegmented_cue(text, units)
+
+    assert "".join(cue.text for cue in cues) == text
+    assert all(0 < cue.end - cue.start <= 5.05 for cue in cues)
+
+
 def test_local_repair_prefers_complete_phrases_within_soft_max():
     cases = {
         "那我们就直接进入一个珊瑚场啊": [

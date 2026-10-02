@@ -172,11 +172,31 @@ def test_queue_isolates_media_failure_and_emits_ordered_events(tmp_path):
     assert events[kinds.index("media_completed")].media_path.endswith("good.wav")
 
 
-def test_skip_overwrite_policy_does_not_call_processor(tmp_path):
+def test_empty_runtime_exception_still_returns_actionable_failure(tmp_path):
+    class EmptyRuntimeFailurePipeline(FakePipeline):
+        @staticmethod
+        def check_runtime(legacy):
+            raise RuntimeError()
+
+    result = run_media_queue(
+        [_media(tmp_path, "missing-cuda.wav")],
+        RunOptions(),
+        _legacy=FakeLegacy(tmp_path),
+        _pipeline=EmptyRuntimeFailurePipeline(),
+    )
+
+    assert result.exit_code == 1
+    assert "运行环境检查失败" in result.failures[0].error
+    assert "RuntimeError" in result.failures[0].error
+
+
+def test_skip_overwrite_policy_does_not_call_processor(tmp_path, monkeypatch):
     legacy = FakeLegacy(tmp_path)
     pipeline = FakePipeline()
     media_path = _media(tmp_path, "existing.wav")
-    Path(legacy.output_paths_for_media(media_path)[1]).write_text("existing", encoding="utf-8")
+    target = tmp_path / "existing.2byteproj"
+    target.write_text("existing", encoding="utf-8")
+    monkeypatch.setattr("twobyteasr.studio_project.canonical_project_path", lambda _: target)
     result = run_media_queue(
         [media_path],
         RunOptions(overwrite_policy="skip"),
@@ -228,6 +248,19 @@ def test_single_media_queue_does_not_keep_model_session_alive(tmp_path):
         _pipeline=FakePipeline(),
     )
     assert legacy.local_asr_session_events == []
+
+
+def test_single_studio_run_starts_persistent_model_session_without_queue_release(tmp_path):
+    legacy = FakeLegacy(tmp_path)
+    project_path = tmp_path / "active.2byteproj"
+    project_path.write_text("{}", encoding="utf-8")
+    run_media_queue(
+        [_media(tmp_path, "studio.wav")],
+        RunOptions(studio_project_path=str(project_path), recognition_purpose="analysis"),
+        _legacy=legacy,
+        _pipeline=FakePipeline(),
+    )
+    assert legacy.local_asr_session_events == ["begin"]
 
 
 def test_queue_passes_explicit_runtime_context_to_context_aware_pipeline(tmp_path):

@@ -1,5 +1,4 @@
 <div align="center">
-<img src="assets/2byteasr-icon-transparent.png" width="100" alt="2ByteASR のマスコット" />
 
 # 2ByteASR · 兔白字幕
 
@@ -8,7 +7,7 @@
 無料の字幕作成・動画編集ツール。ローカル環境で利用できます。<br/>
 文字起こしから校正、字幕エフェクト、動画の書き出しまで、ひとつのアプリで。
 
-[ダウンロード／リリース](https://github.com/NOTBAD314/2ByteASR/releases) · [機能紹介](docs/product-demo.ja.md) · [クイックスタート](#ダウンロードとクイックスタート)
+[ソースの範囲](SOURCE_ONLY_SCOPE.md) · [機能紹介](docs/product-demo.ja.md) · [クイックスタート](#ダウンロードとクイックスタート)
 
 [中文](README.md) · [English](README_EN.md) · [日本語](README_JA.md)
 </div>
@@ -18,6 +17,8 @@
 *ホーム画面で素材と認識設定を準備。字幕ワークスペースを開いて、編集の続きを始めることもできます。*
 
 ## ひとつの字幕を、3つの役割で仕上げる
+
+対応状況：Windows 0.5.0 修正版は、クラウドキー不要のローカル認識、字幕編集とカット、保存・再読込、字幕と短い動画の書き出しを検証済みです。[macOS Apple Silicon 実験版](docs/deployment/macos-experimental.zh-CN.md)のアプリも生成済みで、SenseVoice CPU の主要な操作を検証しました。Developer ID 署名・公証は行っておらず、Intel、モデル全体の MPS、実際の聴感、すべての長時間処理は未検証です。公開インストーラーはまだありません。Docker の製品展開は取り下げました。
 
 文字起こしで話し言葉をテキストにし、タイミング調整で文字や単語を映像に合わせ、照合で同じ発話の認識結果を比較します。素材と機器に合わせてモデルを組み合わせ、必要に応じて AI による文の分割も利用できます。
 
@@ -63,9 +64,9 @@
 
 ## ダウンロードとクイックスタート
 
-**Windows x64** に対応。[リリースとダウンロード](https://github.com/NOTBAD314/2ByteASR/releases)。
+**Windows x64** 向けです。本リポジトリで提供するのは限定されたソースです。**公開インストーラーはまだありません**。内部テスト候補は公開ダウンロード版ではありません。この範囲は既存 Setup の完全な対応ソースではなく、このツリーだけでの完全なビルドは未検証です。[ソースの範囲とビルド条件](SOURCE_ONLY_SCOPE.md)をご確認ください。
 
-1. **アプリをインストール。** リリースページからインストーラーを入手し、Setup を実行します。
+1. **ソースを準備。** [ソースの範囲とビルド条件](SOURCE_ONLY_SCOPE.md)を読み、独立した開発環境で利用権限のある外部依存関係を準備します。以降は依存関係の準備後の製品利用手順です。
 2. **認識の準備。** モデル工房でローカルモデルを準備するか、利用するオンラインサービスを設定します。
 3. **素材を読み込み、文字起こし。** 素材、コンテンツ設定、用語集を選び、認識テキスト、単語のタイミング、話者の結果を確認します。
 4. **字幕ワークスペースを開く。** 校正、分割・結合、字幕と映像の調整を行い、字幕ファイル、原稿、字幕を焼き込んだ動画を書き出します。
@@ -79,12 +80,12 @@
 - **オンラインサービス：** 自分のアカウントまたは API キーを使用します。料金は各サービスの規定に従います。
 - **出力：** SRT、ASS、TXT、JSON、話者別トラック、MP4・MKV・MOV 動画。
 
-[インストールと初回設定](docs/product-guide.ja.md#インストールと準備) · [モデル・形式・応用](docs/product-guide.ja.md) · [リリース履歴](https://github.com/NOTBAD314/2ByteASR/releases)
+[インストールと初回設定](docs/product-guide.ja.md#インストールと準備) · [モデル・形式・応用](docs/product-guide.ja.md) · [ソースの範囲とビルド条件](SOURCE_ONLY_SCOPE.md)
 
 ## ドキュメントとフィードバック
 
-[画面と機能の紹介](docs/product-demo.ja.md) · [ソースからの実行とビルド](docs/product-guide.ja.md#ソースからの実行とビルド) · [アーキテクチャ](ARCHITECTURE.md) · [問題を報告](https://github.com/NOTBAD314/2ByteASR/issues)
+[画面と機能の紹介](docs/product-demo.ja.md) · [ソースからの実行とビルド](docs/product-guide.ja.md#ソースからの実行とビルド) · [ソース提供の説明](SOURCE_DELIVERY.md) · [問題を報告](https://github.com/NOTBAD314/2ByteASR/issues)
 
 問題を報告する際は、バージョン、モデル、再現手順、スクリーンショットを添えてください。
 
-プロジェクトのライセンスは [LICENSE](LICENSE)、外部コンポーネントは[サードパーティに関する記載](THIRD_PARTY_NOTICES.md)を参照してください。
+プロジェクト固有のコードは **GPL-3.0-only** です（[英語の正式な全文](LICENSE)・[適用範囲](PROJECT_LICENSE.md)）。公式版は無料で提供します。GPL のソース提供等の条件に従い、商用利用・改変・有償再配布が可能です。私的な改変の公開は不要です。通常の字幕・動画・画像は、本ソフトで生成しただけで GPL の対象にはなりません。[第三者のライセンス](THIRD_PARTY_NOTICES.md)と[対応ソースの提供方法](SOURCE_DELIVERY.md)をご覧ください。

@@ -1,0 +1,115 @@
+{
+  "assets": [
+    {
+      "file": "speaker-tracks.gif",
+      "type": "fixed camera; original React components; real pointer clicks",
+      "seconds": 8,
+      "fps": 25,
+      "width": 1080,
+      "bytes": 378027,
+      "sha256": "fcbca941d830d1859e6c1a59571ef82e38320ffd3600287c92b93dde6dede2e4"
+    },
+    {
+      "file": "word-split.gif",
+      "type": "fixed camera; original React components; real pointer clicks",
+      "seconds": 10,
+      "fps": 25,
+      "width": 1080,
+      "bytes": 1127045,
+      "sha256": "b0ba9eca62304393f9f55db94dc9a69f2a0473d45f1681d37264b9dd155d6670"
+    },
+    {
+      "file": "candidate-review.gif",
+      "type": "fixed camera; original React components; real pointer clicks",
+      "seconds": 9,
+      "fps": 25,
+      "width": 1080,
+      "bytes": 245129,
+      "sha256": "9a8c77753d9fcf69d1377fb3e8190022e0d9f4e618ba45e0d4b3d47075727fc5"
+    },
+    {
+      "file": "live-clips.gif",
+      "type": "fixed camera; original React components; real pointer clicks",
+      "seconds": 11,
+      "fps": 25,
+      "width": 1080,
+      "bytes": 635352,
+      "sha256": "f2a70e384e03dabbc05d333c2b1cede9f8dc9a96291da783b8a47cc0dcf704cd"
+    },
+    {
+      "file": "caption-effects.gif",
+      "type": "existing HTML artwork replay at exact clock times",
+      "seconds": 3.8,
+      "fps": 25,
+      "width": 1080,
+      "bytes": 1400866,
+      "sha256": "9498aff83076833add559fb1c248898019484c4441c7941e6a6bdd6c404828ec"
+    },
+    {
+      "file": "candidate-review.png",
+      "type": "product interaction example / static frame",
+      "bytes": 37724,
+      "sha256": "4c8fe2fca5ea8b1cc52e31e53f1abf1d65f7c314b6e96bb1d6a5b20be93e8842"
+    },
+    {
+      "file": "caption-effects.png",
+      "type": "product interaction example / static frame",
+      "bytes": 208894,
+      "sha256": "aefa9e69bcebe5faf13253159e1fccd22e8c1ae43312000e9fefcae9c66d54f6"
+    },
+    {
+      "file": "desktop-brand.png",
+      "type": "native window",
+      "bytes": 258350,
+      "sha256": "a93f39c499fd18b6cf67c7fcb39e094088869f45aa003fd1c3d1b0e6a0f7a31e"
+    },
+    {
+      "file": "glossary.png",
+      "type": "product interaction example / static frame",
+      "bytes": 96480,
+      "sha256": "71b510203c6617d5df0dba1648ae4480c4e54e265dcdfd32d6caea5c6ed11c2d"
+    },
+    {
+      "file": "live-clips.png",
+      "type": "product interaction example / static frame",
+      "bytes": 67579,
+      "sha256": "325feb4f0e21d198a7609433f3701d8e2f66f0a4380c3c3c01c6b6b1fb4c91ec"
+    },
+    {
+      "file": "model-roles.png",
+      "type": "product interaction example / static frame",
+      "bytes": 91225,
+      "sha256": "92f992458fe6182e36687a917870cdcb3fecf15c84875e7c949385cf1b904195"
+    },
+    {
+      "file": "overview.png",
+      "type": "product interaction example / static frame",
+      "bytes": 100920,
+      "sha256": "42709af066cc151f715c3be013664c05fc0e63419bdb8412feb5078f173316d9"
+    },
+    {
+      "file": "speaker-tracks.png",
+      "type": "product interaction example / static frame",
+      "bytes": 43173,
+      "sha256": "d4209402be9f0ae55e6fa24a703463983e254d7ed67c62ae123dac584bb51540"
+    },
+    {
+      "file": "studio-result.png",
+      "type": "product interaction example / static frame",
+      "bytes": 136004,
+      "sha256": "c7f267242077c32569eee96ce04f0276a29df23175707ba8d00dbe0b9139841c"
+    },
+    {
+      "file": "word-split.png",
+      "type": "product interaction example / static frame",
+      "bytes": 78495,
+      "sha256": "23c3366308fea0ad08d23fc383dfa8880ae8935c0bb2a1aa9092f43c531d33dd"
+    }
+  ],
+  "source": "website/product/readme.jsx; original product components; fixed camera",
+  "not_claimed": [
+    "inference speed",
+    "recognition accuracy"
+  ],
+  "gif_bytes": 3786419
+}

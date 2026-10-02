@@ -1,0 +1,97 @@
+{
+  "brief": {
+    "style": "死亡搁浅工业重载",
+    "mood": "克制、超自然、沉重",
+    "scope": "fullscreen",
+    "anchor": "下三分之一安全区",
+    "foreground": "货箱与机械爪",
+    "midground": "黑索与手印",
+    "background": "低透明时间雨",
+    "materials": "炭黑耐磨漆与冷轧钢",
+    "palette_ratio": "70/25/5",
+    "typography": "中文清晰钢白字",
+    "entrance": "机械爪弹开和金色扫描",
+    "hold": "克制扫描与时间雨",
+    "exit": "回收下沉",
+    "forbidden_patterns": [
+      "普通黑条",
+      "emoji",
+      "全屏高亮霓虹"
+    ],
+    "performance_level": "realtime",
+    "transparent": true,
+    "allow_vignette": true
+  },
+  "concepts": [
+    {
+      "id": "A",
+      "name": "工业货箱",
+      "subject": "欧卓德克与铆接底板",
+      "composition": "下三分之一安全区，前景货箱，中景黑索，中文清晰",
+      "palette": "70炭黑/25钢灰/5开罗尔金",
+      "materials": "哑光冷钢",
+      "motion": {
+        "entrance": "机械展开扫描",
+        "hold": "慢速呼吸扫描",
+        "exit": "下沉回收"
+      },
+      "signature_elements": [
+        "机械爪",
+        "晶簇",
+        "冷钢铆钉",
+        "时间雨",
+        "黑索"
+      ],
+      "risks": [],
+      "estimated_performance": "low"
+    },
+    {
+      "id": "B",
+      "name": "手性地形",
+      "subject": "金色地形线与钢制铭牌",
+      "composition": "右侧仪表与底部铭牌，中文保持清晰",
+      "palette": "70炭黑/25钢灰/5开罗尔金",
+      "materials": "哑光冷钢",
+      "motion": {
+        "entrance": "机械展开扫描",
+        "hold": "慢速呼吸扫描",
+        "exit": "下沉回收"
+      },
+      "signature_elements": [
+        "机械爪",
+        "晶簇",
+        "冷钢铆钉",
+        "时间雨",
+        "黑索"
+      ],
+      "risks": [
+        "遮挡控制"
+      ],
+      "estimated_performance": "medium"
+    },
+    {
+      "id": "C",
+      "name": "时间雨运输",
+      "subject": "时间雨中的搬运架",
+      "composition": "双侧运输架与底部挂载板，中文安全区",
+      "palette": "70炭黑/25钢灰/5开罗尔金",
+      "materials": "哑光冷钢",
+      "motion": {
+        "entrance": "机械展开扫描",
+        "hold": "慢速呼吸扫描",
+        "exit": "下沉回收"
+      },
+      "signature_elements": [
+        "机械爪",
+        "晶簇",
+        "冷钢铆钉",
+        "时间雨",
+        "黑索"
+      ],
+      "risks": [
+        "遮挡控制"
+      ],
+      "estimated_performance": "high"
+    }
+  ]
+}

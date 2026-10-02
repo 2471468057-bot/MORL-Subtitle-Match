@@ -1,12 +1,14 @@
-﻿"""Run MOSS-Transcribe-Diarize in its isolated Transformers 5 environment."""
+"""Run MOSS-Transcribe-Diarize in its isolated Transformers 5 environment."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -16,6 +18,13 @@ DEFAULT_PROMPT = (
     "（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，"
     "并在段末标注结束时间戳，以清晰标明该段语音范围。"
 )
+
+
+def parsed_speaker_label(value, chunk_id):
+    label = str(value).strip('[] ') if value is not None else ''
+    if not label:
+        raise RuntimeError(f'MOSS 第 {chunk_id} 块说话人标签解析失败：标签为空，未默认归入 S00。')
+    return label
 
 
 def parse_args():
@@ -56,10 +65,111 @@ def media_duration(path):
         return 0.0
 
 
-def resolve_model(requested):
-    local_model = Path(__file__).resolve().parent / "models" / "MOSS-Transcribe-Diarize"
-    if (local_model / "config.json").is_file():
-        return str(local_model)
+class ModelIntegrityError(RuntimeError):
+    pass
+
+
+def _vendored_model_root():
+    """Registered MODEL_ROOT: 2BYTEASR_MODEL_ROOT env, then runtime_paths.json."""
+    override = os.environ.get("2BYTEASR_MODEL_ROOT", "").strip()
+    if override and os.path.isdir(override):
+        return override
+    base = (Path(os.environ.get("LOCALAPPDATA") or Path.home())).resolve()
+    config = (base / "2ByteASR" / "runtime_paths.json").resolve()
+    try:
+        with config.open(encoding="utf-8") as stream:
+            payload = json.load(stream)
+        candidate = str(payload.get("model_root") or "").strip()
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def _vendored_verify_model_files(model_name, model_root, *, install_root):
+    """Minimal stand-in for twobyteasr.model_integrity.verify_model_files.
+
+    Importing the package executes twobyteasr/__init__, whose service-chain
+    side effects load the GUI bundle's cp310 .pyd files and break this 3.12
+    worker ("Module use of python310.dll conflicts"). Same contract here:
+    required files must exist inside the model directory, sha256-pinned
+    files must match, and the location must be a known root.
+    """
+    lock_path = (Path(install_root) / "dependencies.lock.json").resolve()
+    with lock_path.open(encoding="utf-8") as stream:
+        lock = json.load(stream)
+    try:
+        spec = lock["models"][model_name]
+    except KeyError as exc:
+        raise ModelIntegrityError(f"依赖锁中没有模型：{model_name}") from exc
+    target = Path(model_root).resolve()
+    allowed = [(Path(install_root).resolve())]
+    registered = _vendored_model_root()
+    if registered:
+        allowed.append(Path(registered).resolve())
+    inside = any(target.is_relative_to(root) for root in allowed)
+    if not inside and not target.is_dir():
+        raise ModelIntegrityError(f"拒绝校验未知位置的模型：{target}")
+
+    def _safe(relative):
+        candidate = (target / relative).resolve()
+        if candidate == target or candidate.is_relative_to(target):
+            return candidate
+        raise ModelIntegrityError(f"模型锁包含非法路径：{relative}")
+
+    for relative in dict.fromkeys(spec.get("required_files", ())):
+        candidate = _safe(relative)
+        if not candidate.is_file():
+            raise ModelIntegrityError(
+                f"模型必需文件缺失：{candidate}\n"
+                "请重新运行 download_models.bat，程序会断点续传并只补下载缺失文件。"
+            )
+    for relative, expected in (spec.get("sha256") or {}).items():
+        candidate = _safe(relative)
+        if not candidate.is_file():
+            raise ModelIntegrityError(
+                f"模型关键文件缺失：{candidate}\n"
+                "请重新运行 download_models.bat，程序会断点续传并只补下载缺失文件。"
+            )
+        digest = hashlib.sha256()
+        with candidate.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest().lower() != str(expected).lower():
+            raise ModelIntegrityError(
+                f"模型文件校验失败，已拒绝加载：{candidate.name}。"
+                f"请删除损坏文件 {candidate} 后重新运行 download_models.bat。"
+            )
+    return target
+
+
+def resolve_model(requested, install_root):
+    script_local = (Path(__file__).resolve().parent / "models" / "MOSS-Transcribe-Diarize")
+    if (script_local / "config.json").is_file():
+        return str(script_local)
+    # Registered MODEL_ROOT: env override, then the persisted runtime_paths.json.
+    override = os.environ.get("2BYTEASR_MODEL_ROOT", "").strip()
+    if override:
+        found = Path(override) / "MOSS-Transcribe-Diarize"
+        if (found / "config.json").is_file():
+            return str(found)
+    base = (Path(os.environ.get("LOCALAPPDATA") or Path.home())).resolve()
+    runtime_paths_file = (base / "2ByteASR" / "runtime_paths.json").resolve()
+    try:
+        with runtime_paths_file.open(encoding="utf-8") as stream:
+            payload = json.load(stream)
+        model_root = str(payload.get("model_root") or "").strip()
+        if model_root:
+            found = Path(model_root) / "MOSS-Transcribe-Diarize"
+            if (found / "config.json").is_file():
+                return str(found)
+    except (OSError, ValueError):
+        pass
+    # Last resort: models shipped beside the install root.
+    found = Path(install_root) / "models" / "MOSS-Transcribe-Diarize"
+    if (found / "config.json").is_file():
+        return str(found)
     return requested
 
 
@@ -114,6 +224,11 @@ def save_chunk_checkpoint(checkpoint_dir, run_signature, result):
 
 
 def main():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Source checkout workers live beside dependencies.lock.json; packaged
+    # workers live beside the executable. Resolve both without assuming a
+    # parent directory layout.
+    install_root = script_dir if os.path.isfile(os.path.join(script_dir, "dependencies.lock.json")) else os.path.dirname(script_dir)
     args = parse_args()
     if not args.audio and not args.manifest:
         raise ValueError("--audio 与 --manifest 至少提供一个。")
@@ -122,6 +237,40 @@ def main():
     module_cache = Path(args.output).resolve().parent / ".hf_modules_cache"
     module_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_MODULES_CACHE", str(module_cache))
+
+    # P0: Print exact interpreter + torch + CUDA reality at the very start of the worker
+    # so logs always show which python and whether it is CPU-only or real CUDA.
+    try:
+        import sys as _sys
+        import torch as _torch
+        import subprocess as _subprocess
+        print("[MOSS ENV]", flush=True)
+        print("Python:", _sys.executable, flush=True)
+        print("Torch:", _torch.__version__, flush=True)
+        print("Torch __file__:", getattr(_torch, "__file__", None), flush=True)
+        cu = getattr(getattr(_torch, "version", None), "cuda", None)
+        print("Torch CUDA runtime:", cu, flush=True)
+        avail = False
+        try:
+            avail = bool(_torch.cuda.is_available())
+        except Exception:
+            avail = False
+        print("CUDA available:", avail, flush=True)
+        try:
+            if avail and _torch.cuda.device_count() > 0:
+                print("GPU:", _torch.cuda.get_device_name(0), flush=True)
+            else:
+                print("GPU: (none visible)", flush=True)
+        except Exception as _ge:
+            print("GPU: error", _ge, flush=True)
+        try:
+            _ns = _subprocess.check_output(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"], timeout=8, stderr=_subprocess.STDOUT)
+            print("nvidia-smi:", _ns.decode("utf-8", errors="replace").strip()[:300], flush=True)
+        except Exception as _ne:
+            print("nvidia-smi inside worker:", _ne, flush=True)
+    except Exception as _pe:
+        print("[MOSS ENV] probe failed:", _pe, flush=True)
+
     import torch
     from transformers import AutoModelForCausalLM, AutoProcessor
 
@@ -136,10 +285,8 @@ def main():
     if device.type != "cuda":
         raise RuntimeError("MOSS 当前工作流要求 CUDA GPU。")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model_source = resolve_model(args.model)
-    from twobyteasr.model_integrity import verify_model_files
-
-    verify_model_files("moss", model_source)
+    model_source = resolve_model(args.model, install_root)
+    _vendored_verify_model_files("moss", model_source, install_root=install_root)
     prompt = DEFAULT_PROMPT
 
     torch.cuda.empty_cache()
@@ -240,7 +387,7 @@ def main():
                 {
                     "start": start,
                     "end": end,
-                    "speaker": str(segment.speaker).strip("[] ") or "S00",
+                    "speaker": parsed_speaker_label(segment.speaker, job_index),
                     "text": text,
                 }
             )

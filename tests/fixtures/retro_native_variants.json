@@ -1,0 +1,557 @@
+[
+  {
+    "schema": "2byte.visual-design-graph",
+    "version": 1,
+    "name": "1930s Cream Rubber Hose",
+    "seed": 1930,
+    "textLayer": {
+      "id": "text",
+      "font": {
+        "family": "KaiTi",
+        "size": 60,
+        "weight": 700
+      },
+      "fill": {
+        "type": "solid",
+        "color": "#FFFFF1D4"
+      },
+      "strokes": [
+        {
+          "color": "#FF151413",
+          "width": 7,
+          "opacity": 1,
+          "alignment": "OUTSIDE"
+        },
+        {
+          "color": "#FFF6E6C7",
+          "width": 1.5,
+          "opacity": 1,
+          "alignment": "OUTSIDE"
+        }
+      ],
+      "shadow": {},
+      "glow": {},
+      "letterSpacing": 0.8,
+      "lineSpacing": 1.1,
+      "alignment": 2,
+      "emphasis": {}
+    },
+    "panelLayer": {
+      "id": "panel",
+      "primitive": "ROUNDED_PANEL",
+      "params": {
+        "color": "#E82A2319",
+        "paddingX": 20,
+        "paddingY": 10,
+        "radius": 4,
+        "outlineColor": "#FFFFF1D4",
+        "outlineWidth": 1.2
+      }
+    },
+    "decorationLayers": [
+      {
+        "id": "registration",
+        "primitive": "ACCENT_BARS",
+        "params": {
+          "color": "#FFA87A4A",
+          "count": 4,
+          "opacity": 0.5
+        },
+        "seed": 1930
+      }
+    ],
+    "effectLayers": [],
+    "motionGraph": {
+      "durationMs": 2400,
+      "staggerMs": 0,
+      "tracks": [
+        {
+          "target": "group",
+          "property": "opacity",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 180,
+              "value": 1,
+              "easing": "ease-out"
+            },
+            {
+              "timeMs": 2200,
+              "value": 1,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 2400,
+              "value": 0,
+              "easing": "ease-in"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "text",
+          "property": "scale_x",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0.78,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 130,
+              "value": 1.14,
+              "easing": "overshoot"
+            },
+            {
+              "timeMs": 300,
+              "value": 1,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "text",
+          "property": "scale_y",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 1.18,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 130,
+              "value": 0.88,
+              "easing": "overshoot"
+            },
+            {
+              "timeMs": 300,
+              "value": 1,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "mask_reveal",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 200,
+              "value": 1,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "opacity",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0.96,
+              "easing": "step"
+            },
+            {
+              "timeMs": 650,
+              "value": 0.86,
+              "easing": "step"
+            },
+            {
+              "timeMs": 710,
+              "value": 0.96,
+              "easing": "step"
+            },
+            {
+              "timeMs": 1500,
+              "value": 0.88,
+              "easing": "step"
+            },
+            {
+              "timeMs": 1560,
+              "value": 0.96,
+              "easing": "step"
+            }
+          ],
+          "postBehavior": "HOLD"
+        }
+      ]
+    }
+  },
+  {
+    "schema": "2byte.visual-design-graph",
+    "version": 1,
+    "name": "1930s Sepia Silent Intertitle",
+    "seed": 1931,
+    "textLayer": {
+      "id": "text",
+      "font": {
+        "family": "SimSun",
+        "size": 60,
+        "weight": 700
+      },
+      "fill": {
+        "type": "solid",
+        "color": "#FFFFE8BE"
+      },
+      "strokes": [
+        {
+          "color": "#FF171513",
+          "width": 4.5,
+          "opacity": 1,
+          "alignment": "OUTSIDE"
+        }
+      ],
+      "shadow": {},
+      "glow": {},
+      "letterSpacing": 0.8,
+      "lineSpacing": 1.1,
+      "alignment": 2,
+      "emphasis": {}
+    },
+    "panelLayer": {
+      "id": "panel",
+      "primitive": "RECTANGLE",
+      "params": {
+        "color": "#EE2E1717",
+        "paddingX": 20,
+        "paddingY": 10,
+        "radius": 4,
+        "outlineColor": "#FFFFE8BE",
+        "outlineWidth": 1.2
+      }
+    },
+    "decorationLayers": [],
+    "effectLayers": [],
+    "motionGraph": {
+      "durationMs": 2400,
+      "staggerMs": 0,
+      "tracks": [
+        {
+          "target": "group",
+          "property": "opacity",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 180,
+              "value": 1,
+              "easing": "ease-out"
+            },
+            {
+              "timeMs": 2200,
+              "value": 1,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 2400,
+              "value": 0,
+              "easing": "ease-in"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "y",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 18,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 230,
+              "value": 0,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "mask_reveal",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 280,
+              "value": 1,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "text",
+          "property": "tracking",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 7,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 320,
+              "value": 0,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "rotation",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": -1.6,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 170,
+              "value": 0.4,
+              "easing": "overshoot"
+            },
+            {
+              "timeMs": 320,
+              "value": 0,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        }
+      ]
+    }
+  },
+  {
+    "schema": "2byte.visual-design-graph",
+    "version": 1,
+    "name": "1930s Monochrome Lithograph",
+    "seed": 1932,
+    "textLayer": {
+      "id": "text",
+      "font": {
+        "family": "KaiTi",
+        "size": 60,
+        "weight": 700
+      },
+      "fill": {
+        "type": "solid",
+        "color": "#FFE7E7E7"
+      },
+      "strokes": [
+        {
+          "color": "#FF111111",
+          "width": 3,
+          "opacity": 1,
+          "alignment": "OUTSIDE"
+        },
+        {
+          "color": "#FFBBBBBB",
+          "width": 1,
+          "opacity": 1,
+          "alignment": "OUTSIDE"
+        }
+      ],
+      "shadow": {},
+      "glow": {},
+      "letterSpacing": 0.8,
+      "lineSpacing": 1.1,
+      "alignment": 2,
+      "emphasis": {}
+    },
+    "panelLayer": {
+      "id": "panel",
+      "primitive": "TORN_PAPER",
+      "params": {
+        "color": "#E8202020",
+        "paddingX": 20,
+        "paddingY": 10,
+        "radius": 4,
+        "outlineColor": "#FFE7E7E7",
+        "outlineWidth": 1.2
+      }
+    },
+    "decorationLayers": [
+      {
+        "id": "print-dots",
+        "primitive": "HALFTONE",
+        "params": {
+          "color": "#FF777777",
+          "opacity": 0.18,
+          "spacing": 8
+        },
+        "seed": 1932
+      }
+    ],
+    "effectLayers": [],
+    "motionGraph": {
+      "durationMs": 2400,
+      "staggerMs": 0,
+      "tracks": [
+        {
+          "target": "group",
+          "property": "opacity",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 180,
+              "value": 1,
+              "easing": "ease-out"
+            },
+            {
+              "timeMs": 2200,
+              "value": 1,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 2400,
+              "value": 0,
+              "easing": "ease-in"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "text",
+          "property": "rotation",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": -3,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 130,
+              "value": 0.7,
+              "easing": "overshoot"
+            },
+            {
+              "timeMs": 260,
+              "value": 0,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "text",
+          "property": "y",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 300,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 450,
+              "value": 1.4,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 600,
+              "value": -1.4,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 750,
+              "value": 0.9,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 900,
+              "value": -1.2,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 1300,
+              "value": 1.1,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 1500,
+              "value": -1.4,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 1800,
+              "value": 1.2,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 2100,
+              "value": 0,
+              "easing": "linear"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "mask_reveal",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 0,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 240,
+              "value": 1,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        },
+        {
+          "target": "panel",
+          "property": "rotation",
+          "keyframes": [
+            {
+              "timeMs": 0,
+              "value": 1.5,
+              "easing": "linear"
+            },
+            {
+              "timeMs": 180,
+              "value": -0.6,
+              "easing": "overshoot"
+            },
+            {
+              "timeMs": 300,
+              "value": 0,
+              "easing": "ease-out"
+            }
+          ],
+          "postBehavior": "HOLD"
+        }
+      ]
+    }
+  }
+]

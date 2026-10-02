@@ -29,11 +29,31 @@ def test_model_integrity_rejects_modified_security_file(tmp_path):
         verify_model_files("demo", root=tmp_path)
 
 
-def test_model_integrity_rejects_external_override(tmp_path):
+def test_model_integrity_checks_required_files_even_without_hash(tmp_path):
+    model = tmp_path / "models" / "demo"
+    model.mkdir(parents=True)
+    lock = {
+        "schema_version": 1,
+        "models": {
+            "demo": {
+                "path": "models/demo",
+                "required_files": ["runtime-required.bin"],
+                "sha256": {},
+            }
+        },
+    }
+    (tmp_path / "dependencies.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    with pytest.raises(ModelIntegrityError, match="模型必需文件缺失"):
+        verify_model_files("demo", root=tmp_path)
+
+
+def test_model_integrity_rejects_unknown_external_override(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr('twobyteasr.runtime_paths.get_runtime_paths',lambda:SimpleNamespace(model_root=tmp_path/'models',install_root=tmp_path))
     outside = tmp_path.parent / "outside-model"
     lock = {"schema_version": 1, "models": {"demo": {"path": "models/demo", "sha256": {}}}}
     (tmp_path / "dependencies.lock.json").write_text(json.dumps(lock), encoding="utf-8")
-    with pytest.raises(ModelIntegrityError, match="项目目录外"):
+    with pytest.raises(ModelIntegrityError, match="未知位置"):
         verify_model_files("demo", outside, root=tmp_path)
 
 

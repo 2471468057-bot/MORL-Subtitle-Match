@@ -96,16 +96,20 @@ def test_repeated_exact_homophone_uses_explicit_user_glossary():
     ]
 
 
-def test_cloud_grouping_fallback_keeps_a_complete_human_length_utterance():
+def test_cloud_grouping_fallback_preserves_text_and_interval_with_comfort_splits():
     text = "这个终末地的单肩包还蛮有设计感的"
     segment = _segment(1, text, start=23.88, end=25.85)
 
     cues = fallback_group([segment])
 
-    assert len(cues) == 1
-    assert cues[0].text == text
+    # 2026-09-03 contract: local fallback splits 13–16 characters to <=12;
+    # cloud semantic boundaries remain separate. No text/time is discarded.
+    assert len(cues) == 2
+    assert ''.join(cue.text for cue in cues) == text
+    assert all(subtitle_core.display_length(cue.text)<=12 for cue in cues)
     assert cues[0].start == segment.start
-    assert cues[0].end == segment.end
+    assert cues[-1].end == segment.end
+    assert all(left.end==right.start for left,right in zip(cues,cues[1:]))
 
 
 def test_permanent_cloud_failure_marks_later_batches_as_fallback_not_cacheable():
@@ -132,4 +136,29 @@ def test_permanent_cloud_failure_marks_later_batches_as_fallback_not_cacheable()
     assert result == {1: segment.text}
     assert [item["category"] for item in polish_items] == ["校对回退"]
     assert [item["category"] for item in group_items] == ["断句回退"]
-    assert [cue.text for cue in cues] == [segment.text]
+    assert ''.join(cue.text for cue in cues) == segment.text
+    assert cues[0].start==segment.start and cues[-1].end==segment.end
+
+
+def test_successful_adjudication_resolves_only_matching_disagreement_items():
+    subtitle_core.reset_review_items()
+    subtitle_core.add_review_item(
+        1.0, "多模型争议", "待裁决", "甲", priority=2, segment_id=7
+    )
+    subtitle_core.add_review_item(
+        2.0, "多模型争议", "另一段", "乙", priority=2, segment_id=8
+    )
+    subtitle_core.add_review_item(
+        1.0, "低置信度", "仍需查看", "甲", priority=2, segment_id=7
+    )
+
+    removed = subtitle_core.resolve_review_items(
+        categories={"多模型争议", "多模型文本冲突"}, segment_ids={7}
+    )
+
+    assert removed == 1
+    assert [(item["category"], item.get("segment_id")) for item in subtitle_core.RUN_REVIEW_ITEMS] == [
+        ("多模型争议", 8),
+        ("低置信度", 7),
+    ]
+    subtitle_core.reset_review_items()

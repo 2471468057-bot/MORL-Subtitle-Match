@@ -1,6 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string]$OutputDir = "",
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
+    [string]$Version = "",
+    [switch]$RefreshWheels,
     [switch]$Lite
 )
 
@@ -12,15 +15,33 @@ param(
 # -Lite：精简版（用于 GitHub Releases，<2GB）——不含模型，只带程序 + 源码 + 内置工具；
 # 首次配置时模型自动下载（约 7 GB 默认 / 11.7 GB 含 Qwen，可断点续传）。
 #
-# 用法：powershell -ExecutionPolicy Bypass -File scripts/build_offline_bundle.ps1 [-Lite]
-# 产物：dist/2ByteASR-portable-<日期>.7z（完整版，约 10-12 GB）
-#       或 dist/2ByteASR-lite-<日期>.7z（精简版，约 1.5 GB；需要 7-Zip）
+# 用法：powershell -ExecutionPolicy Bypass -File scripts/build_offline_bundle.ps1 -Version 0.1.15 [-Lite]
+# 产物：dist/2ByteASR-Portable-<版本>.7z（完整版，约 10-12 GB）
+#       或 dist/2ByteASR-Lite-<版本>.7z（精简版，约 1 GB；需要 7-Zip）
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDir) { $OutputDir = Join-Path $ProjectRoot "dist" }
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+$versionPath = Join-Path $ProjectRoot "2byteasr_version.json"
+if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+    throw "缺少版本元数据：$versionPath"
+}
+$metadataVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8 | ConvertFrom-Json).version
+$lockPath = Join-Path $ProjectRoot "dependencies.lock.json"
+if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+    throw "缺少依赖版本清单：$lockPath"
+}
+$dependencyLock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$torchCpuVersion = [string]$dependencyLock.runtime.torch
+$audioCpuVersion = [string]$dependencyLock.runtime.torchaudio
+$setuptoolsVersion = [string]$dependencyLock.runtime.setuptools
+$wheelVersion = [string]$dependencyLock.runtime.wheel
+if (-not $Version) { $Version = $metadataVersion }
+if ($Version -ne $metadataVersion) {
+    throw "请求打包版本 $Version 与项目版本 $metadataVersion 不一致。请先构建对应版本安装包。"
+}
 
 $models = Join-Path $ProjectRoot "models"
 $thirdParty = Join-Path $ProjectRoot "third_party"
@@ -64,8 +85,9 @@ New-Item -ItemType Directory -Path $staging -Force | Out-Null
 $excludeDirs = @(
     ".venv-main", ".venv-moss", ".venv", ".uv-python", ".uv-cache",
     "tmp", "dist", "backups", "archive", "outputs", "output", "reports",
-    "review_tracks", "__pycache__", ".pytest_cache", ".git", ".mimosa", ".zcode",
-    "models", "third_party", "2byteasr.setup-complete"
+    "review_tracks", "artifacts", "tests", "__pycache__", ".pytest_cache", ".git",
+    ".github", ".mimosa", ".zcode", "models", "third_party", "design-qa.md", "pytest.ini",
+    "2byteasr.setup-complete", "2byteasr.first-run-done"
 )
 Get-ChildItem $ProjectRoot -Force | Where-Object { $_.Name -notin $excludeDirs } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $staging $_.Name) -Recurse -Force }
@@ -73,6 +95,21 @@ if (-not $Lite) {
     Copy-Item $models (Join-Path $staging "models") -Recurse -Force
 }
 Copy-Item $thirdParty (Join-Path $staging "third_party") -Recurse -Force
+$stagedThirdParty = Join-Path $staging "third_party"
+$stagingPrefix = [IO.Path]::GetFullPath($staging).TrimEnd('\') + '\'
+$junkDirectories = Get-ChildItem $stagedThirdParty -Recurse -Directory -Force |
+    Where-Object { $_.Name -in @(".git", "__pycache__", "tests") -or $_.Name -like "*.egg-info" } |
+    Sort-Object { $_.FullName.Length } -Descending
+foreach ($directory in $junkDirectories) {
+    $resolved = [IO.Path]::GetFullPath($directory.FullName)
+    if (-not $resolved.StartsWith($stagingPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "拒绝清理便携包暂存区之外的目录：$resolved"
+    }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
+Get-ChildItem $stagedThirdParty -Recurse -File -Force |
+    Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
+    Remove-Item -Force
 Write-Host "[打包] 便携目录已组装：$staging" -ForegroundColor Cyan
 
 
@@ -81,6 +118,10 @@ function Invoke-Download {
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][string]$OutFile
     )
+    if ((Test-Path -LiteralPath $OutFile -PathType Leaf) -and
+        (Get-Item -LiteralPath $OutFile).Length -gt 50KB) {
+        return
+    }
     # 部分站点（download.pytorch.org）会拒绝 PowerShell 默认 UA，先试
     # Invoke-WebRequest，失败改用 curl 回退；多次尝试以对抗网络抖动。
     for ($attempt = 1; $attempt -le 3; $attempt++) {
@@ -106,69 +147,15 @@ function Invoke-Download {
     throw "下载失败：$Url"
 }
 
-# 收集内置工具（tools/）：ffmpeg、minGit、Python 安装器、uv —— 便携包免联网安装依赖
-$tools = Join-Path $staging "tools"
-$tmpDownload = Join-Path $OutputDir "tools-tmp"
-New-Item -ItemType Directory -Path $tools -Force | Out-Null
-New-Item -ItemType Directory -Path $tmpDownload -Force | Out-Null
-
-# FFmpeg（gyan.dev essentials，含 ffmpeg/ffprobe）
-Write-Host "[工具] 下载 FFmpeg ..." -ForegroundColor Cyan
-$ffmpegZip = Join-Path $tmpDownload "ffmpeg.zip"
-Invoke-Download "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $ffmpegZip
-Expand-Archive $ffmpegZip (Join-Path $tmpDownload "ffmpeg") -Force
-$ffBin = Get-ChildItem (Join-Path $tmpDownload "ffmpeg") -Recurse -Directory | Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
-if (-not $ffBin) { throw "FFmpeg 解压后未找到 bin 目录。" }
-New-Item -ItemType Directory -Path (Join-Path $tools "ffmpeg\bin") -Force | Out-Null
-Copy-Item (Join-Path $ffBin.FullName "ffmpeg.exe") (Join-Path $tools "ffmpeg\bin") -Force
-Copy-Item (Join-Path $ffBin.FullName "ffprobe.exe") (Join-Path $tools "ffmpeg\bin") -Force
-
-# minGit（Git for Windows 精简便携版，含 git）；多源备援（国内代理 → GitHub 官方）
-Write-Host "[工具] 下载 minGit ..." -ForegroundColor Cyan
-$gitZip = Join-Path $tmpDownload "mingit.zip"
-$gitDownloaded = $false
-foreach ($gitUrl in @(
-    "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
-    "https://ghproxy.net/https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
-    "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip"
-)) {
-    try { Invoke-Download $gitUrl $gitZip; $gitDownloaded = $true; break } catch { Write-Warning "minGit 下载失败（$gitUrl）" }
+# 收集内置工具（tools/）：ffmpeg、minGit、Python 安装器、uv —— 便携包免联网安装依赖。
+# 复用独立收集脚本（与 Setup 安装包共用），项目根 tools/ 为共享缓存。
+$projectTools = Join-Path $ProjectRoot "tools"
+& (Join-Path $PSScriptRoot "collect_tools.ps1") -ToolsDir $projectTools
+if ($LASTEXITCODE -ne 0) {
+    throw "内置工具收集失败（退出码 $LASTEXITCODE）。"
 }
-if (-not $gitDownloaded) { throw "minGit 下载失败（国内网络受限）。" }
-Expand-Archive $gitZip (Join-Path $tools "git") -Force
-if (-not (Test-Path (Join-Path $tools "git\cmd\git.exe"))) { throw "minGit 解压后未找到 git.exe。" }
-
-# uv；多源备援
-Write-Host "[工具] 下载 uv ..." -ForegroundColor Cyan
-$uvZip = Join-Path $tmpDownload "uv.zip"
-$uvDownloaded = $false
-foreach ($uvUrl in @(
-    "https://ghfast.top/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
-    "https://ghproxy.net/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
-    "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-)) {
-    try { Invoke-Download $uvUrl $uvZip; $uvDownloaded = $true; break } catch { Write-Warning "uv 下载失败（$uvUrl）" }
-}
-if (-not $uvDownloaded) { throw "uv 下载失败（国内网络受限）。" }
-Expand-Archive $uvZip (Join-Path $tmpDownload "uv") -Force
-Copy-Item (Join-Path $tmpDownload "uv\uv.exe") (Join-Path $tools "uv.exe") -Force
-
-# Python 官方安装器（3.10 / 3.12）
-foreach ($py in @("3.10.11", "3.12.10")) {
-    Write-Host "[工具] 下载 Python $py 安装器 ..." -ForegroundColor Cyan
-    $pyInstaller = Join-Path $tools "python-$py-amd64.exe"
-    $ok = $false
-    foreach ($url in @(
-        "https://www.python.org/ftp/python/$py/python-$py-amd64.exe",
-        "https://mirrors.huaweicloud.com/python/$py/python-$py-amd64.exe"
-    )) {
-        try { Invoke-Download $url $pyInstaller; $ok = $true; break } catch { Write-Warning "Python $py 下载失败（$url），尝试镜像..." }
-    }
-    if (-not $ok) { throw "Python $py 安装器下载失败。" }
-}
-
-Remove-Item $tmpDownload -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "[工具] 内置工具收集完成：$tools" -ForegroundColor Green
+Copy-Item $projectTools (Join-Path $staging "tools") -Recurse -Force
+Write-Host "[工具] 已复制到便携目录：$staging\tools" -ForegroundColor Green
 
 # 思源黑体 Heavy（SIL OFL 开源）：随包分发保证所有机器字体一致；
 # 同时放进项目 assets/fonts 供本机开发预览使用。
@@ -177,18 +164,40 @@ New-Item -ItemType Directory -Path $fontDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $ProjectRoot "assets\fonts") -Force | Out-Null
 $fontLocal = Join-Path $ProjectRoot "assets\fonts\SourceHanSansSC-Heavy.otf"
 $fontStaged = Join-Path $fontDir "SourceHanSansSC-Heavy.otf"
+$fontLicenseLocal = Join-Path $ProjectRoot "assets\fonts\LICENSE.txt"
+$fontLicenseStaged = Join-Path $fontDir "LICENSE.txt"
 if (-not (Test-Path $fontLocal)) {
     Write-Host "[字体] 下载思源黑体 Heavy ..." -ForegroundColor Cyan
     Invoke-Download "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Heavy.otf" $fontLocal
 }
 Copy-Item $fontLocal $fontStaged -Force
+if (-not (Test-Path $fontLicenseLocal)) {
+    Write-Host "[字体] 下载思源黑体许可证 ..." -ForegroundColor Cyan
+    Invoke-Download "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/release/LICENSE.txt" $fontLicenseLocal
+}
+Copy-Item $fontLicenseLocal $fontLicenseStaged -Force
 Write-Host "[字体] 思源黑体 Heavy 已就绪：$fontStaged" -ForegroundColor Green
 
 # 依赖 wheel 集（wheels/）：首次配置时离线安装 Python 依赖，无需联网下载。
 # 版本来源：本地两个 venv（python -m venv 自带 pip）的精确冻结列表；
 # 剔除 torch 家族（离线装 CPU 版，GPU 机器安装后由 setup 自动升级 CUDA 版）。
 $WheelsDir = Join-Path $staging "wheels"
+if ($RefreshWheels -and (Test-Path -LiteralPath $WheelsDir -PathType Container)) {
+    # staging 由本脚本在 dist 下创建；刷新时必须先移除旧版本轮子，避免同一
+    # 包名的多个 torch 版本一起进入发布包，造成体积膨胀和离线解析歧义。
+    Remove-Item -LiteralPath $WheelsDir -Recurse -Force
+}
 New-Item -ItemType Directory -Path $WheelsDir -Force | Out-Null
+$projectWheels = Join-Path $ProjectRoot "wheels"
+$projectWheelBytes = 0
+if (Test-Path -LiteralPath $projectWheels -PathType Container) {
+    $projectWheelBytes = (Get-ChildItem -LiteralPath $projectWheels -File | Measure-Object Length -Sum).Sum
+}
+if (-not $RefreshWheels -and $projectWheelBytes -gt 100MB) {
+    Write-Host "[依赖] 复用项目已验证 wheels/：$([math]::Round($projectWheelBytes / 1MB)) MB（完全离线）" -ForegroundColor Green
+} else {
+# 冻结清单等中间文件放系统临时目录
+$tmpDownload = Join-Path $env:TEMP "2byteasr-bundle"
 New-Item -ItemType Directory -Path $tmpDownload -Force | Out-Null
 $uvExe = (Get-Command uv).Source
 $wheelSpecs = @(
@@ -209,7 +218,7 @@ foreach ($spec in $wheelSpecs) {
     $ErrorActionPreference = $previousEap
     $freezeLines |
         Where-Object {
-            $_ -and $_ -notmatch '^(torch|torchaudio|torchvision|nvidia-|pip==)' `
+            $_ -and $_ -notmatch '^(torch|torchaudio|torchvision|nvidia-|pip==|setuptools==|wheel==)' `
                 -and $_ -notmatch '^-e '
         } |
         Set-Content $freezeFile -Encoding ascii
@@ -223,7 +232,7 @@ foreach ($spec in $wheelSpecs) {
     & $spec.Py -m ensurepip --upgrade --default-pip 2>$null | Out-Null
     # MOSS 以可编辑方式从源码安装（setuptools 构建后端）；离线构建隔离环境
     # 需要 setuptools/wheel 在 wheels/ 里，否则报 “failed to build moss”。
-    & $spec.Py -m pip download setuptools wheel --no-deps -d $WheelsDir --quiet --disable-pip-version-check
+    & $spec.Py -m pip download "pip==26.1.2" "setuptools==$setuptoolsVersion" "wheel==$wheelVersion" --no-deps -d $WheelsDir --quiet --disable-pip-version-check
     # 不用 --only-binary：jieba / sox 等包在 PyPI 只有 sdist（pip download 只下载归档、
     # 不构建）；保留 setuptools/wheel 以便离线安装时构建这些 sdist。
     & $spec.Py -m pip download -r $freezeFile --no-deps `
@@ -237,18 +246,27 @@ foreach ($spec in $wheelSpecs) {
 # CPU torch / torchaudio（cp310 + cp312），离线安装用；GPU 机器安装后自动升级 CUDA 版。
 # 注意：PyTorch 索引对路径中的字面 '+' 返回 403，必须用 %2B 编码。
 foreach ($tag in @("cp310", "cp312")) {
-    foreach ($pkg in @("torch-2.13.0%2Bcpu", "torchaudio-2.11.0%2Bcpu")) {
+    foreach ($pkg in @("torch-$torchCpuVersion%2Bcpu", "torchaudio-$audioCpuVersion%2Bcpu")) {
         $url = "https://download.pytorch.org/whl/cpu/$pkg-$tag-$tag-win_amd64.whl"
         $out = Join-Path $WheelsDir ($pkg.Replace("%2B", "+") + "-$tag-$tag-win_amd64.whl")
         Invoke-Download $url $out
     }
 }
+}
+if ($RefreshWheels) {
+    # 将经过全量重建的 wheel 集回写项目缓存，后续 Setup/Portable/Lite 共用
+    # 同一份已验证依赖，不再复活旧的 torch 轮子。
+    if (Test-Path -LiteralPath $projectWheels -PathType Container) {
+        Remove-Item -LiteralPath $projectWheels -Recurse -Force
+    }
+    Copy-Item -LiteralPath $WheelsDir -Destination $projectWheels -Recurse -Force
+    Write-Host "[依赖] 已刷新项目 wheels/ 缓存：$projectWheels" -ForegroundColor Green
+}
 $wheelBytes = (Get-ChildItem $WheelsDir -File | Measure-Object Length -Sum).Sum
 Write-Host "[依赖] wheels/ 就绪：$([math]::Round($wheelBytes / 1MB)) MB（首次配置零依赖下载）" -ForegroundColor Green
 
-$stamp = Get-Date -Format "yyyyMMdd"
-$baseName = if ($Lite) { "2ByteASR-lite" } else { "2ByteASR-portable" }
-$output = Join-Path $OutputDir "$baseName-$stamp.7z"
+$baseName = if ($Lite) { "2ByteASR-Lite" } else { "2ByteASR-Portable" }
+$output = Join-Path $OutputDir "$baseName-$Version.7z"
 Remove-Item $output -Force -ErrorAction SilentlyContinue
 # 精简版受 GitHub 2GB 单文件限制：超限时自动剔除 wheels/（依赖退回联网安装）
 if ($Lite) {
@@ -258,22 +276,30 @@ if ($Lite) {
         Write-Warning "精简版打包内容超过 1.9GB，已剔除 wheels/（Python 依赖将联网安装）。"
     }
 }
-$label = if ($Lite) { "精简版（不含模型，约 300-500 MB）" } else { "完整版（约 9-12 GB）" }
+$label = if ($Lite) { "精简版（不含模型，约 1.2 GB）" } else { "完整版（约 9-12 GB）" }
 Write-Host "[打包] 正在压缩（$label，可能需要一段时间）..." -ForegroundColor Cyan
 $logOut = Join-Path $OutputDir "portable-bundle.log"
 $logErr = Join-Path $OutputDir "portable-bundle.err.log"
-$p = Start-Process -FilePath $sevenZipPath -ArgumentList @(
-    "a", "-t7z", "-mx=1", "-mmt=on", $output, (Join-Path $staging "*")
-) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $logOut -RedirectStandardError $logErr
-if ($p.ExitCode -ne 0) {
+$zipArgs = @("a", "-t7z", "-mx=1", "-mmt=on", $output, (Join-Path $staging "*"))
+$previousEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& $sevenZipPath @zipArgs 1> $logOut 2> $logErr
+$zipExit = $LASTEXITCODE
+$ErrorActionPreference = $previousEap
+if ($zipExit -ne 0) {
     $tail = ""
     if (Test-Path $logErr) { $tail = "`n" + ((Get-Content $logErr -Tail 10) -join "`n") }
-    throw "7-Zip 打包失败（退出码 $($p.ExitCode)）。$tail"
+    throw "7-Zip 打包失败（退出码 $zipExit）。$tail"
 }
 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $logOut, $logErr -Force -ErrorAction SilentlyContinue
 
 Write-Host "[OK] 便携包已生成：$output" -ForegroundColor Green
+$outputHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $output).Hash.ToLowerInvariant()
+$checksumPath = "$output.sha256"
+"$outputHash  $([IO.Path]::GetFileName($output))" | Set-Content -Encoding ascii $checksumPath
+Write-Host "SHA256 $outputHash"
+Write-Host "[OK] 校验文件：$checksumPath" -ForegroundColor Green
 if ($Lite) {
     Write-Host "用法：解压到任意目录，双击 setup_2byteasr.bat —— 内置 git/ffmpeg/python/uv 无需联网安装，模型会自动下载（约 7 GB，可续传）。" -ForegroundColor Yellow
 } else {

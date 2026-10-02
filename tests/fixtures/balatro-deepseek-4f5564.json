@@ -1,0 +1,243 @@
+{
+  "candidates": [
+    {
+      "id": "A",
+      "name": "油墨落版·纸牌",
+      "composition_family": "纸牌油墨落版",
+      "art_direction_contract": {
+        "theme": "Balatro/小丑牌",
+        "vocabulary": ["纸牌", "油墨", "套色", "纸纹", "翻面"],
+        "composition": "牌面左侧偏中，文字在右下，油墨点沿对角线错峰落版"
+      },
+      "design_spec": {
+        "core_metaphor": "老式印刷扑克牌",
+        "silhouette": "圆角矩形牌体与层叠油墨点",
+        "typography": "Cubic 11 用于牌面，Source Han Sans SC 用于中文",
+        "material": "纸张、油墨、轻量套色",
+        "layout": "纸牌位于左中，文字位于右下，油墨点沿对角线布置"
+      },
+      "ColorRole": [
+        { "role": "base", "hex": "#F4E8D6", "percent": 60 },
+        { "role": "primary", "hex": "#C9362E", "percent": 20 },
+        { "role": "contrast", "hex": "#1A1A2A", "percent": 10 },
+        { "role": "support", "hex": "#C9A34A", "percent": 5 },
+        { "role": "highlight", "hex": "#FFFFFF", "percent": 3 },
+        { "role": "shadow", "hex": "#40312A", "percent": 2 }
+      ],
+      "MaterialContract": {
+        "material": "paper-ink",
+        "selectors": [".paper-texture", ".card-back", ".card-face", ".ink-sets", ".ink-dot"]
+      },
+      "MotionContract": {
+        "entrance": "纸牌从左侧滑入并部分翻面，油墨点错峰落版归位，文字随后淡入",
+        "hold": "纸牌轻微浮动，纸纹缓慢移动，文字稳定",
+        "exit": "纸牌向右滑出，油墨点淡出，文字向上淡出"
+      },
+      "generated_source": {
+        "appearance": {
+          "color": "#1A1A2A",
+          "fontFamily": "\"Cubic 11\", \"Source Han Sans SC\", sans-serif",
+          "fontSize": 58,
+          "fontWeight": 700,
+          "strokeColor": "#1A1A2A",
+          "strokeWidth": 2,
+          "stroke2Color": "#C9A34A",
+          "stroke2Width": 1,
+          "letterSpacing": 2,
+          "bold": false,
+          "italic": false
+        },
+        "palette": {
+          "primary": "#C9362E",
+          "text": "#1A1A2A",
+          "secondary": "#F4E8D6",
+          "background": "#C9A34A",
+          "accent": "#FFFFFF"
+        },
+        "cueHtml": "<div class=\"paper-print\"><div class=\"paper-texture\" aria-hidden=\"true\"></div><div class=\"card-space\"><div class=\"card-stack\" aria-hidden=\"true\"><div class=\"stack-card stack-card1\"></div><div class=\"stack-card stack-card2\"></div></div><div class=\"card\"><div class=\"card-back\"><svg viewBox=\"0 0 200 280\" class=\"back-svg\"><rect x=\"10\" y=\"10\" width=\"180\" height=\"260\" rx=\"12\" fill=\"#2A2A3A\" stroke=\"#C9A34A\" stroke-width=\"4\"/><rect x=\"20\" y=\"20\" width=\"160\" height=\"240\" rx=\"8\" fill=\"none\" stroke=\"#C9A34A\" stroke-width=\"2\" stroke-dasharray=\"8 4\"/><circle cx=\"100\" cy=\"80\" r=\"30\" fill=\"none\" stroke=\"#C9A34A\" stroke-width=\"4\"/><path d=\"M70 130 L100 100 L130 130 L100 160 Z\" fill=\"#C9A34A\"/></svg></div><div class=\"card-face\"><svg viewBox=\"0 0 200 280\" class=\"face-svg\"><rect x=\"10\" y=\"10\" width=\"180\" height=\"260\" rx=\"12\" fill=\"#F4E8D6\" stroke=\"#1A1A2A\" stroke-width=\"3\"/><text x=\"30\" y=\"55\" font-family=\"Cubic 11\" font-size=\"24\" fill=\"#C9362E\">JOKER</text><path d=\"M100 140 L120 120 L110 110 Z\" fill=\"#1A1A2A\"/><circle cx=\"85\" cy=\"150\" r=\"8\" fill=\"#C9362E\"/><circle cx=\"115\" cy=\"150\" r=\"8\" fill=\"#C9362E\"/><path d=\"M85 165 Q100 180 115 165\" fill=\"none\" stroke=\"#1A1A2A\" stroke-width=\"4\" stroke-linecap=\"round\"/></svg></div></div><div class=\"ink-sets\" aria-hidden=\"true\"><div class=\"ink-dot ink-cyan\"></div><div class=\"ink-dot ink-magenta\"></div><div class=\"ink-dot ink-yellow\"></div><div class=\"ink-dot ink-black\"></div></div></div><div class=\"caption-area\"><span class=\"caption-text\" data-semantic-text=\"true\">{{text}}</span></div></div>",
+        "cueCss": ".paper-print{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}.paper-texture{position:absolute;left:0;top:0;width:100%;height:100%;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22 viewBox=%220 0 100 100%22%3E%3Cfilter id=%22n%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.8%22 numOctaves=%222%22/%3E%3C/filter%3E%3Crect width=%22100%22 height=%22100%22 filter=%22url(%23n)%22 opacity=%220.06%22/%3E%3C/svg%3E');opacity:0.4}.card-space{position:absolute;left:150px;top:140px;width:700px;height:800px}.card-stack{position:absolute;left:40px;top:20px;width:200px;height:280px}.stack-card{position:absolute;left:0;top:0;width:200px;height:280px;background:#2A2A3A;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.5)}.stack-card1{transform:translate(10px,-8px) rotate(-4deg)}.stack-card2{transform:translate(20px,-4px) rotate(2deg)}.card{position:absolute;left:180px;top:60px;width:400px;height:560px;transform-style:preserve-3d}.card-back,.card-face{position:absolute;left:0;top:0;width:100%;height:100%;backface-visibility:hidden}.card-back{z-index:2}.card-face{z-index:1;clip-path:inset(0% 0% 0% 100%)}.back-svg,.face-svg{width:100%;height:100%;display:block}.ink-sets{position:absolute;left:650px;top:200px;width:200px;height:200px}.ink-dot{position:absolute;width:36px;height:36px;border-radius:50%;opacity:0.8}.ink-cyan{background:#00A6C0;left:0;top:0}.ink-magenta{background:#E5348B;left:44px;top:22px}.ink-yellow{background:#F5C800;left:88px;top:66px}.ink-black{background:#1A1A2A;left:132px;top:110px}.caption-area{position:absolute;left:980px;top:450px;width:700px}.caption-text{font-family:var(--wt-font);font-size:var(--wt-size);font-weight:700;color:#1A1A2A;letter-spacing:2px;text-shadow:0 2px 0 #F4E8D6,0 -1px 0 #C9A34A;display:inline-block}",
+        "stageHtml": "",
+        "stageCss": "",
+        "motionSpec": {
+          "version": 1,
+          "runtime": "gsap",
+          "buildMs": 600,
+          "resolveMs": 400,
+          "tracks": [
+            { "selector": ".card", "phase": "build", "start": 0, "end": 0.4, "ease": "power2.out", "from": { "x": -600, "y": 40, "rotation": -5, "opacity": 0 }, "to": { "x": 0, "y": 0, "rotation": 0, "opacity": 1 } },
+            { "selector": ".card-back", "phase": "build", "start": 0.35, "end": 0.6, "ease": "power1.inOut", "from": { "clipPath": "inset(0% 0% 0% 0%)" }, "to": { "clipPath": "inset(0% 100% 0% 0%)" } },
+            { "selector": ".card-face", "phase": "build", "start": 0.4, "end": 0.65, "ease": "power1.inOut", "from": { "clipPath": "inset(0% 0% 0% 100%)" }, "to": { "clipPath": "inset(0% 0% 0% 0%)" } },
+            { "selector": ".ink-cyan", "phase": "build", "start": 0.55, "end": 0.75, "ease": "power2.out", "from": { "x": -30, "y": -30, "opacity": 0 }, "to": { "x": 0, "y": 0, "opacity": 0.8 } },
+            { "selector": ".ink-magenta", "phase": "build", "start": 0.6, "end": 0.8, "ease": "power2.out", "from": { "x": -20, "y": -20, "opacity": 0 }, "to": { "x": 0, "y": 0, "opacity": 0.8 } },
+            { "selector": ".ink-yellow", "phase": "build", "start": 0.65, "end": 0.85, "ease": "power2.out", "from": { "x": -10, "y": -10, "opacity": 0 }, "to": { "x": 0, "y": 0, "opacity": 0.8 } },
+            { "selector": ".ink-black", "phase": "build", "start": 0.7, "end": 0.9, "ease": "power2.out", "from": { "x": -5, "y": -5, "opacity": 0 }, "to": { "x": 0, "y": 0, "opacity": 0.8 } },
+            { "selector": ".caption-text", "phase": "build", "start": 0.75, "end": 0.95, "ease": "power2.out", "from": { "opacity": 0, "y": 20 }, "to": { "opacity": 1, "y": 0 } },
+            { "selector": ".paper-texture", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 3, "yoyo": true, "from": { "backgroundPositionX": 0, "backgroundPositionY": 0 }, "to": { "backgroundPositionX": 100, "backgroundPositionY": 0 } },
+            { "selector": ".card-stack", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 2, "yoyo": true, "from": { "x": 0, "y": 0, "rotation": 0 }, "to": { "x": 2, "y": -3, "rotation": 1 } },
+            { "selector": ".caption-text", "phase": "resolve", "start": 0, "end": 1, "ease": "power2.in", "from": { "opacity": 1, "y": 0 }, "to": { "opacity": 0, "y": -30 } },
+            { "selector": ".card", "phase": "resolve", "start": 0, "end": 1, "ease": "power2.in", "from": { "x": 0, "opacity": 1 }, "to": { "x": 500, "opacity": 0 } }
+          ]
+        },
+        "concept": "纸牌翻面后油墨落版，套色错峰归位，纸纹安静，文字如印刷墨迹呈现。",
+        "name": "油墨落版·纸牌"
+      }
+    },
+    {
+      "id": "B",
+      "name": "冲压浮雕·金币",
+      "composition_family": "金币落槽冲压",
+      "art_direction_contract": {
+        "theme": "Balatro/小丑牌",
+        "vocabulary": ["金币", "冲压", "浮雕", "反光", "松模弹出"],
+        "composition": "金币居中偏左，文字位于右侧，冲压时币体形变"
+      },
+      "design_spec": {
+        "core_metaphor": "金属钱币冲压工艺",
+        "silhouette": "圆形金币与环形浮雕边缘",
+        "typography": "Cubic 11 用于美元符号，Source Han Sans SC 用于中文",
+        "material": "金色金属、斜角边缘、高光浮雕",
+        "layout": "金币位于画布中左，直径约500px，文字在右侧中下方"
+      },
+      "ColorRole": [
+        { "role": "base", "hex": "#D4AF37", "percent": 50 },
+        { "role": "primary", "hex": "#B8860B", "percent": 25 },
+        { "role": "contrast", "hex": "#FFFFFF", "percent": 10 },
+        { "role": "support", "hex": "#6B4F1D", "percent": 8 },
+        { "role": "highlight", "hex": "#FFF8DC", "percent": 5 },
+        { "role": "shadow", "hex": "#1A1A1A", "percent": 2 }
+      ],
+      "MaterialContract": {
+        "material": "coin-metal",
+        "selectors": [".coin-rim", ".coin-face", ".coin-highlight", ".coin-relief"]
+      },
+      "MotionContract": {
+        "entrance": "金币从上方落入币槽，冲压瞬间垂直压缩，浮雕高光显现",
+        "hold": "币面静止，高光缓慢掠过，外置文字稳定",
+        "exit": "松模后币体回弹并向上弹出，文字淡出"
+      },
+      "generated_source": {
+        "appearance": {
+          "color": "#FFF8DC",
+          "fontFamily": "\"Cubic 11\", \"Source Han Sans SC\", sans-serif",
+          "fontSize": 52,
+          "fontWeight": 700,
+          "strokeColor": "#6B4F1D",
+          "strokeWidth": 2,
+          "stroke2Color": "#D4AF37",
+          "stroke2Width": 1,
+          "letterSpacing": 2,
+          "bold": false,
+          "italic": false
+        },
+        "palette": {
+          "primary": "#D4AF37",
+          "text": "#FFF8DC",
+          "secondary": "#B8860B",
+          "background": "#2A2A2A",
+          "accent": "#FFFFFF"
+        },
+        "cueHtml": "<div class=\"coin-press\"><div class=\"coin-slot\"><div class=\"coin-shadow\"></div><div class=\"coin\"><div class=\"coin-rim\"></div><div class=\"coin-face\"><svg viewBox=\"0 0 200 200\" class=\"coin-svg\"><circle cx=\"100\" cy=\"100\" r=\"90\" fill=\"#D4AF37\"/><circle cx=\"100\" cy=\"100\" r=\"78\" fill=\"#B8860B\"/><path d=\"M80 70 L120 70 L110 90 L90 90 Z\" fill=\"#FFF8DC\" opacity=\"0.9\"/><circle cx=\"100\" cy=\"115\" r=\"18\" fill=\"#FFF8DC\" opacity=\"0.8\"/><text x=\"100\" y=\"140\" text-anchor=\"middle\" font-family=\"Cubic 11\" font-size=\"36\" fill=\"#FFF8DC\">$</text></svg></div><div class=\"coin-highlight\"></div><div class=\"coin-relief\"></div></div></div><div class=\"caption-block\"><span class=\"coin-caption\" data-semantic-text=\"true\">{{text}}</span></div></div>",
+        "cueCss": ".coin-press{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}.coin-slot{position:absolute;left:300px;top:250px;width:500px;height:500px}.coin-shadow{position:absolute;left:50px;top:420px;width:400px;height:60px;background:radial-gradient(ellipse at center,#1A1A1A 0%,rgba(26,26,26,0) 70%);opacity:0.6}.coin{position:absolute;left:50px;top:0;width:400px;height:400px}.coin-rim{position:absolute;left:0;top:0;width:400px;height:400px;border-radius:50%;background:linear-gradient(135deg,#FFF8DC 0%,#D4AF37 30%,#B8860B 70%,#6B4F1D 100%);box-shadow:0 0 30px rgba(212,175,55,0.5)}.coin-face{position:absolute;left:20px;top:20px;width:360px;height:360px;border-radius:50%;overflow:hidden}.coin-svg{width:100%;height:100%;display:block}.coin-highlight{position:absolute;left:60px;top:40px;width:150px;height:80px;background:linear-gradient(120deg,rgba(255,248,220,0.8) 0%,rgba(255,248,220,0) 100%);border-radius:50%;transform:rotate(20deg);opacity:0.4}.coin-relief{position:absolute;left:20px;top:20px;width:360px;height:360px;border-radius:50%;background:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2220%22 viewBox=%220 0 20 20%22%3E%3Crect width=%2220%22 height=%2220%22 fill=%22none%22/%3E%3Cpath d=%22M0 10 A10 10 0 0 1 20 10%22 fill=%22none%22 stroke=%22%23FFF8DC%22 stroke-width=%220.5%22 opacity=%220.2%22/%3E%3C/svg%3E');background-size:20px 20px;opacity:0.6;mix-blend-mode:overlay}.caption-block{position:absolute;left:900px;top:520px;width:700px}.coin-caption{font-family:var(--wt-font);font-size:var(--wt-size);font-weight:700;color:#FFF8DC;letter-spacing:2px;text-shadow:0 2px 4px rgba(0,0,0,0.8);display:inline-block}",
+        "stageHtml": "",
+        "stageCss": "",
+        "motionSpec": {
+          "version": 1,
+          "runtime": "gsap",
+          "buildMs": 600,
+          "resolveMs": 400,
+          "tracks": [
+            { "selector": ".coin", "phase": "build", "start": 0, "end": 0.5, "ease": "power2.in", "from": { "y": -700, "opacity": 0 }, "to": { "y": 0, "opacity": 1 } },
+            { "selector": ".coin", "phase": "build", "start": 0.45, "end": 0.7, "ease": "power2.inOut", "from": { "scaleY": 1 }, "to": { "scaleY": 0.9 } },
+            { "selector": ".coin", "phase": "build", "start": 0.7, "end": 0.85, "ease": "power2.out", "from": { "scaleY": 0.9 }, "to": { "scaleY": 1 } },
+            { "selector": ".coin-relief", "phase": "build", "start": 0.6, "end": 0.9, "ease": "power2.out", "from": { "opacity": 0 }, "to": { "opacity": 0.6 } },
+            { "selector": ".coin-highlight", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 3, "yoyo": true, "from": { "x": -120, "y": 0, "opacity": 0.3 }, "to": { "x": 120, "y": 0, "opacity": 0.7 } },
+            { "selector": ".coin-caption", "phase": "build", "start": 0.7, "end": 0.95, "ease": "power2.out", "from": { "opacity": 0, "y": 20 }, "to": { "opacity": 1, "y": 0 } },
+            { "selector": ".coin-shadow", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 2, "yoyo": true, "from": { "opacity": 0.6 }, "to": { "opacity": 0.3 } },
+            { "selector": ".coin", "phase": "resolve", "start": 0, "end": 1, "ease": "power2.out", "from": { "y": 0, "opacity": 1 }, "to": { "y": -600, "opacity": 0 } },
+            { "selector": ".coin-caption", "phase": "resolve", "start": 0, "end": 1, "ease": "power1.in", "from": { "opacity": 1 }, "to": { "opacity": 0 } }
+          ]
+        },
+        "concept": "金币落槽后冲压浮雕，慢速分层不等间隔反光，松模旋币弹出。",
+        "name": "冲压浮雕·金币"
+      }
+    },
+    {
+      "id": "C",
+      "name": "橄榄CRT·扫描",
+      "composition_family": "实体橄榄CRT",
+      "art_direction_contract": {
+        "theme": "Balatro/小丑牌",
+        "vocabulary": ["CRT", "亮线", "切片锁定", "扫描噪声", "余辉"],
+        "composition": "CRT屏幕占据主体，文字位于屏幕中央，外壳和旋钮可见"
+      },
+      "design_spec": {
+        "core_metaphor": "橄榄绿色老式CRT显示器",
+        "silhouette": "圆角矩形屏幕与外框，底部旋钮",
+        "typography": "Source Han Sans SC 用于中文，Cubic 11 用于数字",
+        "material": "玻璃屏幕、磷光、塑料外壳",
+        "layout": "屏幕居中，约占画布70%，文字在屏幕中央稍下"
+      },
+      "ColorRole": [
+        { "role": "base", "hex": "#2F3D22", "percent": 40 },
+        { "role": "primary", "hex": "#5A7A3A", "percent": 30 },
+        { "role": "contrast", "hex": "#CFE8B0", "percent": 15 },
+        { "role": "support", "hex": "#8FA86B", "percent": 8 },
+        { "role": "highlight", "hex": "#FFFFFF", "percent": 5 },
+        { "role": "shadow", "hex": "#101010", "percent": 2 }
+      ],
+      "MaterialContract": {
+        "material": "crt-glass",
+        "selectors": [".crt-glass", ".crt-scanlines", ".crt-noise", ".crt-text"]
+      },
+      "MotionContract": {
+        "entrance": "CRT亮线自上而下扫描开机，文字随磷光点亮",
+        "hold": "屏幕低强度扫描噪声，文字稳定，切片锁定的区域保持静止",
+        "exit": "压线收点，画面收缩为一条亮线后熄灭"
+      },
+      "generated_source": {
+        "appearance": {
+          "color": "#CFE8B0",
+          "fontFamily": "\"Source Han Sans SC\", \"Cubic 11\", sans-serif",
+          "fontSize": 64,
+          "fontWeight": 700,
+          "strokeColor": "#CFE8B0",
+          "strokeWidth": 1,
+          "stroke2Color": "#5A7A3A",
+          "stroke2Width": 1,
+          "letterSpacing": 4,
+          "bold": false,
+          "italic": false
+        },
+        "palette": {
+          "primary": "#5A7A3A",
+          "text": "#CFE8B0",
+          "secondary": "#2F3D22",
+          "background": "#1A1A1A",
+          "accent": "#FFFFFF"
+        },
+        "cueHtml": "<div class=\"crt-monitor\"><div class=\"crt-case\"><div class=\"crt-screen-border\"><div class=\"crt-glass\"></div><div class=\"crt-scanlines\"></div><div class=\"crt-noise\"></div><div class=\"crt-slice\" aria-hidden=\"true\"></div><div class=\"crt-text\" data-semantic-text=\"true\">{{text}}</div><div class=\"crt-text-copy\" aria-hidden=\"true\">{{text}}</div><div class=\"crt-bright-line\"></div></div><div class=\"crt-controls\"><div class=\"crt-knob\"></div><div class=\"crt-led\"></div></div></div></div>",
+        "cueCss": ".crt-monitor{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}.crt-case{position:absolute;left:5%;top:2%;width:90%;height:90%;background:#1A1A1A;border-radius:30px;box-shadow:0 20px 60px rgba(0,0,0,0.7)}.crt-screen-border{position:absolute;left:3%;top:8%;width:94%;height:82%;background:#101010;border-radius:20px;box-shadow:inset 0 0 20px #000000}.crt-glass{position:absolute;left:2%;top:2%;width:96%;height:96%;background:radial-gradient(circle at 40% 30%,rgba(255,255,255,0.15) 0%,rgba(255,255,255,0.03) 50%,rgba(0,0,0,0.2) 100%);border-radius:12px}.crt-scanlines{position:absolute;left:2%;top:2%;width:96%;height:96%;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0.8) 0px,rgba(0,0,0,0.8) 1px,rgba(0,0,0,0) 1px,rgba(0,0,0,0) 3px);pointer-events:none}.crt-noise{position:absolute;left:2%;top:2%;width:96%;height:96%;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22 viewBox=%220 0 100 100%22%3E%3Cfilter id=%22n%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%223%22/%3E%3C/filter%3E%3Crect width=%22100%22 height=%22100%22 filter=%22url(%23n)%22 opacity=%220.04%22/%3E%3C/svg%3E');opacity:0.5;pointer-events:none}.crt-slice{position:absolute;left:15%;top:30%;width:20%;height:40%;background:rgba(95,122,58,0.2);border-left:2px solid #5A7A3A;pointer-events:none}.crt-text{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);font-family:var(--wt-font);font-size:var(--wt-size);font-weight:700;color:#CFE8B0;letter-spacing:4px;text-shadow:0 0 10px #5A7A3A,0 0 20px #5A7A3A;z-index:2}.crt-text-copy{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);font-family:var(--wt-font);font-size:var(--wt-size);font-weight:700;color:#CFE8B0;letter-spacing:4px;text-shadow:0 0 10px #5A7A3A,0 0 20px #5A7A3A;opacity:0.3;z-index:1;pointer-events:none}.crt-bright-line{position:absolute;left:2%;top:0;width:96%;height:3px;background:#FFFFFF;box-shadow:0 0 20px #FFFFFF;opacity:0;pointer-events:none}.crt-controls{position:absolute;left:5%;bottom:2%;width:90%;height:10%}.crt-knob{position:absolute;left:40%;top:30%;width:40px;height:40px;border-radius:50%;background:#333;box-shadow:0 2px 6px #000}.crt-led{position:absolute;right:10%;top:30%;width:10px;height:10px;border-radius:50%;background:#5A7A3A;box-shadow:0 0 8px #5A7A3A}",
+        "stageHtml": "",
+        "stageCss": "",
+        "motionSpec": {
+          "version": 1,
+          "runtime": "gsap",
+          "buildMs": 600,
+          "resolveMs": 400,
+          "tracks": [
+            { "selector": ".crt-bright-line", "phase": "build", "start": 0, "end": 0.6, "ease": "power1.inOut", "from": { "y": -500, "opacity": 1 }, "to": { "y": 500, "opacity": 0 } },
+            { "selector": ".crt-text", "phase": "build", "start": 0.4, "end": 0.8, "ease": "power2.out", "from": { "opacity": 0, "y": 20 }, "to": { "opacity": 1, "y": 0 } },
+            { "selector": ".crt-noise", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 4, "yoyo": true, "from": { "backgroundPositionX": 0, "backgroundPositionY": 0 }, "to": { "backgroundPositionX": 200, "backgroundPositionY": 0 } },
+            { "selector": ".crt-scanlines", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 5, "yoyo": true, "from": { "backgroundPositionY": 0 }, "to": { "backgroundPositionY": 60 } },
+            { "selector": ".crt-slice", "phase": "breathe", "start": 0, "end": 1, "ease": "none", "repeat": 0, "yoyo": false, "from": { "opacity": 0.2 }, "to": { "opacity": 0.6 } },
+            { "selector": ".crt-text-copy", "phase": "breathe", "start": 0, "end": 1, "ease": "sine.inOut", "repeat": 3, "yoyo": true, "from": { "opacity": 0.3 }, "to": { "opacity": 0.6 } },
+            { "selector": ".crt-screen-border", "phase": "resolve", "start": 0, "end": 1, "ease": "power2.in", "from": { "opacity": 1, "scaleY": 1 }, "to": { "opacity": 0, "scaleY": 0.1 } },
+            { "selector": ".crt-text", "phase": "resolve", "start": 0, "end": 1, "ease": "power2.in", "from": { "opacity": 1, "y": 0 }, "to": { "opacity": 0, "y": -20 } }
+          ]
+        },
+        "concept": "实体橄榄CRT，亮线开机，局部不对称切片锁定，玻璃内低强度扫描噪声，压线收点余辉。",
+        "name": "橄榄CRT·扫描"
+      }
+    }
+  ]
+}

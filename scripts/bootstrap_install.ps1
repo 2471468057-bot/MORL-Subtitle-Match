@@ -1,13 +1,23 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$InstallPrerequisites,
     [switch]$DownloadModels,
     [switch]$CheckOnly,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$NonInteractive,
+    [switch]$IncludeQwen,
+    [switch]$MinimalModels,
+    [switch]$Repair,
+    [ValidateSet("main", "moss")]
+    [string[]]$RepairRole = @()
 )
 
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
 
 # 完整安装过程记录到 %TEMP%\2byteasr-setup.log，方便排查
 $TranscriptPath = Join-Path $env:TEMP "2byteasr-setup.log"
@@ -22,7 +32,7 @@ $SetupMarker = Join-Path $ProjectRoot "2byteasr.setup-complete"
 
 # 安装步骤进度：标题栏 + Write-Progress 双通道，用户随时知道进度与等待时间
 $script:StepIndex = 0
-$script:StepTotal = 5
+$script:StepTotal = if ($DownloadModels) { 3 } else { 2 }
 function Set-InstallStep {
     param([string]$Label)
     $script:StepIndex++
@@ -37,60 +47,138 @@ function Set-InstallStep {
 $IncludeQwenChoice = $false
 if ($DownloadModels) {
     $qwenConfig = Join-Path $ProjectRoot "models\Qwen3-ASR-1.7B\config.json"
-    if ($env:2BYTEASR_INCLUDE_QWEN -or (Test-Path $qwenConfig)) {
+    if ($IncludeQwen -or $env:2BYTEASR_INCLUDE_QWEN -or (Test-Path $qwenConfig)) {
         $IncludeQwenChoice = $true
         if (Test-Path $qwenConfig) { Write-Host "[Qwen] 检测到 Qwen3-ASR 模型已存在。" -ForegroundColor Green }
-    } elseif (-not $env:2BYTEASR_NO_QWEN) {
-        $answer = Read-Host "附加下载 Qwen3-ASR 复核模型（约 4.7 GB，提升准确度）？[y/N]"
+    } elseif (-not $NonInteractive -and -not $env:2BYTEASR_NO_QWEN) {
+        $answer = Read-Host "下载本地 Qwen3-ASR（约 4.7 GB；精度更高并增加独立词汇证据；不下载则使用更快的 API，需自行配置 Key）？[y/N]"
         if ($answer -match "^[yY]") { $IncludeQwenChoice = $true }
     }
     $qwenText = if ($IncludeQwenChoice) { "包含" } else { "不包含" }
     Write-Host "[选择] Qwen3-ASR 复核模型：$qwenText（可随时用 download_models.bat 补下；2BYTEASR_NO_QWEN=1 关闭提问）" -ForegroundColor Cyan
+    # 按需下载：先只下基础链路（MOSS+VAD+声纹约 2 GB）还是完整（约 7 GB）？
+    $MinimalChoice = $false
+    if ($MinimalModels) {
+        $MinimalChoice = $true
+    } elseif (-not $NonInteractive -and -not $env:2BYTEASR_MINIMAL_MODELS -and -not $env:2BYTEASR_FULL_MODELS) {
+        $minAnswer = Read-Host "先只下载基础模型（约 2 GB，可立即出字幕，FireRed 字级时间轴稍后补）？[y/N]"
+        if ($minAnswer -match "^[yY]") { $MinimalChoice = $true }
+    } elseif ($env:2BYTEASR_MINIMAL_MODELS) {
+        $MinimalChoice = $true
+    }
+    if ($MinimalChoice) {
+        Write-Host "[选择] 极简模式：先下载基础模型（约 2 GB）" -ForegroundColor Cyan
+    }
+
+    # 把安装时的模型选择同步到 GUI。未下载本地 Qwen 时默认使用便宜的
+    # DashScope API；用户首次运行只需填写 Key。极简模式关闭 FireRed-AED，
+    # 避免运行时要求一个明确没有下载的模型目录。
+    $settingsPath = Join-Path $ProjectRoot "2byteasr_settings.json"
+    if (Test-Path -LiteralPath $settingsPath) {
+        try {
+            $runtimeSettings = Get-Content -Raw -Encoding UTF8 $settingsPath | ConvertFrom-Json
+            $runtimeSettings.models.qwen_asr_backend = if ($IncludeQwenChoice) { "local" } else { "api" }
+            $runtimeSettings.models.firered_asr_backend = if ($MinimalChoice) { "off" } else { "local" }
+            $settingsJson = $runtimeSettings | ConvertTo-Json -Depth 8
+            [System.IO.File]::WriteAllText(
+                $settingsPath,
+                $settingsJson + [Environment]::NewLine,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        } catch {
+            Write-Warning "无法同步识别后端设置；可在主界面手动选择 API / 本地模型：$($_.Exception.Message)"
+        }
+    }
 }
 
-# 幂等退出：已完全配置（标记 + 双环境 + 必需模型都在）时不再破坏性重装。
-# 补 Qwen / 修复模型请用 download_models.bat；强制重装设 2BYTEASR_FORCE_SETUP=1。
+# 幂等退出：运行环境已完整配置时不再破坏性重装。只有显式传入
+# -DownloadModels 的旧式/维护流程才把相应模型也纳入完整性判断。
 $MainPy = Join-Path $ProjectRoot ".venv-main\Scripts\python.exe"
-$MossPy = Join-Path $ProjectRoot ".venv-moss\Scripts\python.exe"
 $ModelRoot = Join-Path $ProjectRoot "models"
-$requiredModels = @(
-    "MOSS-Transcribe-Diarize\model-00000-of-00001.safetensors",
-    "FireRedVAD\VAD\model.pth.tar",
-    "FireRedASR2-AED\model.pth.tar",
-    "spkrec-ecapa-voxceleb\embedding_model.ckpt"
-)
-$alreadyConfigured = (Test-Path $SetupMarker) -and (Test-Path $MainPy) -and (Test-Path $MossPy)
-if ($alreadyConfigured -and -not $env:2BYTEASR_FORCE_SETUP) {
+$requiredModels = @()
+if ($DownloadModels) {
+    $requiredModels += @(
+        "MOSS-Transcribe-Diarize\model-00000-of-00001.safetensors",
+        "FireRedVAD\VAD\model.pth.tar",
+        "FireRedVAD\VAD\cmvn.ark",
+        "spkrec-ecapa-voxceleb\embedding_model.ckpt",
+        "spkrec-ecapa-voxceleb\mean_var_norm_emb.ckpt",
+        "spkrec-ecapa-voxceleb\classifier.ckpt",
+        "spkrec-ecapa-voxceleb\label_encoder.txt"
+    )
+}
+if ($DownloadModels -and -not $MinimalChoice) {
+    $requiredModels += @(
+        "FireRedASR2-AED\model.pth.tar",
+        "FireRedASR2-AED\cmvn.ark"
+    )
+}
+$alreadyConfigured = (Test-Path $SetupMarker) -and (Test-Path $MainPy)
+if ($alreadyConfigured -and -not $Repair -and -not $env:2BYTEASR_FORCE_SETUP) {
     foreach ($rel in $requiredModels) {
         if (-not (Test-Path (Join-Path $ModelRoot $rel))) { $alreadyConfigured = $false; break }
     }
 }
-if ($alreadyConfigured) {
-    Write-Host "[完成] 2ByteASR 已配置完成（环境与必需模型均已就绪），无需重装。" -ForegroundColor Green
-    Write-Host "       补下 Qwen 复核模型或修复模型：运行 download_models.bat" -ForegroundColor Yellow
+if ($alreadyConfigured -and -not $Repair) {
+    $readyText = if ($DownloadModels) { "运行环境与所选模型均已就绪" } else { "运行环境已就绪；模型可在模型工坊按需选择" }
+    Write-Host "[完成] 2ByteASR 已配置完成（$readyText），无需重装。" -ForegroundColor Green
+
+# Hard post-check: if NVIDIA GPU is present, main environment MUST have a working CUDA torch.
+# CPU-only torch on NVIDIA = installation error for 2ByteASR GPU ASR.
+$gpuPresent = (Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and -not $env:2BYTEASR_CPU_ONLY
+if ($gpuPresent) {
+    $MainPython = Join-Path $ProjectRoot ".venv-main\Scripts\python.exe"
+    if (Test-Path -LiteralPath $MainPython) {
+        & $MainPython -c "
+import sys, torch
+cuda_ok = torch.cuda.is_available() and (torch.version.cuda is not None)
+if not cuda_ok:
+    print('CUDA PyTorch 安装异常：检测到 NVIDIA GPU，但当前 torch 不是 CUDA 构建。')
+    print('torch.__version__=', torch.__version__)
+    print('torch.version.cuda=', getattr(torch.version, 'cuda', None))
+    print('torch.cuda.is_available()=', torch.cuda.is_available())
+    sys.exit(2)
+print('CUDA torch OK for main runtime.')
+" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "CUDA PyTorch 安装异常" -ForegroundColor Red
+            Write-Host "检测到 NVIDIA GPU，但主运行环境安装的是 CPU 版 PyTorch。" -ForegroundColor Red
+            Write-Host "这不是有效 fallback。对于 2ByteASR GPU ASR 这是安装失败状态。" -ForegroundColor Red
+            Write-Host "请运行【配置或修复 2ByteASR】或手动修复 .venv-main 中的 torch/torchaudio。" -ForegroundColor Yellow
+            exit 3
+        }
+    }
+}
     Write-Host "       强制重装（会重建环境）：设置 2BYTEASR_FORCE_SETUP=1 后重跑" -ForegroundColor DarkGray
     exit 0
 }
 
 # 每次开始配置先清除完成标记：只有 venv 而无标记 = 上次配置中断，
 # 2ByteASR.exe 启动器会引导“继续配置”（已下载内容续传），而不是静默失败。
-# 注意：必须放在 $ProjectRoot 赋值之后（Join-Path 不接受 null 路径）。
-Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
+# Repair Mode 必须保留 marker：修复失败时用户仍视为“已安装”，只重建损坏角色。
+if (-not $Repair) {
+    Remove-Item $SetupMarker -Force -ErrorAction SilentlyContinue
+}
 
 # 磁盘预检：模型（按 Qwen 选择）+ 环境/源码/缓存预留，不足直接拦截。
 # （模型下载阶段还会再查一次；这里尽早拦截，避免装到一半才发现空间不够）
-$modelGb = if ($IncludeQwenChoice) { 11.7 } else { 7 }
-$needGb = [math]::Ceiling($modelGb + 3)
+$modelGb = if (-not $DownloadModels) { 0 } elseif ($IncludeQwenChoice) { 11.7 } else { 7 }
+$needGb = if ($DownloadModels) { [math]::Ceiling($modelGb + 3) } else { 3 }
 $driveName = ([System.IO.Path]::GetPathRoot($ProjectRoot)).TrimEnd('\').TrimEnd(':')
+$drive = $null
 try {
     $drive = Get-PSDrive -Name $driveName
+} catch {
+    Write-Warning "磁盘预检失败：$($_.Exception.Message)（将继续安装，模型下载时还会再次检查）"
+}
+if ($drive) {
     $freeGb = [math]::Round($drive.Free / 1GB, 1)
     if ($freeGb -lt $needGb) {
         throw "磁盘空间不足：项目盘（${driveName}:）仅剩 $freeGb GB，至少需要 $needGb GB（模型 $modelGb GB + 环境预留 3 GB）。请清理空间后重试。"
     }
-    Write-Host "[检查] 磁盘空间：$freeGb GB 可用（本次需要约 $needGb GB）" -ForegroundColor Cyan
-} catch {
-    Write-Warning "磁盘预检失败：$($_.Exception.Message)（将继续安装，模型下载时还会再次检查）"
+    $spaceLabel = if ($DownloadModels) { "本次需要约 $needGb GB" } else { "本次磁盘预留约 $needGb GB，不是额外下载量" }
+    Write-Host "[检查] 磁盘空间：$freeGb GB 可用（$spaceLabel）" -ForegroundColor Cyan
 }
 
 function Add-BundledToolsToPath {
@@ -203,7 +291,7 @@ function Install-GitDirect {
     $p = Start-Process -FilePath $gitInstaller -ArgumentList @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/S",
         "/DIR=$gitInstallDir", "/LOG=$gitLog", "/D=$gitInstallDir"
-    ) -Wait -PassThru
+    ) -Wait -PassThru -WindowStyle Hidden
     if ($p.ExitCode -ne 0) {
         throw "Git 安装失败（退出码 $($p.ExitCode)）。安装日志：$gitLog"
     }
@@ -241,7 +329,7 @@ function Install-DirectPrerequisites {
     New-Item -ItemType Directory -Path $downloads -Force | Out-Null
     if ($missing -contains "uv") {
         Write-Host "[Prerequisite] 从 GitHub 官方下载 uv ..." -ForegroundColor Cyan
-        Download-WithProxy "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" (Join-Path $downloads "uv.zip")
+        Download-WithProxy "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-pc-windows-msvc.zip" (Join-Path $downloads "uv.zip")
         Expand-Archive (Join-Path $downloads "uv.zip") (Join-Path $downloads "uv") -Force
         $uvDir = Join-Path $env:LOCALAPPDATA "uv"
         New-Item -ItemType Directory -Path $uvDir -Force | Out-Null
@@ -271,8 +359,12 @@ Refresh-ProcessPath
 $missing = @(Get-MissingCommands)
 
 if ($CheckOnly) {
-    if ($missing.Count -gt 0) {
-        Write-Host "[Missing prerequisites] $($missing -join ', ')" -ForegroundColor Red
+    $requiredMissing = @($missing | Where-Object { $_ -ne "nvidia-smi" })
+    if ($missing -contains "nvidia-smi") {
+        Write-Warning "未检测到 NVIDIA GPU 驱动；安装器结构检查仍可通过。若选择 MOSS/FireRed/Qwen 本地 CUDA 模型，请安装或更新 NVIDIA 驱动；也可选择 CPU 或在线 API 模型。"
+    }
+    if ($requiredMissing.Count -gt 0) {
+        Write-Host "[Missing prerequisites] $($requiredMissing -join ', ')" -ForegroundColor Red
         exit 1
     }
     Write-Host "[OK] System prerequisites are ready." -ForegroundColor Green
@@ -282,7 +374,7 @@ if ($CheckOnly) {
 $gpuWarned = $false
 if ($missing -contains "nvidia-smi") {
     $gpuWarned = $true
-    Write-Warning "未检测到 NVIDIA GPU 驱动（nvidia-smi 不可用）。环境与模型仍会安装，但 MOSS/FireRed/Qwen 实际转写需要 CUDA 显卡；如确认无 GPU 环境可忽略此提示。"
+    Write-Warning "未检测到 NVIDIA GPU 驱动（nvidia-smi 不可用）。运行环境仍会安装；之后可选择 CPU/在线 API 模型。只有选择 MOSS/FireRed/Qwen 本地 CUDA 模型时才需要可用的 NVIDIA 驱动。"
     $missing = @($missing | Where-Object { $_ -ne "nvidia-smi" })
 }
 
@@ -318,8 +410,27 @@ if ($remaining.Count -gt 0) {
     throw "Prerequisites are still missing: $($remaining -join ', ')."
 }
 
-Write-Host "[1/2] Creating Python environments and installing runtime dependencies ..." -ForegroundColor Cyan
-Set-InstallStep "创建 Python 环境并安装依赖（首次约 5-15 分钟）"
+if ($Repair) {
+    Write-Host "[修复] Repair Mode：忽略 setup-complete 早退，只重建检查失败的运行环境。" -ForegroundColor Cyan
+    Set-InstallStep "修复运行环境（不删除原环境，成功后才切换）"
+    $repairHelper = Join-Path $PSScriptRoot "repair_environment.ps1"
+    . $repairHelper
+    $repairCode = Invoke-EnvironmentRepair -ProjectRoot $ProjectRoot -Role $RepairRole
+    if ($repairCode -ne 0) {
+        throw "运行环境修复失败（退出码 $repairCode）。原环境已保留。"
+    }
+    if (-not (Test-Path -LiteralPath $SetupMarker)) {
+        Set-Content -LiteralPath $SetupMarker -Value (Get-Date).ToString("o") -Encoding ascii
+    }
+    Write-Host "[OK] 运行环境修复完成。" -ForegroundColor Green
+    if (-not $NoLaunch -and (Test-Path -LiteralPath $Launcher)) {
+        Start-Process -FilePath $Launcher -WorkingDirectory $ProjectRoot
+    }
+    exit 0
+}
+
+Write-Host "[1/2] Creating the lightweight workbench environment (no models) ..." -ForegroundColor Cyan
+Set-InstallStep "创建轻量工作台环境（不下载模型，通常约 2-8 分钟）"
 & $SetupEnvironment
 if ($LASTEXITCODE -ne 0) {
     throw "Python environment setup failed (exit code $LASTEXITCODE)."
@@ -329,16 +440,22 @@ if ($DownloadModels) {
     $totalText = if ($IncludeQwenChoice) { "约 11.7 GB（含 Qwen 复核模型）" } else { "约 7 GB" }
     Set-InstallStep "下载模型（$totalText，可断点续传）"
     Write-Host "[2/2] 下载固定版本模型（$totalText：MOSS 转写/说话人、FireRed 字级时间轴、声纹；可续传）..." -ForegroundColor Cyan
-    if ($IncludeQwenChoice) {
+    # 不使用数组 splatting 传递 switch。Windows PowerShell 5.1 在从安装器
+    # 启动的脚本调用链中可能把字符串 "-Yes" 重新绑定给父脚本，导致
+    # PositionalParameterNotFound。四种组合全部用真正的命名参数调用。
+    if ($IncludeQwenChoice -and $MinimalChoice) {
+        & $DownloadModelScript -Yes -IncludeQwen -Minimal
+    } elseif ($IncludeQwenChoice) {
         & $DownloadModelScript -Yes -IncludeQwen
+    } elseif ($MinimalChoice) {
+        & $DownloadModelScript -Yes -Minimal
     } else {
         & $DownloadModelScript -Yes
     }
     if ($LASTEXITCODE -ne 0) {
         throw "Model download failed (exit code $LASTEXITCODE)."
-    }
-} else {
-    Write-Host "[2/2] Model download skipped. Run download_models.bat later." -ForegroundColor Yellow
+}} else {
+    Write-Host "[2/2] 运行环境已准备好。模型不在 Setup 中强制下载，请首次启动后在模型工坊按需选择。" -ForegroundColor Green
 }
 
 Set-InstallStep "收尾"

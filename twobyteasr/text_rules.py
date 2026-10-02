@@ -1,5 +1,10 @@
 ﻿"""Shared subtitle text normalization, numeral, and editorial safety rules."""
 
+import os
+import re
+from collections import Counter
+from difflib import SequenceMatcher
+
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.runtime import get_runtime_context
 from twobyteasr.text_similarity import phonetic_text
@@ -47,7 +52,11 @@ def clean_subtitle_text(text):
     """保留问号、叹号和省略号，去掉不适合剪映短字幕的普通句读。"""
     forbidden = """《》〈〉【】[]（）(){}“”‘’\"`·・•、，。；：:;,—~～"""
     text = str(text).replace("\r", " ").replace("\n", " ")
+    # Deleting a comma between spoken numbers concatenated independent events
+    # before the Chinese parser (二十，二十 -> 二十二十 -> 40).
+    text = re.sub(r'(?<=[零〇一二两三四五六七八九十百千万亿0-9])[，,、](?=[零〇一二两三四五六七八九十百千万亿0-9])', '\ue000', text)
     text = text.translate(str.maketrans("", "", forbidden))
+    text = text.replace('\ue000', '，')
     text = text.replace("……", "...").replace("…", "...")
     text = re.sub(r"\.{4,}", "...", text)
     text = re.sub(r"(?<![A-Za-z0-9.])\.(?!\.)", "", text)
@@ -362,34 +371,8 @@ def chinese_numeral_value(token):
     """转换明确的中文数词；不负责判断“一起/一切”等词汇语境。"""
     if not token:
         return None
-    if not any(char in CHINESE_NUMBER_UNITS for char in token):
-        if all(char in CHINESE_NUMBER_DIGITS for char in token):
-            return "".join(str(CHINESE_NUMBER_DIGITS[char]) for char in token)
-        return None
-
-    total = 0
-    section = 0
-    number = 0
-    for char in token:
-        if char in CHINESE_NUMBER_DIGITS:
-            number = CHINESE_NUMBER_DIGITS[char]
-            continue
-        unit = CHINESE_NUMBER_UNITS.get(char)
-        if unit is None:
-            return None
-        if unit < 10000:
-            if number == 0:
-                number = 1
-            section += number * unit
-            number = 0
-        else:
-            section += number
-            if section == 0:
-                section = 1
-            total += section * unit
-            section = 0
-            number = 0
-    return str(total + section + number)
+    from .number_fidelity import integer_value
+    return integer_value(token)
 
 
 def format_arabic_quantity(value_text, source_token=""):
@@ -721,9 +704,6 @@ def normalize_output_text(text):
         "10 9 8",
         text,
     )
-    text = normalize_numeric_style(text)
-    text = normalize_chinese_numbers(text)
-    text = normalize_numeric_style(text)
     # “上舰”是直播会员语境中的固定动作。仅修正带倒计时的完整短语，
     # 不对普通“剑/线”做全局同音替换。
     text = text.replace("十秒内不上剑", "十秒内不上舰")
@@ -731,7 +711,6 @@ def normalize_output_text(text):
     for phrase in SUBTITLE_SUPPRESSED_PHRASES:
         text = text.replace(phrase, "")
     text = apply_active_canonical_replacements(text)
-    text = collapse_excessive_adjacent_repetitions(text)
     return clean_subtitle_text(text)
 
 
@@ -763,6 +742,10 @@ def remove_overlapping_duplicate_segments(segments):
                 if right.segment_id in dropped_ids:
                     continue
                 if left.timing_locked or right.timing_locked:
+                    continue
+                # Time overlap is necessary but not enough: independent ASR
+                # sources must remain evidence, not be mistaken for a chunk copy.
+                if not left.primary_source or left.primary_source != right.primary_source:
                     continue
                 left_text = content_only(left.text)
                 right_text = content_only(right.text)
@@ -846,8 +829,9 @@ def apply_editorial_segment_rules(segments):
             if count:
                 canonical_count += count
                 canonical_applied[(source, target)] += count
-        collapsed_repeat_count += int(has_excessive_adjacent_repetitions(original))
         segment.text = normalize_output_text(original)
+        from .number_fidelity import format_segment
+        format_segment(segment)
         if not content_only(segment.text):
             dropped_count += 1
             continue

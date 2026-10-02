@@ -1,8 +1,12 @@
 # 兔白字幕：安装、模型与高级使用
 
+0.5.0 平台状态：Windows 修复版已完成本地识别、编辑剪切、字幕和短视频导出验证；macOS Apple Silicon 实验版已完成 SenseVoice CPU 主流程验证，仅 ad hoc 签名，未作 Developer ID 签名/公证。当前尚无公开安装包；Docker 产品方向已撤下。
+
 ## 安装与准备
 
-1. 在[版本页](https://github.com/NOTBAD314/2ByteASR/releases)选择安装包，运行 Setup。
+当前尚无公开安装包；内部测试候选不是公开下载版本。此仓库仅提供独立源码范围，不是现有完整 Setup 的全部对应源码。
+
+1. 阅读[源码范围与构建条件](../SOURCE_ONLY_SCOPE.md)，在独立环境中准备有权使用的外部依赖。后续步骤描述依赖准备后的产品使用。
 2. 打开模型工坊，下载所选模型的权重并准备运行环境。
 3. 使用在线服务时，填写对应服务的账号或 API 密钥。
 4. 导入视频或音频，选择识别方案，开始生成字幕。
@@ -44,7 +48,7 @@ AI 断句、文本校对、术语搜索、字幕设计和片段分析按需启�
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-开发与测试步骤见[贡献指南](../CONTRIBUTING.md)，安装包构建见[构建说明](../RELEASING.md)，配置选项见[配置文档](../CONFIGURATION.md)。
+开发与测试步骤见[贡献指南](../CONTRIBUTING.md)；外部依赖、缺少的输入及构建限制见[源码范围](../SOURCE_ONLY_SCOPE.md)和[构建说明](../BUILD_FROM_SOURCE.md)。此源码树未验证可直接完整打包。
 
 ## 反馈问题
 

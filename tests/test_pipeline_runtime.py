@@ -90,6 +90,8 @@ def test_finalize_cues_preserves_the_established_stage_order():
         "validate",
         "single_character",
         "repeat_merge",
+        "repair",
+        "normalize",
         "vad_onset",
         "speaker_tail",
         "display_gap",

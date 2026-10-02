@@ -1,8 +1,12 @@
 # 2ByteASR: installation, models, and advanced use
 
+0.5.0 platform status: the Windows repair build has verified local transcription, editing/cuts, subtitles and a short video export. The macOS Apple Silicon experiment has a verified SenseVoice CPU workflow, with ad hoc signing only and no Developer ID signature or notarization. No public installer is available yet; the Docker product direction has been retired.
+
 ## Installation and setup
 
-1. Choose an installer from [Releases](https://github.com/NOTBAD314/2ByteASR/releases) and run Setup.
+No public installer is available yet; internal test candidates are not public downloads. This repository provides a limited source-only scope, not the complete Corresponding Source for an existing Setup.
+
+1. Read the [source scope and build requirements](../SOURCE_ONLY_SCOPE.md), then prepare authorized external dependencies in a separate environment. The remaining steps describe product use after dependencies are ready.
 2. Open Model Workshop to download the selected model weights and prepare their runtime environments.
 3. For online services, enter the account details or API key for your provider.
 4. Import video or audio, choose your recognition setup, and start generating subtitles.
@@ -44,7 +48,7 @@ From the repository directory on Windows, prepare the environment and start the 
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-See the [contribution guide](../CONTRIBUTING.md) for development and testing, [build instructions](../RELEASING.md) for packaging, and [configuration documentation](../CONFIGURATION.md) for settings.
+See the [contribution guide](../CONTRIBUTING.md) for development and testing, and [source scope](../SOURCE_ONLY_SCOPE.md) / [build instructions](../BUILD_FROM_SOURCE.md) for external dependencies and missing inputs. A complete build from this tree has not been verified.
 
 ## Reporting issues
 

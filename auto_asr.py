@@ -6,7 +6,7 @@ import moss_firered_pipeline
 import subtitle_core
 
 
-PIPELINE_BUILD_ID = "2026.08.05-v7.14-strict-length-number-style"
+PIPELINE_BUILD_ID = "2026.08.10-v7.18-asr-result-schema-v2"
 
 
 def main():

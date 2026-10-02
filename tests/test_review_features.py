@@ -4,6 +4,9 @@ media append/retry merging, i18n parity and model-integrity hints."""
 from __future__ import annotations
 
 import os
+import threading
+import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -22,10 +25,10 @@ def test_instance_lock_is_exclusive(tmp_path, monkeypatch):
         second = _acquire_instance_lock()
         assert second is None, "second instance must not acquire the lock"
     finally:
-        first.unlock()
+        first.release()
     third = _acquire_instance_lock()
     assert third is not None, "lock is released after unlock"
-    third.unlock()
+    third.release()
 
 
 def test_first_run_guide_dialog_constructs_and_detects_hardware():
@@ -36,6 +39,49 @@ def test_first_run_guide_dialog_constructs_and_detects_hardware():
     assert dialog.lang_combo.count() == 3
     # _detect_gpu must not raise even without nvidia-smi (CI)
     assert dialog.gpu_info.text()
+    assert dialog.preset_group.button(0).minimumHeight() >= 90
+    dialog._apply_preset("light")
+    assert dialog.selected_backends() == ("sensevoice", "off", "off")
+    assert dialog.selected_download_keys() == ("sensevoice",)
+    assert dialog.preset_group.button(1).isChecked()
+    dialog.close()
+
+
+def test_first_run_guide_switches_presets_without_waiting_for_cuda_probe(monkeypatch):
+    from twobyteasr import ui
+
+    app = QApplication.instance() or QApplication([])
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_probe():
+        calls.append(1)
+        started.set()
+        release.wait(timeout=2)
+        return SimpleNamespace(ready=False, gpu_name="")
+
+    monkeypatch.setattr(ui, "detect_cuda_runtime", slow_probe)
+    before = time.perf_counter()
+    dialog = ui.GuidedSetupDialog()
+    assert time.perf_counter() - before < 0.5
+    assert started.wait(timeout=1)
+
+    before = time.perf_counter()
+    for _ in range(25):
+        dialog._apply_preset("light")
+        dialog._apply_preset("online")
+        dialog._apply_preset("quality")
+    assert time.perf_counter() - before < 0.5
+    assert calls == [1]
+    assert dialog.selected_backends() == dialog.PRESETS["quality"]
+
+    release.set()
+    deadline = time.monotonic() + 1
+    while dialog._cuda_status is None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert dialog._cuda_status is not None
     dialog.close()
 
 

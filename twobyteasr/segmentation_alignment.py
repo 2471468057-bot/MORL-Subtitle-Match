@@ -1,5 +1,9 @@
 ﻿"""Character/timeline alignment helpers for subtitle segmentation."""
 
+import math
+import re
+from difflib import SequenceMatcher
+
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.text_similarity import phonetic_text
 from twobyteasr.segmentation import (
@@ -39,6 +43,10 @@ def individual_cue(segment):
 
 def segment_content_timeline(segment, firered_tokens=()):
     """用 FireRed 的可信字级锚点重切段内边界；始终保留 MOSS 外边界与正文。"""
+    from .number_fidelity import mapped_content_timeline
+    mapped = mapped_content_timeline(segment)
+    if mapped is not None:
+        return mapped
     target = list(content_only(segment.text))
     if not target:
         return []
@@ -129,6 +137,14 @@ def segment_content_timeline(segment, firered_tokens=()):
                 )
 
     if not raw_timeline:
+        # These are display estimates only. Preserve the absence of acoustic
+        # evidence in the existing arbitration metadata and diagnostic stream.
+        if not segment.caption_arbitration.get('timing_degradation'):
+            segment.caption_arbitration['timing_degradation'] = {
+                'reason': 'no-word-alignment', 'precision': 'segment-only',
+                'display_estimates': True, 'start': segment.start, 'end': segment.end}
+            record_run_event('alignment_degraded', segment_id=segment.segment_id,
+                             start=segment.start,end=segment.end,reason='no-word-alignment')
         duration = max(0.001, segment.end - segment.start)
         return [
             WordUnit(

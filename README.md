@@ -1,5 +1,4 @@
 <div align="center">
-<img src="assets/2byteasr-icon-transparent.png" width="100" alt="兔白字幕原角色图标" />
 
 # 2ByteASR · 兔白字幕
 
@@ -8,7 +7,7 @@
 免费的字幕识别与视频编辑工具，支持本地部署。<br/>
 从识别、校对到特效字幕与视频输出，一站完成。
 
-[下载／查看版本](https://github.com/NOTBAD314/2ByteASR/releases) · [完整演示](docs/product-demo.zh-CN.md) · [快速开始](#下载与快速开始)
+[源码范围](SOURCE_ONLY_SCOPE.md) · [完整演示](docs/product-demo.zh-CN.md) · [快速开始](#下载与快速开始)
 
 [中文](README.md) · [English](README_EN.md) · [日本語](README_JA.md)
 </div>
@@ -18,6 +17,8 @@
 *从主页开始：准备素材与识别方案，或进入字幕工作台继续编辑。*
 
 ## 一份字幕，三种分工
+
+平台状态：Windows 0.5.0 修复版已完成无密钥本地识别、字幕编辑与剪切、保存重开、字幕及短视频导出验证；[macOS Apple Silicon 实验版](docs/deployment/macos-experimental.zh-CN.md)已生成应用，SenseVoice CPU 主流程已验证。Mac 未作 Developer ID 签名或公证，Intel、整模型 MPS、人工听感及所有长任务尚未验证。当前尚无公开安装包；Docker 产品方向已撤下。
 
 转写先把话写出来，时间轴把字词落到对应位置，复核让同一句的不同结果可以放在一起比较。按素材和设备选择组合，再按需开启 AI 断句。
 
@@ -63,9 +64,9 @@
 
 ## 下载与快速开始
 
-适用于 **Windows x64**。[查看版本与下载](https://github.com/NOTBAD314/2ByteASR/releases)。
+面向 **Windows x64**。本仓库提供独立源码范围，**当前尚无公开安装包**；内部测试候选不作为公开下载版本。此范围不是现有完整 Setup 的全部对应源码，也未验证可直接完整打包。详见[源码范围与构建条件](SOURCE_ONLY_SCOPE.md)。
 
-1. **安装程序。** 从版本页获取对应安装包，运行 Setup 完成安装。
+1. **准备源码。** 先阅读[源码范围与构建条件](SOURCE_ONLY_SCOPE.md)，在独立开发环境中准备有权使用的外部依赖；以下为依赖准备后的产品使用流程。
 2. **准备识别方案。** 在模型工坊准备本地模型，或配置自己的在线服务。
 3. **导入并识别。** 选择素材、内容与词库，检查转写、字词时间和说话人结果。
 4. **进入兔白字幕 Studio。** 校对、拆分或合并，调整字幕与画面，再导出字幕、文稿或压制成片。
@@ -79,12 +80,12 @@
 - **在线服务：** 使用自己的账号或 API 密钥，按服务提供方的规则计费。
 - **输出：** SRT、ASS、TXT、JSON、说话人分轨，以及 MP4、MKV、MOV 视频。
 
-[安装与首次使用](docs/product-guide.zh-CN.md#安装与准备) · [模型、格式与高级使用](docs/product-guide.zh-CN.md) · [版本记录](https://github.com/NOTBAD314/2ByteASR/releases)
+[安装与首次使用](docs/product-guide.zh-CN.md#安装与准备) · [模型、格式与高级使用](docs/product-guide.zh-CN.md) · [源码范围与构建条件](SOURCE_ONLY_SCOPE.md)
 
 ## 更多文档与反馈
 
-[界面与功能展示](docs/product-demo.zh-CN.md) · [从源码运行与构建](docs/product-guide.zh-CN.md#从源码运行与构建) · [架构](ARCHITECTURE.md) · [反馈问题](https://github.com/NOTBAD314/2ByteASR/issues)
+[界面与功能展示](docs/product-demo.zh-CN.md) · [从源码运行与构建](docs/product-guide.zh-CN.md#从源码运行与构建) · [源码提供说明](SOURCE_DELIVERY.md) · [反馈问题](https://github.com/NOTBAD314/2ByteASR/issues)
 
 反馈时附上版本、模型、复现步骤和截图，方便定位问题。
 
-项目许可证见 [LICENSE](LICENSE)，第三方组件见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+项目自有代码采用 **GPL-3.0-only**（[标准英文全文](LICENSE) / [适用范围](PROJECT_LICENSE.md)）。官方版本免费提供；允许依 GPL 商用、修改和收费分发，分发时须履行对应源码等条件。私人修改无需公开，普通字幕、视频和图片不会仅因使用本软件生成而自动适用 GPL。第三方内容见 [第三方说明](THIRD_PARTY_NOTICES.md)，对应版本源码见 [交付说明](SOURCE_DELIVERY.md)。

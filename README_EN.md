@@ -1,5 +1,4 @@
 <div align="center">
-<img src="assets/2byteasr-icon-transparent.png" width="100" alt="2ByteASR mascot" />
 
 # 2ByteASR · 兔白字幕
 
@@ -8,7 +7,7 @@
 A free tool for subtitle transcription and video editing, with local processing.<br/>
 Transcribe, proofread, design animated subtitles, and export your video in one place.
 
-[Download / Releases](https://github.com/NOTBAD314/2ByteASR/releases) · [Product tour](docs/product-demo.en.md) · [Quick start](#download-and-quick-start)
+[Source scope](SOURCE_ONLY_SCOPE.md) · [Product tour](docs/product-demo.en.md) · [Quick start](#download-and-quick-start)
 
 [中文](README.md) · [English](README_EN.md) · [日本語](README_JA.md)
 </div>
@@ -18,6 +17,8 @@ Transcribe, proofread, design animated subtitles, and export your video in one p
 *Start from the home screen: prepare your media and recognition setup, or open Subtitle Studio to continue editing.*
 
 ## One set of subtitles, three roles
+
+Platform status: the Windows 0.5.0 repair build has passed local transcription without cloud keys, subtitle editing and cuts, save/reopen, subtitle exports, and a short video export. The [macOS Apple Silicon experiment](docs/deployment/macos-experimental.zh-CN.md) has a built app and a verified SenseVoice CPU workflow. It has no Developer ID signature or notarization; Intel, full-model MPS, human listening, and all long-running tasks remain unverified. No public installer is available yet. The Docker product direction has been retired.
 
 Transcription turns speech into text. Timing places characters and words on the timeline. Review lets you compare different readings of the same line. Choose a combination for your media and hardware, then enable AI sentence segmentation as needed.
 
@@ -63,9 +64,9 @@ Keep character names, aliases, and common recognition errors organized by game. 
 
 ## Download and quick start
 
-For **Windows x64**. [Browse releases and downloads](https://github.com/NOTBAD314/2ByteASR/releases).
+For **Windows x64**. This repository provides a limited source-only scope. **No public installer is available yet**; internal test candidates are not public downloads. This scope is not the complete Corresponding Source for an existing Setup, and a complete build from this tree has not been verified. See [source scope and build requirements](SOURCE_ONLY_SCOPE.md).
 
-1. **Install the app.** Download an installer from Releases and run Setup.
+1. **Prepare the source.** Read the [scope and build requirements](SOURCE_ONLY_SCOPE.md), then prepare authorized external dependencies in a separate development environment. The following steps describe product use after dependencies are ready.
 2. **Prepare recognition.** Set up local models in Model Workshop, or configure your online service.
 3. **Import and transcribe.** Choose your media, content settings, and glossary, then check the text, word timing, and speaker results.
 4. **Open Subtitle Studio.** Proofread, split or merge lines, adjust subtitles and video, then export subtitles, a transcript, or a video with subtitles burned in.
@@ -79,12 +80,12 @@ The default theme is **Deep Grape**. Choose another color scheme in Appearance s
 - **Online services:** Use your own account or API key. Billing follows your provider's terms.
 - **Output:** SRT, ASS, TXT, JSON, separate speaker tracks, and MP4, MKV, or MOV video.
 
-[Installation and first use](docs/product-guide.en.md#installation-and-setup) · [Models, formats, and advanced use](docs/product-guide.en.md) · [Release history](https://github.com/NOTBAD314/2ByteASR/releases)
+[Installation and first use](docs/product-guide.en.md#installation-and-setup) · [Models, formats, and advanced use](docs/product-guide.en.md) · [Source scope and build requirements](SOURCE_ONLY_SCOPE.md)
 
 ## Documentation and feedback
 
-[Interface and feature tour](docs/product-demo.en.md) · [Run and build from source](docs/product-guide.en.md#run-and-build-from-source) · [Architecture](ARCHITECTURE.md) · [Report an issue](https://github.com/NOTBAD314/2ByteASR/issues)
+[Interface and feature tour](docs/product-demo.en.md) · [Run and build from source](docs/product-guide.en.md#run-and-build-from-source) · [Source delivery](SOURCE_DELIVERY.md) · [Report an issue](https://github.com/NOTBAD314/2ByteASR/issues)
 
 Include your version, model, steps to reproduce, and screenshots when reporting an issue.
 
-See [LICENSE](LICENSE) for the project license and [Third-party notices](THIRD_PARTY_NOTICES.md) for component information.
+Project-owned code is licensed under **GPL-3.0-only** ([English license](LICENSE), [scope](PROJECT_LICENSE.md)). Official versions are free; GPL permits commercial use, modification and paid distribution subject to its source and other conditions. Private changes need not be published. Ordinary subtitle, video and image outputs do not become GPL merely through use of this software. See [Third-party notices](THIRD_PARTY_NOTICES.md) and the version-specific [source delivery instructions](SOURCE_DELIVERY.md).

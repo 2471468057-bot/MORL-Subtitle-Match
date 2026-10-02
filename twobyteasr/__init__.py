@@ -1,5 +1,8 @@
 """Public service types for the 2ByteASR production subtitle workflow."""
 
+from .test_isolation import install as _install_test_isolation
+_install_test_isolation()
+
 from .service import (
     CancellationToken,
     CancelledError,
@@ -11,7 +14,14 @@ from .service import (
 )
 
 
-__version__ = "2026.08.01-v7.0"
+def __getattr__(name):
+    # Runtime selection and pre-import diagnostics must work with stdlib
+    # alone; update discovery's requests dependency is loaded on demand.
+    if name == "__version__":
+        from .updater import current_version
+        return current_version()
+    raise AttributeError(name)
+
 __all__ = [
     "CancellationToken",
     "CancelledError",

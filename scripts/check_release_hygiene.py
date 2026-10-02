@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -62,7 +64,7 @@ FORBIDDEN_SUFFIXES = {
 }
 TEXT_SUFFIXES = {".py", ".md", ".json", ".txt", ".yml", ".yaml", ".bat", ".ps1", ".source"}
 TEXT_NAMES = {".gitignore", ".gitattributes"}
-GENERATED_BINARY_NAMES = {"2ByteASR.exe", "ShortcutIdentity.exe"}
+GENERATED_BINARY_NAMES = {"2ByteASR.exe", "2ByteASR-Configure.exe", "ShortcutIdentity.exe"}
 FORBIDDEN_SECRET_NAMES = {"secrets.json", "secrets.dat"}
 SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{24,}\b"),
@@ -103,8 +105,30 @@ def public_files() -> list[Path]:
     ]
 
 
+def approved_example_media(errors):
+    """Exact, bounded public demos, already linked by the example READMEs."""
+    manifest=ROOT/'examples/web-themes/release-media.json'
+    if not manifest.exists():return set()
+    approved=set();total=0
+    try:
+        entries=json.loads(manifest.read_text('utf8'))['files']
+        for entry in entries:
+            relative=entry['path'];path=(ROOT/relative).resolve()
+            if not relative.startswith('examples/web-themes/') or '..' in Path(relative).parts or not path.is_relative_to(ROOT/'examples/web-themes') or path.suffix!='.mp4':
+                raise ValueError('invalid example media path')
+            size=path.stat().st_size;total+=size
+            if size!=entry['bytes'] or size>2*1024*1024 or hashlib.sha256(path.read_bytes()).hexdigest()!=entry['sha256']:
+                raise ValueError('example media size/hash mismatch: '+relative)
+            approved.add(relative)
+        if total>32*1024*1024:raise ValueError('public demo media exceeds 32 MiB')
+    except (ValueError,KeyError,TypeError,OSError) as exc:
+        errors.append('示例媒体 manifest 无效：'+str(exc));return set()
+    return approved
+
+
 def main() -> int:
     errors: list[str] = []
+    approved_media=approved_example_media(errors)
     files = public_files()
     if not (ROOT / "LICENSE").is_file():
         errors.append("缺少 LICENSE")
@@ -113,11 +137,16 @@ def main() -> int:
 
     for path in files:
         relative = path.relative_to(ROOT).as_posix()
+        # docs/reports/archive/ holds committed historical engineering evidence
+        # (log excerpts quoted verbatim); local machine paths there are by
+        # design and only the private-path rule is waived for it. Secrets,
+        # forbidden suffixes and other rules still apply.
+        is_evidence_archive = relative.startswith("docs/reports/archive/")
         if path.name.lower() in FORBIDDEN_SECRET_NAMES:
             errors.append(f"不应发布的密钥文件：{relative}")
         if relative.startswith(FORBIDDEN_PREFIXES):
             errors.append(f"不应发布的路径：{relative}")
-        if path.suffix.lower() in FORBIDDEN_SUFFIXES:
+        if path.suffix.lower() in FORBIDDEN_SUFFIXES and relative not in approved_media:
             errors.append(f"不应发布的大文件类型：{relative}")
         if path.suffix.lower() not in TEXT_SUFFIXES and path.name not in TEXT_NAMES:
             continue
@@ -139,7 +168,7 @@ def main() -> int:
                 errors.append(f"疑似真实密钥：{relative}")
                 break
         for pattern in PRIVATE_PATH_PATTERNS:
-            if pattern.search(text):
+            if not is_evidence_archive and pattern.search(text):
                 errors.append(f"疑似本机用户绝对路径：{relative}")
                 break
 

@@ -1,0 +1,76 @@
+{
+  "basis_c_sha256": "e61ac5f93c7a7380e51b2081aa5d1d2501b5efd02af32dd16cc8224469225e36",
+  "basis_manifest_applies_to_original_c_archive": true,
+  "current_tree_documentation_delta": [
+    {
+      "path": "README.md",
+      "basis_sha256": "493baa5aca0c060bf4089b5315cca016bedc9c68be45409954a720077d37221a",
+      "current_sha256": "57f0f8d5864adea8faa0abc3054e909c94861e7955db9f88ab54f21bfe340269"
+    },
+    {
+      "path": "README_EN.md",
+      "basis_sha256": "4bea64c2e38c3e4e0c6a93c8b34def3db12834698e78de9ad2d0b808cc895836",
+      "current_sha256": "4f965c9fcf581d4c8419e903145f3d249be41be9d47cb39ab1f151e1488e5dc4"
+    },
+    {
+      "path": "README_JA.md",
+      "basis_sha256": "dac721ab93bdcd107c2cae3084e75ffb493ad2801eff0db29e926974c1166419",
+      "current_sha256": "31f0021e28713200744142fa10df989e15241b8a277da54c0b82e4a84a747d34"
+    },
+    {
+      "path": "SOURCE_DELIVERY.md",
+      "basis_sha256": "7b723b6bec3bccdb929cba626504c5120af51662816d0233e78ba50fd422e955",
+      "current_sha256": "7287a4d62686ef2aa33090ad5086e862cd5985bc97874fa85b3c66bd6290b168"
+    },
+    {
+      "path": "SOURCE_ONLY_SCOPE.md",
+      "basis_sha256": "1da41cf15abdb899d21b816edf52e9ccac84ec2b6479ace8b0a3f6803b541e60",
+      "current_sha256": "ac9826b3cb3de3f8dd05f9690a34004d94aef52644f3ab9a4c34b9ebb3e3eb67"
+    },
+    {
+      "path": "docs/deployment/macos-experimental.zh-CN.md",
+      "basis_sha256": "e38b1ca7a38ac1a24306284870912608a122867b61d4b53469bd4aa1c3667efe",
+      "current_sha256": "c871f9373844ca76ec4344e6d59a89e8edf17763a966dc81bc60de9c29a7f40e"
+    },
+    {
+      "path": "docs/product-guide.en.md",
+      "basis_sha256": "2fce0e1a6000103b76778000d9170468f7c807bc60fd59bde28afc5a7aeced44",
+      "current_sha256": "740b442ef188b6b68444d3c99d55421eca88dc13ec75ff3f92df238e02888f16"
+    },
+    {
+      "path": "docs/product-guide.ja.md",
+      "basis_sha256": "7013d3e42a55973d2c5bc6a45b19b4d5314a9fd20ee38a73f4d4fcfa85e71ce1",
+      "current_sha256": "2747e45406ec0ad40fff24612177f3885c4bb26dd91f29655cbfab3dcc8f100a"
+    },
+    {
+      "path": "docs/product-guide.zh-CN.md",
+      "basis_sha256": "67d35222f17b6cccdcfe548850a52904bbdfeaf83d666d91aff243909489175f",
+      "current_sha256": "7a7c7d16d27d0e3a02b1553a7e5f860c8a8aaa7916ee2ef911b013612d5406f8"
+    }
+  ],
+  "new_files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "8b9c3028d6467ff3be7c793141927841d70f47f52d0590677438f488ca154992"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "6fb499186e6628c517ac0296c6f74dd9e78d1116ce72e1c021322391ab786c43"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "417c847d0f46568368555a6ff766fdb5aef44a8edf7ba7e3d778b6d7dc4b8c51"
+    },
+    {
+      "path": "docs/PROJECT_STATE.md",
+      "sha256": "ee259abf3cd3f8e8bc121dfd5512e82359ef06ee3716a4516eafa5527058beb1"
+    },
+    {
+      "path": "docs/architecture/packaging.md",
+      "sha256": "10c30f350f482724495994b5ce9f38f4c92bfc3a85503b5887c6bc2c441753f1"
+    }
+  ],
+  "program_source_unchanged": true,
+  "source_only_archive_preserved": true,
+  "not_full_binary_corresponding_source": true
+}

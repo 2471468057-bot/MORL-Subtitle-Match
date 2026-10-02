@@ -40,7 +40,7 @@ function Assert-Prerequisites {
     }
 
     if ($gpuMissing) {
-        Write-Warning "未检测到 NVIDIA GPU 驱动（nvidia-smi 不可用）。环境与模型仍会安装，但 MOSS/FireRed/Qwen 实际转写需要 CUDA 显卡。"
+        Write-Host "[硬件] 未检测到 NVIDIA GPU；基础工作台仍可正常安装。之后可选择 CPU/在线 API 模型。" -ForegroundColor Yellow
         return
     }
     $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
@@ -155,8 +155,36 @@ $Lock = Get-Content -Raw -Encoding UTF8 $LockPath | ConvertFrom-Json
 if ($Lock.schema_version -ne 1) {
     throw "不支持的 dependencies.lock.json schema_version：$($Lock.schema_version)"
 }
+$CudaTorchVersion = [string]$Lock.runtime.torch
+$CudaAudioVersion = [string]$Lock.runtime.torchaudio
+$CudaTorchTag = [string]$Lock.runtime.cuda_wheel
+$CudaTorchModernTag = [string]$Lock.runtime.cuda_wheel_modern
+$SetuptoolsVersion = [string]$Lock.runtime.setuptools
+$WheelVersion = [string]$Lock.runtime.wheel
+if (-not $CudaTorchVersion -or -not $CudaAudioVersion -or -not $CudaTorchTag `
+        -or -not $SetuptoolsVersion -or -not $WheelVersion) {
+    throw "dependencies.lock.json 缺少 runtime.torch / torchaudio / cuda_wheel / setuptools / wheel。"
+}
 
-Write-Host "2ByteASR 环境安装（模型由 download_models.bat 单独下载，默认约 7 GB / 含 Qwen 约 11.7 GB）" -ForegroundColor Cyan
+function Select-CudaTorchTag {
+    # RTX 50 / Blackwell (compute capability 12.x) needs a wheel that contains
+    # sm_120 kernels.  cu126 can import successfully yet fail on the first GPU
+    # tensor, so choose cu128 for that architecture and keep cu126 for older
+    # cards/drivers with wider compatibility.
+    if ($CudaTorchModernTag -and (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
+        $capability = & nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null | Select-Object -First 1
+        $majorText = ([string]$capability -split '\.')[0] -replace '[^0-9]', ''
+        $major = 0
+        [void][int]::TryParse($majorText, [ref]$major)
+        if ($major -ge 12) {
+            Write-Host "[硬件] 检测到 compute capability $capability，使用支持 RTX 50 系列的 $CudaTorchModernTag PyTorch。" -ForegroundColor Cyan
+            return $CudaTorchModernTag
+        }
+    }
+    return $CudaTorchTag
+}
+
+Write-Host "2ByteASR 轻量工作台环境安装（不下载模型，也不安装 MOSS/FireRed/Qwen/FunASR 专属运行库）" -ForegroundColor Cyan
 
 # 便携版内置工具（tools/）优先加入 PATH：ffmpeg、git、uv 无需联网下载。
 # 必须在系统依赖检查之前执行，否则仅带内置工具（未全局安装）的环境会误报缺少依赖。
@@ -168,14 +196,13 @@ if (Test-Path $ToolsDir) {
 }
 
 Assert-Prerequisites
+$CudaTorchTag = Select-CudaTorchTag
+$CudaTorchFindLinks = "https://mirrors.aliyun.com/pytorch-wheels/$CudaTorchTag/"
+$CudaTorchOfficialIndex = "https://download.pytorch.org/whl/$CudaTorchTag"
 if ($CheckOnly) {
     Write-Host "[完成] 系统依赖检查通过。"
     exit 0
 }
-
-Ensure-PinnedSource $Lock.sources.moss "MOSS-Transcribe-Diarize" "pyproject.toml"
-Ensure-PinnedSource $Lock.sources.firered "FireRedASR2S" "fireredasr2s\__init__.py"
-& (Join-Path $PSScriptRoot "harden_firered_source.ps1")
 
 $Uv = (Get-Command uv).Source
 if (-not $Uv) {
@@ -185,8 +212,6 @@ if (-not $Uv) {
         $Uv = (Get-Command uv).Source
     }
 }
-$MossSource = Resolve-ProjectPath $Lock.sources.moss.path
-
 # 国内网络默认使用清华 PyPI 镜像安装依赖；
 # 需要官方 PyPI 时设置环境变量 UV_DEFAULT_INDEX=https://pypi.org/simple 覆盖。
 if (-not $env:UV_DEFAULT_INDEX) {
@@ -208,11 +233,14 @@ if (Test-Path $WheelsDir) {
     Write-Host "[环境] 使用便携包内置依赖（wheels/），无需联网下载" -ForegroundColor Cyan
 }
 
-# 依赖缓存目录固定到项目内，避免默认 %LOCALAPPDATA%\uv\cache 占用系统盘
-# （torch 等大包缓存可达数 GB）。可用 UV_CACHE_DIR 覆盖。
+# 安装期间把 uv 缓存放在项目内，便于大依赖下载中断后续传；环境创建成功后
+# 自动删除，因为虚拟环境已经包含运行文件，保留缓存只会重复占用数 GB。
+# 用户显式指定的 UV_CACHE_DIR 可能是共享缓存，因此不会自动清理。
+$ProjectUvCache = Join-Path $ProjectRoot ".uv-cache"
+$UsingProjectUvCache = -not [bool]$env:UV_CACHE_DIR
 if (-not $env:UV_CACHE_DIR) {
-    $env:UV_CACHE_DIR = Join-Path $ProjectRoot ".uv-cache"
-    Write-Host "[网络] uv 依赖缓存：$env:UV_CACHE_DIR（可用 UV_CACHE_DIR 覆盖）" -ForegroundColor Cyan
+    $env:UV_CACHE_DIR = $ProjectUvCache
+    Write-Host "[网络] uv 临时依赖缓存：$env:UV_CACHE_DIR（安装成功后自动清理）" -ForegroundColor Cyan
 }
 
 # torch 等大依赖在镜像上下载较慢，放宽 uv 的 HTTP 超时（默认 30 秒偏短，
@@ -241,6 +269,79 @@ function Resolve-SystemPython {
 }
 
 
+function Get-PythonInstallerSha256 {
+    param([Parameter(Mandatory = $true)][string]$Version)
+    switch ($Version) {
+        "3.10.11" { return "d8dede5005564b408ba50317108b765ed9c3c510342a598f9fd42681cbe0648b" }
+        "3.12.10" { return "67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb" }
+        default { return "" }
+    }
+}
+
+
+function Assert-PythonInstallerIntegrity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Installer,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    $expected = Get-PythonInstallerSha256 $Version
+    if (-not $expected) {
+        Write-Warning "Python $Version 没有内置 SHA-256 记录，跳过安装器哈希校验。"
+        return
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "Python $Version 安装器校验失败，文件可能下载不完整或已被篡改：$Installer`n期望 SHA-256：$expected`n实际 SHA-256：$actual"
+    }
+}
+
+
+function Install-PythonFromExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Installer,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$MajorMinor,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    Assert-PythonInstallerIntegrity $Installer $Version
+    $logPath = Join-Path $env:TEMP "2byteasr-python-$Version-install.log"
+    Remove-Item $logPath -Force -ErrorAction SilentlyContinue
+    Write-Host "[环境] Python 安装日志：$logPath" -ForegroundColor DarkGray
+
+    # python.org 的 exe 是 GUI bootstrapper。用调用运算符（&）启动时，Windows
+    # PowerShell 可能在真正安装完成前就继续执行，随后立即探测 python.exe 会误判失败。
+    # Start-Process -Wait 会等待完整安装进程结束，并可靠取得退出码。
+    try {
+        $process = Start-Process -FilePath $Installer -ArgumentList @(
+            "/quiet", "/log", "`"$logPath`"",
+            "InstallAllUsers=0", "PrependPath=0", "Include_launcher=0",
+            "Include_test=0", "Include_doc=0", "Include_tcltk=1"
+        ) -Wait -PassThru -WindowStyle Hidden
+        $exitCode = $process.ExitCode
+    } catch {
+        throw "$Label Python $Version 安装器无法启动：$($_.Exception.Message)`n安装器：$Installer`n日志：$logPath"
+    }
+
+    # 安装完成后注册表和杀毒软件仍可能有短暂延迟，最多等待 30 秒。
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        $exe = Resolve-SystemPython $MajorMinor
+        if ($exe) {
+            if ($exitCode -eq 3010) {
+                Write-Warning "Python $Version 已安装，安装器提示重启后生效（退出码 3010）。当前安装可继续。"
+            }
+            return $exe
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $logTail = ""
+    if (Test-Path $logPath) {
+        $logTail = "`n--- Python 安装日志末尾 30 行 ---`n" + ((Get-Content -LiteralPath $logPath -Tail 30) -join "`n")
+    }
+    throw "$Label 需要 Python $MajorMinor。Python $Version 安装失败或安装后未找到 python.exe（退出码 $exitCode）。`n安装日志：$logPath$logTail"
+}
+
+
 function Ensure-SystemPython {
     param(
         [Parameter(Mandatory = $true)][string]$MajorMinor,
@@ -253,11 +354,7 @@ function Ensure-SystemPython {
     $localInstaller = Join-Path $ProjectRoot "tools\python-$pyVersion-amd64.exe"
     if (Test-Path $localInstaller) {
         Write-Host "[环境] 使用便携包内置 Python 安装器（$pyVersion）..." -ForegroundColor Cyan
-        # Include_tcltk=1：部分依赖（tqdm/PIL）会可选导入 tkinter，缺 tcl/tk 会启动失败
-        & $localInstaller /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=1
-        $exe = Resolve-SystemPython $MajorMinor
-        if ($exe) { return $exe }
-        throw "$Label 需要 Python $MajorMinor。便携包内置安装器安装失败，请手动安装后重试。"
+        return (Install-PythonFromExecutable $localInstaller $pyVersion $MajorMinor $Label)
     }
     Write-Host "[环境] 未找到系统 Python $MajorMinor，尝试通过 winget 安装..." -ForegroundColor Cyan
     # winget 的进度输出会污染函数返回值，必须全部吞掉
@@ -284,16 +381,16 @@ function Ensure-SystemPython {
                 Start-Sleep -Seconds 4
             }
         }
-        & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 Include_doc=0 Include_tcltk=1
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Label 需要 Python $MajorMinor。python.org 安装失败（退出码 $LASTEXITCODE），请手动安装后重新运行 setup_2byteasr.bat。"
-        }
+        return (Install-PythonFromExecutable $installer $pyVersion $MajorMinor $Label)
     }
-    $exe = Resolve-SystemPython $MajorMinor
-    if (-not $exe) {
-        throw "$Label 需要 Python $MajorMinor。安装后请重新运行 setup_2byteasr.bat。"
+
+    # winget 成功后也可能需要数秒才写完注册表，和 exe 安装走同一套耐心轮询。
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        $exe = Resolve-SystemPython $MajorMinor
+        if ($exe) { return $exe }
+        Start-Sleep -Seconds 1
     }
-    return $exe
+    throw "$Label 需要 Python $MajorMinor。winget 返回成功，但安装后仍未找到 python.exe。请查看 %TEMP%\2byteasr-setup.log 并重新运行 setup_2byteasr.bat。"
 }
 
 
@@ -323,35 +420,101 @@ $MainPythonExe = Ensure-SystemPython ([string]$Lock.python.main) "主流程"
 Write-Host "[环境] 使用系统 Python：$MainPythonExe"
 New-StdlibVenv $MainPythonExe $MainEnv
 $MainPython = Join-Path $MainEnv "Scripts\python.exe"
-Invoke-External $Uv (@("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt"), "--torch-backend=auto") + $OfflineArgs)
+Invoke-External $Uv (@("pip", "install", "--python", $MainPython, "pip==26.1.2") + $OfflineArgs)
+Invoke-External $Uv (@("pip", "install", "--python", $MainPython, "setuptools==$SetuptoolsVersion", "wheel==$WheelVersion") + $OfflineArgs)
+Invoke-External $Uv (@("pip", "install", "--python", $MainPython, "-r", (Join-Path $ProjectRoot "requirements-main.txt")) + $OfflineArgs)
 
-Write-Host "[环境] 创建 MOSS Python $($Lock.python.moss) ..."
-$MossPythonExe = Ensure-SystemPython ([string]$Lock.python.moss) "MOSS"
-Write-Host "[环境] 使用系统 Python：$MossPythonExe"
-New-StdlibVenv $MossPythonExe $MossEnv
-$MossPython = Join-Path $MossEnv "Scripts\python.exe"
-Invoke-External $Uv (@("pip", "install", "--python", $MossPython, "-e", "$MossSource[torch-runtime]", "--torch-backend=auto") + $OfflineArgs)
+# Main deep preflight and Repair Mode use the deployment contract below. A
+# successful first setup must satisfy the same contract; otherwise the launcher
+# immediately asks users to repair an environment setup just created.
+. (Join-Path $PSScriptRoot "environment-lock.ps1")
+$MainContractPackages = @(Get-EnvironmentPackages -Role main -ProjectRoot $ProjectRoot)
+$MainTorchVersion = Get-EnvironmentDependency -Role main -Name torch -ProjectRoot $ProjectRoot
+$MainAudioVersion = Get-EnvironmentDependency -Role main -Name torchaudio -ProjectRoot $ProjectRoot
+Write-Host "[环境] 安装 Main 共享运行契约（不含模型权重）..." -ForegroundColor Cyan
+Invoke-External $Uv (@("pip", "install", "--python", $MainPython) + $MainContractPackages + $OfflineArgs)
+Invoke-External $Uv (@(
+    "pip", "install", "--python", $MainPython,
+    "torch==$MainTorchVersion+cpu", "torchaudio==$MainAudioVersion+cpu"
+) + $OfflineArgs)
 
-if (-not (Test-Path (Join-Path $MossEnv "Scripts\hf.exe"))) {
-    Invoke-External $Uv (@("pip", "install", "--python", $MossPython, "huggingface_hub[cli]==1.24.0") + $OfflineArgs)
+# NVIDIA GPU 使用经过验证、驱动覆盖面更广的 cu126 组合。不能只检查版本名
+# 是否含有 “+cu”：cu130 在 580 以下驱动上同样会安装成功，却无法启动 CUDA。
+function Test-CompatibleCudaTorch {
+    param([Parameter(Mandatory = $true)][string]$PythonExe)
+    if (-not (Test-Path -LiteralPath $PythonExe)) { return $false }
+    $previousEap = $ErrorActionPreference
+    try {
+        # A missing torch package is an expected probe result, not a setup
+        # failure. Windows PowerShell 5.1 otherwise promotes native stderr to
+        # NativeCommandError while ErrorActionPreference is Stop.
+        $ErrorActionPreference = "Continue"
+        & $PythonExe -c "import sys, torch, torchaudio; versions = torch.__version__ == '$CudaTorchVersion+$CudaTorchTag' and torchaudio.__version__ == '$CudaAudioVersion+$CudaTorchTag'; usable = versions and torch.cuda.is_available() and torch.empty(1, device='cuda').numel() == 1; sys.exit(0 if usable else 1)" 2>$null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
 }
 
-# 离线 wheels 装的是 CPU torch；检测到 NVIDIA GPU 时升级为 CUDA 版
-# （唯一联网步骤，约 2.5 GB，可断点续传；失败则继续使用 CPU 版）。
-# 已有 CUDA torch（+cu 版本）时跳过，重跑不会重复下载。
-$gpuPresent = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-$hasCudaTorch = $false
-if (Test-Path $MainPython) {
-    $torchVersion = & $MainPython -c "import torch; print(torch.__version__)" 2>$null
-    if ($torchVersion -match '\+cu') { $hasCudaTorch = $true }
-}
-if ($OfflineArgs.Count -gt 0 -and $gpuPresent -and -not $env:2BYTEASR_CPU_ONLY -and -not $hasCudaTorch) {
-    Write-Host "[环境] 检测到 NVIDIA GPU：将 torch 升级为 CUDA 版（一次性联网下载约 2.5 GB，可断点续传）..." -ForegroundColor Cyan
-    foreach ($python in @($MainPython, $MossPython)) {
-        & $Uv pip install --python $python --upgrade torch torchaudio --torch-backend=cuda
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "CUDA torch 升级失败（退出码 $LASTEXITCODE），继续使用内置 CPU 版（转写较慢）。可稍后手动升级：uv pip install --python $python --upgrade torch torchaudio --torch-backend=cuda"
+function Remove-IncompleteTorchInstallation {
+    param([Parameter(Mandatory = $true)][string]$PythonExe)
+    $venvRoot = Split-Path -Parent (Split-Path -Parent $PythonExe)
+    $sitePackages = [System.IO.Path]::GetFullPath((Join-Path $venvRoot "Lib\site-packages"))
+    $projectFull = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
+    if (-not $sitePackages.StartsWith($projectFull + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "拒绝清理项目目录之外的 Python 环境：$sitePackages"
+    }
+    if (-not (Test-Path -LiteralPath $sitePackages)) { return }
+    $broken = @(
+        Get-ChildItem -LiteralPath $sitePackages -Directory -Filter "torch-*.dist-info" -ErrorAction SilentlyContinue |
+            Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName "RECORD")) }
+    )
+    if ($broken.Count -eq 0) { return }
+    Write-Warning "检测到上次中断留下的不完整 PyTorch（缺少 RECORD），正在安全清理后重装。"
+    $targets = @(
+        (Join-Path $sitePackages "torch"),
+        (Join-Path $sitePackages "torchaudio"),
+        (Join-Path $sitePackages "torchgen"),
+        (Join-Path $sitePackages "functorch")
+    ) + @(
+        Get-ChildItem -LiteralPath $sitePackages -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "torch-*.dist-info" -or $_.Name -like "torchaudio-*.dist-info" } |
+            Select-Object -ExpandProperty FullName
+    )
+    try {
+        foreach ($target in ($targets | Select-Object -Unique)) {
+            if (Test-Path -LiteralPath $target) {
+                Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+            }
         }
+    } catch {
+        throw "PyTorch 文件正在被占用，无法修复。请关闭所有 2ByteASR、模型下载器和使用该环境的 Python 进程后重试。被占用文件：$($_.Exception.Message)"
+    }
+}
+
+function Install-CompatibleCudaTorch {
+    param(
+        [Parameter(Mandatory = $true)][string]$PythonExe,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    if (Test-CompatibleCudaTorch $PythonExe) {
+        Write-Host "[环境] $Label 已使用兼容 PyTorch：$CudaTorchVersion+$CudaTorchTag" -ForegroundColor DarkGray
+        return
+    }
+
+    Remove-IncompleteTorchInstallation $PythonExe
+
+    $torchSpec = "torch==$CudaTorchVersion+$CudaTorchTag"
+    $audioSpec = "torchaudio==$CudaAudioVersion+$CudaTorchTag"
+    Write-Host "[环境] $Label 安装兼容 CUDA PyTorch（$CudaTorchVersion+$CudaTorchTag，国内镜像，可续传）..." -ForegroundColor Cyan
+    & $Uv pip install --python $PythonExe --upgrade $torchSpec $audioSpec --find-links $CudaTorchFindLinks --index-strategy unsafe-best-match --reinstall-package torch --reinstall-package torchaudio
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "阿里云 PyTorch 镜像安装失败，尝试 PyTorch 官方源..."
+        Remove-IncompleteTorchInstallation $PythonExe
+        & $Uv pip install --python $PythonExe --upgrade $torchSpec $audioSpec --index-url $CudaTorchOfficialIndex --index-strategy unsafe-best-match --reinstall-package torch --reinstall-package torchaudio
+    }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-CompatibleCudaTorch $PythonExe)) {
+        throw "$Label 的 CUDA PyTorch 安装失败。目标版本：$CudaTorchVersion+$CudaTorchTag。若日志含‘拒绝访问/os error 5’，请关闭所有 2ByteASR 与 Python 进程后重试；否则可切换下载源或运行【配置或修复 2ByteASR】。"
     }
 }
 
@@ -360,8 +523,32 @@ Invoke-External $MainPython @(
     (Join-Path $ProjectRoot "auto_asr.py"),
     (Join-Path $ProjectRoot "moss_firered_pipeline.py"),
     (Join-Path $ProjectRoot "subtitle_core.py"),
-    (Join-Path $ProjectRoot "twobyteasr\ui.py")
+    (Join-Path $ProjectRoot "twobyteasr\ui.py"),
+    (Join-Path $ProjectRoot "twobyteasr\model_workshop.py")
 )
 
+if ($UsingProjectUvCache -and (Test-Path -LiteralPath $ProjectUvCache)) {
+    try {
+        $resolvedProject = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
+        $resolvedCache = [System.IO.Path]::GetFullPath($ProjectUvCache).TrimEnd('\')
+        $expectedCache = $resolvedProject + "\.uv-cache"
+        if (-not $resolvedCache.Equals($expectedCache, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "缓存路径超出预期范围：$resolvedCache"
+        }
+        $cacheBytes = (
+            Get-ChildItem -LiteralPath $resolvedCache -File -Recurse -Force -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum
+        ).Sum
+        if ($null -eq $cacheBytes) { $cacheBytes = 0 }
+        Remove-Item -LiteralPath $resolvedCache -Recurse -Force -ErrorAction Stop
+        $cacheGb = [math]::Round([double]$cacheBytes / 1GB, 1)
+        Write-Host "[清理] 已删除 uv 临时依赖缓存，释放约 $cacheGb GB：$resolvedCache" -ForegroundColor Green
+    } catch {
+        Write-Warning "uv 临时缓存清理失败，可在关闭 2ByteASR 后手动删除 $ProjectUvCache：$($_.Exception.Message)"
+    }
+} elseif (-not $UsingProjectUvCache) {
+    Write-Host "[保留] 检测到用户自定义 UV_CACHE_DIR，不自动清理：$env:UV_CACHE_DIR" -ForegroundColor DarkGray
+}
+
 Write-Host ""
-Write-Host "[完成] 程序环境已准备好。下一步运行 download_models.bat。" -ForegroundColor Green
+Write-Host "[完成] 轻量工作台环境已准备好。启动 2ByteASR 后再从模型工坊按需安装模型。" -ForegroundColor Green

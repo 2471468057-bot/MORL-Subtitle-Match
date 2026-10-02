@@ -2,6 +2,7 @@
 
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.segmentation import should_merge_hanging_attribute
+from .subtitle_fidelity import independent_response
 
 __all__ = [
     "merge_same_speaker_dangling_cues",
@@ -17,6 +18,8 @@ def merge_same_speaker_dangling_cues(cues):
     if len(cues) < 2:
         return cues
     by_speaker = {}
+    chronological = sorted(cues, key=lambda cue:(cue.start, cue.end, cue.cue_id))
+    neighbors = {(id(a), id(b)) for a,b in zip(chronological, chronological[1:])}
     for cue in cues:
         by_speaker.setdefault(cue.speaker or "S00", []).append(cue)
 
@@ -52,6 +55,10 @@ def merge_same_speaker_dangling_cues(cues):
                 else MAX_SUBTITLE_CHARS
             )
             can_merge = (
+                (id(current), id(following)) in neighbors
+                and not independent_response(current.text)
+                and not independent_response(following.text)
+                and
                 gap <= (
                     SINGLE_CHARACTER_MERGE_MAX_GAP_SECONDS
                     if left_is_dangling or right_is_dangling
@@ -122,7 +129,7 @@ def merge_isolated_two_character_cues(cues):
     while index < len(rows):
         current = rows[index]
         short_text = content_exact(current.text)
-        if len(short_text) != 2:
+        if len(short_text) != 2 or independent_response(current.text):
             index += 1
             continue
 
@@ -218,6 +225,15 @@ def resolve_isolated_single_character_cues(cues):
             continue
 
         single_text = content_exact(current.text)
+        # A short answer/interruption is dialogue evidence, even when its text
+        # is also a common filler. Never erase a distinct speaker turn.
+        separate_turn = any(neighbor is not None and neighbor.speaker != current.speaker
+                            and max(0.0, current.start-neighbor.end, neighbor.start-current.end) <= 1.0
+                            for neighbor in (previous, following))
+        if separate_turn:
+            kept_ids.add(current.cue_id)
+            index += 1
+            continue
         if single_text not in EDITORIAL_OMITTABLE_SINGLE_CHARACTERS:
             # “有/对/走”等实义孤字宁可单独保留并提示复核，也绝不能为了
             # 版面好看而删字。后续安全回滚还能保证任何意外都不阻断导出。
@@ -228,6 +244,27 @@ def resolve_isolated_single_character_cues(cues):
                 "无法安全并入相邻同主播字幕，已原样保留；建议结合原音复核",
                 current.text,
                 priority=2,
+            )
+            index += 1
+            continue
+
+        # 三十九轮：逐字（verbatim）模式保留「嗯/啊/哦」等孤立语气词——
+        # 合规/质检场景要求原话完整，不得为版面省略（风格设置见
+        # models.api_transcribe_style；clean 维持原有省略行为）。
+        import subtitle_core as _core
+
+        if str(
+            getattr(_core, "RUNTIME_SETTINGS", {}).get("models", {}).get(
+                "api_transcribe_style", "clean"
+            )
+        ) == "verbatim":
+            kept_ids.add(current.cue_id)
+            add_review_item(
+                current.start,
+                "逐字模式保留语气词",
+                "转写风格=verbatim：孤立语气词按原话保留",
+                current.text,
+                priority=1,
             )
             index += 1
             continue
@@ -339,12 +376,14 @@ def apply_isolated_single_character_rules_safely(cues):
 def merge_consecutive_short_repeated_cues(cues):
     """把“对的｜对的”这类连读重复收进一条，保留两次原字与完整时间。"""
     by_speaker = {}
+    chronological = sorted(cues, key=lambda cue: (cue.start, cue.end, cue.cue_id))
+    neighbors = {(id(a), id(b)) for a, b in zip(chronological, chronological[1:])}
     for cue in cues:
         by_speaker.setdefault(cue.speaker or "S00", []).append(cue)
     result = []
     merged_count = 0
     for rows in by_speaker.values():
-        rows.sort(key=lambda cue: (cue.cue_id, cue.start, cue.end))
+        rows.sort(key=lambda cue: (cue.start, cue.end, cue.cue_id))
         index = 0
         while index < len(rows):
             current = rows[index]
@@ -356,6 +395,8 @@ def merge_consecutive_short_repeated_cues(cues):
                 combined_duration = following.end - current.start
                 if (
                     repeated
+                    and (id(current), id(following)) in neighbors
+                    and not current.timing_locked and not following.timing_locked
                     and short
                     and -0.20 <= gap <= SINGLE_CHARACTER_MERGE_MAX_GAP_SECONDS
                     and display_length(current.text + following.text) <= MAX_SUBTITLE_CHARS
@@ -374,7 +415,7 @@ def merge_consecutive_short_repeated_cues(cues):
                     continue
             result.append(current)
             index += 1
-    result.sort(key=lambda cue: (cue.cue_id, cue.start, cue.end))
+    result.sort(key=lambda cue: (cue.start, cue.end, cue.cue_id))
     for cue_id, cue in enumerate(result, 1):
         cue.cue_id = cue_id
     if merged_count:

@@ -1,11 +1,25 @@
 ﻿"""cache stage implementation extracted from subtitle_core."""
 
+# 显式导入本模块使用的 stdlib，不依赖 ``from subtitle_core import *`` 泄漏。
+# （subtitle_core 删除任何"看似无用"的导入都会让隐式依赖在运行期 NameError。）
+import hashlib
+import json
+import io
+import os
+import shutil
+import subprocess
+import tempfile
+import threading
+from pathlib import Path
+import time
+import uuid
+from contextlib import contextmanager
+
 # The core owns runtime configuration; these imports preserve the existing public contract.
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr import reporting as task_reporting
-from twobyteasr.processes import hidden_subprocess_kwargs
+from twobyteasr.processes import popen_hidden_subprocess, run_hidden_subprocess
 from twobyteasr.runtime import get_runtime_context
-from contextlib import contextmanager
 
 _EVENT_LOG_LOCK = threading.Lock()
 _EVENT_OBSERVER_LOCK = threading.RLock()
@@ -209,9 +223,70 @@ def media_cache_context(media_path):
     return {"identity": identity, "cache_dir": cache_dir}
 
 
-def decode_audio_to_array(media_path):
-    """用 ffmpeg 解码为统一 16k 单声道 float32。"""
+# ffmpeg 解码 watchdog（P1-6）：duration-aware absolute 上限。
+# ffmpeg 以 -v error 运行，正常解码期间 stderr 无任何进度输出，无法用
+# inactivity 检测；改用媒体时长推导上限（2x 实时余量 + 启动余量），
+# 正常长素材（解码通常远快于 2x 实时）不会被误杀，异常卡死有界。
+MIN_DECODE_TIMEOUT_SECONDS = 120.0
+DECODE_TIMEOUT_REALTIME_FACTOR = 0.5
+DECODE_TIMEOUT_STARTUP_MARGIN_SECONDS = 60.0
+# 时长探测失败（ffprobe 不可用/解析失败）时的极宽松最终上限：仅防无限挂起。
+FALLBACK_DECODE_TIMEOUT_SECONDS = 6 * 3600.0
+DECODE_CANCEL_POLL_SECONDS = 0.1
+
+
+def _probe_media_duration(media_path):
+    """用 ffprobe 获取媒体时长（秒）；失败返回 None。"""
+    probe = shutil.which("ffprobe")
+    if not probe:
+        return None
+    try:
+        completed = run_hidden_subprocess(
+            [
+                probe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                os.fspath(media_path),
+            ],
+            purpose="ffprobe shared audio duration",
+            runner=subprocess.run,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+        )
+        value = float(completed.stdout.strip())
+        return value if value > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _decode_stall_limit(duration_seconds):
+    """duration-aware 解码上限；时长不可用时回退极宽松最终上限。"""
+    if not duration_seconds or duration_seconds <= 0:
+        return FALLBACK_DECODE_TIMEOUT_SECONDS
+    return max(
+        MIN_DECODE_TIMEOUT_SECONDS,
+        duration_seconds * DECODE_TIMEOUT_REALTIME_FACTOR
+        + DECODE_TIMEOUT_STARTUP_MARGIN_SECONDS,
+    )
+
+
+def decode_audio_to_array(media_path, cancellation_token=None, _stall_limit=None):
+    """用 ffmpeg 解码为统一 16k 单声道 float32。
+
+    - 用户取消：终止 ffmpeg 进程树后抛项目统一 ``CancelledError``；
+    - 异常卡死（duration-aware stall limit）：终止进程树后抛明确
+      ``RuntimeError``；
+    - ``cancellation_token`` 为 None 表示调用者主动选择不可取消。
+    """
     import numpy as np
+
+    from twobyteasr.processes import stop_process_tree
+    from twobyteasr.service import CancelledError
 
     command = [
         "ffmpeg",
@@ -228,17 +303,44 @@ def decode_audio_to_array(media_path):
         "f32le",
         "pipe:1",
     ]
-    completed = subprocess.run(
+    stall_limit = (
+        _stall_limit
+        if _stall_limit is not None
+        else _decode_stall_limit(_probe_media_duration(media_path))
+    )
+    process = popen_hidden_subprocess(
         command,
+        purpose="ffmpeg shared audio decode",
+        process_factory=subprocess.Popen,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=False,
-        **hidden_subprocess_kwargs(),
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", errors="replace")[-1200:]
+    started = time.monotonic()
+    # communicate(timeout) 轮询循环：每次调用都会 drain 已到达的
+    # stdout/stderr（PCM 可能数 GB），不会产生 PIPE deadlock；
+    # TimeoutExpired 只是"尚未结束"，可再次调用继续读取。
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=DECODE_CANCEL_POLL_SECONDS)
+            break
+        except subprocess.TimeoutExpired as exc:
+            if cancellation_token is not None and cancellation_token.is_cancelled:
+                stop_process_tree(process)
+                raise CancelledError("任务已取消。") from None
+            if time.monotonic() - started > stall_limit:
+                detail = (
+                    (exc.stderr or b"").decode("utf-8", errors="replace")[-1200:]
+                )
+                stop_process_tree(process)
+                raise RuntimeError(
+                    f"音频解码长时间无响应（超过 {stall_limit:.0f} 秒），"
+                    f"ffmpeg 已被终止：{os.path.basename(os.fspath(media_path))}。"
+                    f"{detail}"
+                ) from None
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace")[-1200:]
         raise RuntimeError(f"ffmpeg 音频解码失败：{detail}")
-    audio = np.frombuffer(completed.stdout, dtype="<f4").astype(np.float32, copy=True)
+    audio = np.frombuffer(stdout, dtype="<f4").astype(np.float32, copy=True)
     if audio.ndim != 1 or audio.size == 0:
         raise RuntimeError("统一音频解码没有得到有效的单声道采样。")
     return audio
@@ -251,6 +353,7 @@ def load_shared_audio(media_path, cache_context):
     audio_path = os.path.join(cache_context["cache_dir"], "audio_16k.npy")
     meta_path = os.path.join(cache_context["cache_dir"], "audio_meta.json")
     signature = cache_stage_signature("audio")
+    cache_reject_reason = "missing_artifact"
     try:
         with open(meta_path, "r", encoding="utf-8") as file:
             meta = json.load(file)
@@ -271,15 +374,21 @@ def load_shared_audio(media_path, cache_context):
                 except OSError:
                     pass
                 record_run_event("cache_hit", stage="audio", path=audio_path)
+                record_run_event("CACHE_ACCEPTED", stage="audio", path=audio_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
                 return audio
     except (OSError, ValueError, TypeError):
-        pass
+        cache_reject_reason = "invalid_artifact"
+    record_run_event("CACHE_REJECTED", stage="audio", path=audio_path, reason=cache_reject_reason)
 
-    decoded = decode_audio_to_array(media_path)
+    decoded = decode_audio_to_array(
+        media_path,
+        cancellation_token=get_runtime_context().cancellation_token,
+    )
     temp_audio_path = audio_path + ".tmp"
     try:
-        with open(temp_audio_path, "wb") as file:
-            np.save(file, decoded, allow_pickle=False)
+        buffer = io.BytesIO()
+        np.save(buffer, decoded, allow_pickle=False)
+        Path(temp_audio_path).write_bytes(buffer.getvalue())
         os.replace(temp_audio_path, audio_path)
         atomic_write_json(
             meta_path,
@@ -290,6 +399,7 @@ def load_shared_audio(media_path, cache_context):
                 "signature": signature,
                 "sample_rate": AUDIO_SAMPLE_RATE,
                 "samples": int(decoded.size),
+                "dependency_hash": stable_digest(cache_context["identity"]),
             },
         )
     finally:
@@ -306,12 +416,17 @@ def load_shared_audio(media_path, cache_context):
     return audio
 
 
-def cache_stage_signature(stage, extra=None):
+def cache_stage_signature(stage, extra=None, provider_snapshot=None):
     runtime_context = get_runtime_context()
+    version = CACHE_STAGE_VERSIONS.get(stage)
+    if version is None and str(stage).startswith("primary_"):
+        version = CACHE_STAGE_VERSIONS["primary_backend"]
+    if version is None:
+        raise ValueError(f"未登记缓存阶段：{stage}")
     base = {
         "schema": CACHE_SCHEMA_VERSION,
         "stage": stage,
-        "version": CACHE_STAGE_VERSIONS[stage],
+        "version": version,
     }
     if stage == "audio":
         base.update({"sample_rate": AUDIO_SAMPLE_RATE, "format": "float32-mono"})
@@ -323,6 +438,8 @@ def cache_stage_signature(stage, extra=None):
                 "pad": QWEN_ASR_AUDIO_PAD_SECONDS,
                 "batch_size": QWEN_ASR_BATCH_SIZE,
                 "domain": CONTENT_DOMAIN_HINT,
+                # 开关必须进签名：否则关闭开关后旧缓存仍会被命中并复用 Qwen 证据。
+                "enabled": bool(USE_QWEN_ASR_REFERENCE),
             }
         )
     elif stage == "firered":
@@ -338,7 +455,10 @@ def cache_stage_signature(stage, extra=None):
             }
         )
     elif stage == "polished":
-        endpoint = polish_llm_settings()
+        from .asr_provider_snapshot import task_provider_snapshot
+        snapshot = provider_snapshot or task_provider_snapshot('polish')
+        endpoint = snapshot.endpoint()
+        base['provider_snapshot'] = snapshot.cache_identity()
         base.update(
             {
                 "provider": endpoint["provider"],
@@ -348,7 +468,7 @@ def cache_stage_signature(stage, extra=None):
                 "glossary": file_digest(GLOSSARY_PATH),
                 "game_profiles": file_digest(GAME_PROFILES_PATH),
                 "game_lexicons": (
-                    active_game_lexicon_signature()
+                    enabled_game_lexicon_signature()
                     if runtime_context.enable_domain_terms
                     else {}
                 ),
@@ -366,10 +486,18 @@ def cache_stage_signature(stage, extra=None):
                 ),
             }
         )
+    elif stage == "grouped_local":
+        base.update(max_chars=MAX_SUBTITLE_CHARS, preferred_chars=PREFERRED_MAX_SUBTITLE_CHARS,
+                    max_seconds=MAX_SUBTITLE_SECONDS, logic=GROUP_LOGIC_VERSION,
+                    runtime_profile=runtime_content_profile_signature())
     elif stage == "grouped":
-        endpoint = group_llm_settings()
+        from .asr_provider_snapshot import task_provider_snapshot, GROUP_CACHE_VERSION
+        snapshot = provider_snapshot or task_provider_snapshot("group")
+        endpoint = snapshot.endpoint()
         base.update(
             {
+                "provider_snapshot": snapshot.cache_identity(),
+                "cache_version": GROUP_CACHE_VERSION,
                 "provider": endpoint["provider"],
                 "model": endpoint["model"],
                 "base_url": endpoint["base_url"],
@@ -385,7 +513,9 @@ def cache_stage_signature(stage, extra=None):
         # 否则同一素材先按两人运行后再改成三人仍会命中旧的两人主稿。
         base.update({"runtime_profile": runtime_content_profile_signature()})
     elif stage == "final_timing":
-        base.update({"logic": TIMING_LOGIC_VERSION})
+        from .number_fidelity import RULE_VERSION, preference
+        base.update({"logic": TIMING_LOGIC_VERSION, 'fidelity_rules': RULE_VERSION,
+                     'prefer_arabic_numbers': preference(), 'cohesion_rules': 2})
     elif stage == "firered_llm":
         base.update({"logic": file_digest(__file__)})
     if extra is not None:
@@ -396,8 +526,10 @@ def cache_stage_signature(stage, extra=None):
 def atomic_write_json(path, payload):
     temp_path = path + ".tmp"
     try:
-        with open(temp_path, "w", encoding="utf-8") as file:
-            json.dump(payload, file, ensure_ascii=False, separators=(",", ":"))
+        Path(temp_path).write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         os.replace(temp_path, path)
     finally:
         if os.path.exists(temp_path):
@@ -405,6 +537,24 @@ def atomic_write_json(path, payload):
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+def _stage_cache_path(stage, cache_context, signature):
+    # Legacy grouped.json is retained verbatim. New identities never replace it.
+    name = f"grouped-snapshot-{signature}.json" if stage == "grouped" else f"{stage}.json"
+    return os.path.join(cache_context["cache_dir"], name)
+
+
+def _grouped_stage_text_valid(value, extra_signature):
+    source = extra_signature.get("segments") if isinstance(extra_signature, dict) else None
+    if source is None:
+        return False
+    expected, actual = {}, {}
+    for row in source:
+        expected.setdefault(row.get("speaker") or "S00", []).append(row["text"])
+    for cue in value:
+        actual.setdefault(cue.speaker or "S00", []).append(cue.text)
+    return {k: "".join(v) for k,v in expected.items()} == {k: "".join(v) for k,v in actual.items()}
 
 
 def run_cached_stage(
@@ -416,36 +566,73 @@ def run_cached_stage(
     extra_signature=None,
     should_cache=lambda value: True,
 ):
+    owner=get_runtime_context()
+    def require_current():
+        if get_runtime_context() is not owner or bool(getattr(owner.cancellation_token,'is_cancelled',False)):
+            from .service import CancelledError
+            raise CancelledError('阶段缓存任务已取消，拒绝迟到结果。')
+    require_current()
     signature = cache_stage_signature(stage, extra_signature)
-    cache_path = os.path.join(cache_context["cache_dir"], f"{stage}.json")
+    cache_path = _stage_cache_path(stage, cache_context, signature)
+    dependency_hash = stable_digest(extra_signature) if extra_signature is not None else ""
+    rejected_reason = "missing_artifact"
     try:
         with open(cache_path, "r", encoding="utf-8") as file:
             payload = json.load(file)
-        if (
-            payload.get("schema") == CACHE_SCHEMA_VERSION
-            and payload.get("identity") == cache_context["identity"]
-            and payload.get("signature") == signature
-            and not api_stage_force_refresh(stage)
-        ):
+        reasons = []
+        if payload.get("schema") != CACHE_SCHEMA_VERSION:
+            reasons.append("schema_mismatch")
+        if payload.get("identity") != cache_context["identity"]:
+            reasons.append("fingerprint_mismatch")
+        if payload.get("signature") != signature:
+            reasons.append("model_hash_or_settings_mismatch")
+        if dependency_hash and payload.get("dependency_hash") != dependency_hash:
+            reasons.append("upstream_hash_mismatch" if payload.get("dependency_hash") else "missing_dependency")
+        if api_stage_force_refresh(stage):
+            reasons.append("force_refresh")
+        if stage == "grouped" and (payload.get("producer") != "ai" or payload.get("validation") != "exact_text_and_boundaries"):
+            reasons.append("legacy_or_unvalidated_grouped")
+        if stage == "grouped" and not reasons and not _grouped_stage_text_valid(decoder(payload.get("data")), extra_signature):
+            reasons.append("text_mismatch")
+        if not reasons:
+            require_current()
+            if stage=='polished':
+                owner.terminology_status=dict(payload.get('terminology_status') or {})
+                owner.polishing_summary=dict(payload.get('polishing_summary') or {})
+                if owner.terminology_status:
+                    owner.terminology_status['cached']=True
+                    record_run_event('domain_term_verification_summary',**owner.terminology_status)
+                if owner.polishing_summary:
+                    owner.polishing_summary['cached']=True
+                    record_run_event('polishing_summary',**owner.polishing_summary)
             extend_review_items(payload.get("review_items", []))
             try:
                 os.utime(cache_context["cache_dir"], None)
             except OSError:
                 pass
             print(f"   [缓存命中] {stage}，跳过重复计算。")
+            record_run_event("CACHE_ACCEPTED", stage=stage, path=cache_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
             record_run_event("cache_hit", stage=stage, path=cache_path)
             return decoder(payload.get("data"))
+        rejected_reason = ",".join(reasons) or rejected_reason
+        record_run_event("CACHE_REJECTED", stage=stage, path=cache_path, reason=rejected_reason)
     except (OSError, ValueError, TypeError):
-        pass
+        record_run_event("CACHE_REJECTED", stage=stage, path=cache_path, reason=rejected_reason)
 
     with capture_review_items() as stage_review_items:
         value = runner()
+    require_current()
     extend_review_items(stage_review_items)
     used_fallback = any(
         item.get("category") in ("漏句回退", "校对回退", "断句回退")
         for item in stage_review_items
     )
-    if should_cache(value) and not used_fallback:
+    if stage=='polished' and (getattr(owner,'terminology_status',{}) or {}).get('status') in {'failed','partial'}:
+        used_fallback=True
+    verified_group = stage != "grouped" or (
+        getattr(value, "origin", None) == "ai" and getattr(value, "validated", False)
+        and _grouped_stage_text_valid(value, extra_signature))
+    if should_cache(value) and not used_fallback and verified_group:
         atomic_write_json(
             cache_path,
             {
@@ -453,7 +640,14 @@ def run_cached_stage(
                 "created_at": time.time(),
                 "identity": cache_context["identity"],
                 "signature": signature,
+                "dependency_hash": dependency_hash,
+                **({"producer": "ai", "validation": "exact_text_and_boundaries"} if stage == "grouped" else {}),
+                "model_identity": (extra_signature.get("model_identity") if isinstance(extra_signature, dict) else ""),
+                "runtime_version": (extra_signature.get("runtime_version") if isinstance(extra_signature, dict) else "") or PIPELINE_BUILD_ID,
+                "upstream_artifact_hashes": (extra_signature.get("upstream_artifact_hashes") if isinstance(extra_signature, dict) else {}),
                 "review_items": stage_review_items,
+                **({'terminology_status':getattr(owner,'terminology_status',{}),
+                    'polishing_summary':getattr(owner,'polishing_summary',{})} if stage=='polished' else {}),
                 "data": encoder(value),
             },
         )
@@ -488,11 +682,24 @@ def run_cached_api_batch(
     encoder=lambda value: value,
     decoder=lambda value: value,
     fallback_categories=(),
+    provider_snapshot=None,
+    validator=None,
+    diagnostics=None,
 ):
     """逐批保存成功的 DashScope 结果；单批失败不会拖累其余批次缓存。"""
-    if stage not in ("polished", "grouped"):
+    owner = get_runtime_context()
+    def require_current():
+        if get_runtime_context() is not owner or bool(getattr(owner.cancellation_token,'is_cancelled',False)):
+            from .service import CancelledError
+            raise CancelledError('已取消或被替换的任务不能读取/写入本次校对结果。')
+    require_current()
+    if stage not in ("polished", "grouped", "grouped_local"):
         raise ValueError(f"不支持的 API 逐批缓存阶段：{stage}")
-    signature = cache_stage_signature(stage)
+    from .asr_provider_snapshot import GroupedBatchResult, GROUP_CACHE_VERSION, task_provider_snapshot
+    strict_group = stage == "grouped"
+    if strict_group and provider_snapshot is None:
+        provider_snapshot = task_provider_snapshot("group")
+    signature = cache_stage_signature(stage, provider_snapshot=provider_snapshot)
     batch_key = stable_digest(
         {
             "identity": cache_context["identity"],
@@ -502,6 +709,8 @@ def run_cached_api_batch(
     )
     batch_dir = os.path.join(cache_context["cache_dir"], "api_batches", stage)
     cache_path = os.path.join(batch_dir, f"{batch_key}.json")
+    if diagnostics is not None:
+        diagnostics.update(cache_key=batch_key, cache_version=GROUP_CACHE_VERSION, cache_hit=False)
     if not api_stage_force_refresh(stage):
         try:
             with open(cache_path, "r", encoding="utf-8") as file:
@@ -510,22 +719,41 @@ def run_cached_api_batch(
                 payload.get("schema") == CACHE_SCHEMA_VERSION
                 and payload.get("identity") == cache_context["identity"]
                 and payload.get("signature") == signature
+                and payload.get("dependency_hash") == stable_digest(dependency)
+                and (not strict_group or (
+                    payload.get("provider_fingerprint") == provider_snapshot.fingerprint
+                    and payload.get("producer") == "ai"
+                    and payload.get("validation") == "exact_text_and_boundaries"
+                ))
             ):
+                decoded = decoder(payload.get("data"))
+                if strict_group and (validator is None or not validator(decoded)):
+                    raise ValueError("Cached grouped text no longer matches immutable input")
                 extend_review_items(payload.get("review_items", []))
                 print(f"      [逐批缓存命中] {stage}")
+                record_run_event("CACHE_ACCEPTED", stage=f"{stage}_batch", path=cache_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
                 record_run_event("cache_hit", stage=f"{stage}_batch", path=cache_path)
-                return decoder(payload.get("data"))
+                if diagnostics is not None:
+                    diagnostics["cache_hit"] = True
+                return GroupedBatchResult(decoded, validated=True, cache_hit=True) if strict_group else decoded
+            record_run_event("CACHE_REJECTED", stage=f"{stage}_batch", path=cache_path, reason="signature_or_dependency_mismatch")
         except (OSError, ValueError, TypeError):
-            pass
+            record_run_event("CACHE_REJECTED", stage=f"{stage}_batch", path=cache_path, reason="missing_artifact")
 
     with capture_review_items() as batch_review_items:
         value = runner()
+    require_current()
     extend_review_items(batch_review_items)
     used_fallback = any(
         item.get("category") in set(fallback_categories)
         for item in batch_review_items
     )
-    if not used_fallback:
+    validated_ai = not strict_group or (
+        getattr(value, "origin", None) == "ai" and getattr(value, "validated", False)
+        and validator is not None and validator(value)
+    )
+    if not used_fallback and validated_ai:
+        require_current()
         os.makedirs(batch_dir, exist_ok=True)
         atomic_write_json(
             cache_path,
@@ -534,6 +762,10 @@ def run_cached_api_batch(
                 "created_at": time.time(),
                 "identity": cache_context["identity"],
                 "signature": signature,
+                "dependency_hash": stable_digest(dependency),
+                **({"provider_fingerprint": provider_snapshot.fingerprint,
+                    "cache_version": GROUP_CACHE_VERSION, "producer": "ai",
+                    "validation": "exact_text_and_boundaries"} if strict_group else {}),
                 "review_items": batch_review_items,
                 "data": encoder(value),
             },
@@ -542,22 +774,34 @@ def run_cached_api_batch(
         record_run_event("cache_write", stage=f"{stage}_batch", path=cache_path)
     else:
         print(f"      [逐批缓存跳过] {stage} 当前批次使用回退。")
+        record_run_event("cache_skip_fallback", stage=f"{stage}_batch", cache_key=batch_key,
+                         result_origin=getattr(value, "origin", "unvalidated"))
     return value
 
 
 def cached_stage_is_valid(stage, cache_context, extra_signature=None):
     """只检查缓存签名，供批量模型预热跳过已完成文件。"""
     signature = cache_stage_signature(stage, extra_signature)
-    cache_path = os.path.join(cache_context["cache_dir"], f"{stage}.json")
+    dependency_hash = stable_digest(extra_signature) if extra_signature is not None else ""
+    cache_path = _stage_cache_path(stage, cache_context, signature)
     try:
         with open(cache_path, "r", encoding="utf-8") as file:
             payload = json.load(file)
-        return (
+        valid = (
             payload.get("schema") == CACHE_SCHEMA_VERSION
             and payload.get("identity") == cache_context["identity"]
             and payload.get("signature") == signature
+            and (not dependency_hash or payload.get("dependency_hash") == dependency_hash)
         )
+        record_run_event(
+            "CACHE_ACCEPTED" if valid else "CACHE_REJECTED",
+            stage=stage,
+            path=cache_path,
+            reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match" if valid else "signature_or_dependency_mismatch",
+        )
+        return valid
     except (OSError, ValueError, TypeError):
+        record_run_event("CACHE_REJECTED", stage=stage, path=cache_path, reason="missing_artifact")
         return False
 
 
@@ -577,6 +821,10 @@ def store_cached_stage_value(
             "created_at": time.time(),
             "identity": cache_context["identity"],
             "signature": cache_stage_signature(stage, extra_signature),
+            "dependency_hash": stable_digest(extra_signature) if extra_signature is not None else "",
+            "model_identity": (extra_signature.get("model_identity") if isinstance(extra_signature, dict) else ""),
+            "runtime_version": (extra_signature.get("runtime_version") if isinstance(extra_signature, dict) else "") or PIPELINE_BUILD_ID,
+            "upstream_artifact_hashes": (extra_signature.get("upstream_artifact_hashes") if isinstance(extra_signature, dict) else {}),
             "review_items": [],
             "data": encoder(value),
         },

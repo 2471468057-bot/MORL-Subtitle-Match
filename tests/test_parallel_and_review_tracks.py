@@ -20,13 +20,13 @@ def test_moss_parallel_workers_require_multiple_chunks_and_enough_vram():
     jobs = [{"chunk_id": 1}, {"chunk_id": 2}, {"chunk_id": 3}]
 
     assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs, legacy, total_vram_gb=16
+        jobs, legacy, total_vram_gb=16, free_vram_gb=16
     ) == 2
     assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs[:1], legacy, total_vram_gb=16
+        jobs[:1], legacy, total_vram_gb=16, free_vram_gb=16
     ) == 1
     assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs, legacy, total_vram_gb=12
+        jobs, legacy, total_vram_gb=12, free_vram_gb=12
     ) == 1
 
 
@@ -64,6 +64,7 @@ def test_parallel_moss_payloads_are_merged_in_stable_chunk_order(
 
     monkeypatch.setattr(moss_firered_pipeline, "_run_streaming_worker", fake_worker)
     monkeypatch.setattr(moss_firered_pipeline, "_cuda_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 16.0)
     payload = moss_firered_pipeline._run_moss_manifest_jobs(
         [
             {"chunk_id": 3, "group_id": "a", "offset": 320.0},
@@ -117,6 +118,7 @@ def test_parallel_moss_failure_falls_back_to_single_worker_and_keeps_all_chunks(
 
     monkeypatch.setattr(moss_firered_pipeline, "_run_streaming_worker", fake_worker)
     monkeypatch.setattr(moss_firered_pipeline, "_cuda_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 16.0)
     payload = moss_firered_pipeline._run_moss_manifest_jobs(
         [{"chunk_id": 1}, {"chunk_id": 2}],
         str(tmp_path),
@@ -175,6 +177,31 @@ def test_group_batches_run_in_parallel(monkeypatch):
     cues = segmentation_module.group_subtitles(segments)
     assert peak == 2
     assert {cue.speaker for cue in cues} == {"S01", "S02"}
+
+
+def test_local_grouping_mode_never_calls_cloud_api(monkeypatch):
+    calls = []
+
+    def forbidden_cloud_call(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("local grouping must not call the cloud API")
+
+    monkeypatch.setattr(segmentation_module, "call_grouping_api", forbidden_cloud_call)
+    segments = [
+        subtitle_core.SpeechSegment(
+            1, 0.0, 1.2, "这是本地断句", 0.9, [], speaker="S01"
+        ),
+        subtitle_core.SpeechSegment(
+            2, 1.3, 2.4, "不需要云端模型", 0.9, [], speaker="S01"
+        ),
+    ]
+
+    cues = segmentation_module.group_subtitles(segments, use_ai=False)
+
+    assert calls == []
+    assert subtitle_core.content_exact("".join(cue.text for cue in cues)) == subtitle_core.content_exact(
+        "".join(segment.text for segment in segments)
+    )
 
 
 def test_polish_batch_size_reduces_requests_for_typical_short_media():
@@ -248,6 +275,24 @@ def test_combined_srt_is_single_lane_but_speaker_tracks_keep_overlap(tmp_path):
     assert "00:00:00,000 --> 00:00:02,000" in first_track
 
 
+def test_timeline_disabled_writes_txt_only(tmp_path):
+    cues = [subtitle_core.SubtitleCue(1, 0.0, 1.0, "只要文字", speaker="S01")]
+    txt_path = tmp_path / "txt-only.txt"
+    srt_path = tmp_path / "txt-only.srt"
+    result = output_module.write_all_outputs_transactional(
+        cues,
+        str(txt_path),
+        str(srt_path),
+        include_review_track=True,
+        include_srt=False,
+    )
+    assert txt_path.is_file()
+    assert "只要文字" in txt_path.read_text(encoding="utf-8")
+    assert not srt_path.exists()
+    assert result["speaker_outputs"] == []
+    assert result["review_path"] == ""
+
+
 def test_output_writes_every_detected_speaker_track(tmp_path):
     cues = [
         subtitle_core.SubtitleCue(1, 0.0, 1.0, "主播一", speaker="S01"),
@@ -266,6 +311,23 @@ def test_output_writes_every_detected_speaker_track(tmp_path):
         "S03",
     ]
     assert (tmp_path / "three_剪映文稿_主播3_S03.srt").is_file()
+
+
+def test_output_sanitizes_speaker_label_in_filename(tmp_path):
+    cues = [
+        subtitle_core.SubtitleCue(
+            1, 0.0, 1.0, "safe text", speaker="../../host:*?"
+        )
+    ]
+    result = output_module.write_all_outputs_transactional(
+        cues,
+        str(tmp_path / "safe.txt"),
+        str(tmp_path / "safe.srt"),
+    )
+    _, output_path, _ = result["speaker_outputs"][0]
+    assert Path(output_path).parent == tmp_path
+    assert Path(output_path).is_file()
+    assert ".." not in Path(output_path).name
 
 
 

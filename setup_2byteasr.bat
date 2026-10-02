@@ -3,22 +3,28 @@ chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0"
 
+if exist "%ROOT%2ByteASR-Configure.exe" (
+  start "" "%ROOT%2ByteASR-Configure.exe"
+  exit /b 0
+)
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\bootstrap_install.ps1" -InstallPrerequisites -DownloadModels
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
 if "%EXIT_CODE%"=="0" (
-  echo [完成] 2ByteASR 已安装并准备就绪。
-  rem 由 2ByteASR.exe 启动器触发的成功配置不等待按键
+  echo [OK] 2ByteASR installation and configuration completed.
+  rem A launcher-triggered successful setup should not wait for a key press.
   if "%2BYTEASR_NO_PAUSE%"=="1" goto :done
   pause
   goto :done
 )
-echo [失败] 首次配置没有完成。修复上方提示后可重新运行 setup_2byteasr.bat。
+echo [FAILED] Initial configuration did not complete. Fix the error above and run setup_2byteasr.bat again.
 echo.
-echo 完整安装日志：%TEMP%\2byteasr-setup.log
-echo 请把上面的红色错误信息或日志内容发给开发者排查。
+echo Full setup log: %TEMP%\2byteasr-setup.log
+echo Python installer logs: %TEMP%\2byteasr-python-*-install.log
+echo Please send the error or the relevant log to the developer for diagnosis.
 echo.
-rem 失败时无论如何都停住，防止窗口一闪而过看不到错误
+rem Always pause after failure, even when launched by the Setup installer.
 pause
 :done
 exit /b %EXIT_CODE%

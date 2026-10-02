@@ -1,15 +1,24 @@
 ﻿import json
+from types import SimpleNamespace
 
 from twobyteasr import reporting
 from twobyteasr import cache as cache_module
 from twobyteasr.settings import DEFAULT_SETTINGS, load_runtime_settings, save_runtime_settings
-from twobyteasr.llm_config import endpoint_from_settings, resolve_api_key, save_api_keys
+from twobyteasr.llm_config import (
+    endpoint_from_settings, resolve_api_key, save_api_keys, update_active_profile,
+)
 
 
 def test_default_cloud_models_use_qwen37_flash_for_both_stages():
     expected = "qwen3.7-flash-2026-07-15"
     assert DEFAULT_SETTINGS["models"]["polish_model"] == expected
     assert DEFAULT_SETTINGS["models"]["group_model"] == expected
+
+
+def test_default_qwen_asr_uses_api_while_firered_keeps_local_timing():
+    assert DEFAULT_SETTINGS["models"]["qwen_asr_backend"] == "api"
+    assert DEFAULT_SETTINGS["models"]["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert DEFAULT_SETTINGS["models"]["firered_asr_backend"] == "local"
 
 
 def test_runtime_settings_load_known_values_and_reject_invalid_switches(tmp_path):
@@ -32,6 +41,24 @@ def test_runtime_settings_load_known_values_and_reject_invalid_switches(tmp_path
     assert settings["performance"]["cloud_batch_workers"] == 5
     assert settings["performance"]["qwen_asr_batch_size"] == 8
     assert any("enable_qwen_asr_reference" in warning for warning in warnings)
+
+
+def test_legacy_disabled_asr_switches_migrate_to_off(tmp_path):
+    (tmp_path / "2byteasr_settings.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "switches": {
+                    "enable_qwen_asr_reference": False,
+                    "enable_firered_boundary_refinement": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings, _, _ = load_runtime_settings(tmp_path)
+    assert settings["models"]["qwen_asr_backend"] == "off"
+    assert settings["models"]["firered_asr_backend"] == "off"
 
 
 def test_model_endpoints_are_saved_without_api_keys(tmp_path):
@@ -62,18 +89,27 @@ def test_model_endpoints_are_saved_without_api_keys(tmp_path):
     assert reloaded["models"]["group_model"] == "custom-group"
 
 
-def test_stage_keys_are_local_only_and_environment_wins(tmp_path, monkeypatch):
+def test_stage_keys_are_dpapi_store_first_environment_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.delenv("POLISH_LLM_API_KEY", raising=False)
     monkeypatch.delenv("GROUP_LLM_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-    secret_path = save_api_keys(polish_key="polish-local", group_key="group-local")
+    secret_path = save_api_keys(
+        polish_key="polish-local",
+        group_key="group-local",
+        qwen_asr_key="qwen-asr-local",
+    )
     assert secret_path.name == "secrets.dat"
     assert b"polish-local" not in secret_path.read_bytes()
     assert resolve_api_key("polish") == ("polish-local", "Windows DPAPI / POLISH_LLM_API_KEY")
     assert resolve_api_key("group") == ("group-local", "Windows DPAPI / GROUP_LLM_API_KEY")
+    assert resolve_api_key("qwen_asr") == (
+        "qwen-asr-local",
+        "Windows DPAPI / QWEN_ASR_API_KEY",
+    )
     monkeypatch.setenv("POLISH_LLM_API_KEY", "polish-env")
-    assert resolve_api_key("polish") == ("polish-env", "环境变量 POLISH_LLM_API_KEY")
+    # P9A-R2 起解析顺序为 DPAPI 存储优先、环境变量兜底。
+    assert resolve_api_key("polish") == ("polish-local", "Windows DPAPI / POLISH_LLM_API_KEY")
 
 
 def test_plaintext_secret_file_is_migrated_to_dpapi(tmp_path, monkeypatch):
@@ -92,24 +128,52 @@ def test_plaintext_secret_file_is_migrated_to_dpapi(tmp_path, monkeypatch):
 
 
 def test_unified_glm_routes_polish_to_group_endpoint_and_key(tmp_path, monkeypatch):
+    # P8C-R3/P9A-R2 后统一 GLM 的契约：路由发生在写入时——activate/update_active_profile
+    # 以 unified=True 把同一 profile 事务写入 polish 与 group 两组 flat 字段；
+    # 读取时 endpoint_from_settings 以 active profile 为真相源，凭据取 credential_stage=group。
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.setenv("POLISH_LLM_API_KEY", "unused-polish")
     monkeypatch.setenv("GROUP_LLM_API_KEY", "working-glm")
     settings, _, _ = load_runtime_settings(tmp_path)
-    settings["models"].update(
-        {
-            "polish_model": "old-qwen",
-            "polish_base_url": "https://polish.example/v1",
-            "group_model": "glm-5.2",
-            "group_base_url": "https://group.example/v1",
-        }
-    )
     settings["switches"]["unified_glm_processing"] = True
+    update_active_profile(
+        settings,
+        stage="polish",
+        base_url="https://group.example/v1",
+        model="glm-5.2",
+        unified=True,
+    )
+    # 写入时扇出：两组前缀承载同一统一模型
+    assert settings["models"]["polish_model"] == settings["models"]["group_model"] == "glm-5.2"
+    for stage in ("polish", "group"):
+        endpoint = endpoint_from_settings(settings, stage)
+        assert endpoint["model"] == "glm-5.2"
+        assert endpoint["base_url"] == "https://group.example/v1"
     endpoint = endpoint_from_settings(settings, "polish")
-    assert endpoint["model"] == "glm-5.2"
-    assert endpoint["base_url"] == "https://group.example/v1"
     assert endpoint["api_key"] == "working-glm"
     assert "GROUP_LLM_API_KEY" in endpoint["key_source"]
+
+
+def test_fully_local_asr_configuration_never_requires_a_cloud_key(
+    tmp_path, monkeypatch
+):
+    # KI-5 P1-05（2026-08-13 审查遗留）回归锁定：完全本地后端组合下，
+    # 保存/开始任务不得强制要求任何云密钥——密钥要求只条件化于显式选择 API 后端。
+    from twobyteasr.ui import persist_asr_configuration
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    for name in ("DASHSCOPE_API_KEY", "QWEN_ASR_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    legacy = SimpleNamespace(configure_runtime_asr=lambda *_a, **_k: None,
+                             RUNTIME_SETTINGS={"models": {"speaker_source": "single"}})
+    values = {
+        "primary_asr_backend": "moss",
+        "qwen_asr_backend": "local",
+        "firered_asr_backend": "local",
+    }
+    result = persist_asr_configuration(legacy, values, qwen_key="", require_ready=True)
+    assert result["missing_keys"] == ()
 
 
 def test_separate_model_mode_keeps_polish_endpoint(tmp_path, monkeypatch):
@@ -200,6 +264,68 @@ def test_media_task_report_records_stages_cache_and_no_secret(tmp_path, monkeypa
     assert "联网术语：已检索 12 条候选，采纳 2 组，实际应用 3 处" in text_report
     assert "S03 -> S02 主播B" in text_report
     assert "DASHSCOPE_API_KEY" not in text_report
+
+
+def test_degraded_media_report_is_persisted_and_explained(tmp_path, monkeypatch):
+    monkeypatch.setattr(reporting, "REPORT_ROOT", tmp_path)
+    media_path = tmp_path / "degraded.mp3"
+    media_path.write_bytes(b"audio")
+    settings = {
+        "models": {
+            "qwen_asr_model": "qwen",
+            "polish_model": "deepseek-chat",
+            "group_model": "deepseek-chat",
+        },
+        "switches": {},
+        "cache": {},
+        "performance": {},
+    }
+    review_items = [
+        {"category": "校对回退", "reason": "schema invalid"},
+        {"category": "断句回退", "reason": "empty content"},
+    ]
+
+    reporting.begin_media_report(media_path, {"cache_dir": str(tmp_path / "cache")}, settings)
+    reporting.finish_media_report(
+        "degraded_success",
+        elapsed_seconds=1.0,
+        audio_seconds=2.0,
+        cue_count=2,
+        review_items=review_items,
+        outputs={"txt": "out.txt", "srt": "out.srt"},
+    )
+
+    json_report = json.loads(
+        (tmp_path / "degraded_字幕任务报告.json").read_text(encoding="utf-8")
+    )
+    text_report = (tmp_path / "degraded_字幕任务报告.txt").read_text(encoding="utf-8")
+    assert json_report["status"] == "degraded_success"
+    assert [item["category"] for item in json_report["review_items"]] == [
+        "校对回退", "断句回退"
+    ]
+    assert all(
+        item["severity"] == "warning" for item in json_report["review_items"]
+    )
+    assert json_report["review_severity_counts"]["warning"] == 2
+    assert [item["category"] for item in json_report["review_summary"]] == [
+        "校对回退", "断句回退"
+    ]
+    assert "状态：degraded_success" in text_report
+    assert "降级说明：AI 校对或断句部分回退到本地" in text_report
+    assert "AI 校对部分降级：1 / 1 个批次使用本地结果" in text_report
+    assert "AI 智能断句降级：1 / 1 个批次使用本地断句" in text_report
+    assert "待复核项：2" in text_report
+
+
+def test_degraded_success_is_still_a_successful_queue_result():
+    from twobyteasr.service import MediaResult, QueueResult
+
+    degraded = MediaResult("degraded.mp4", "degraded_success")
+    result = QueueResult((degraded,), 1.0)
+
+    assert result.successes == (degraded,)
+    assert result.failures == ()
+    assert result.exit_code == 0
 
 
 def test_event_redaction_preserves_structured_edits(monkeypatch):

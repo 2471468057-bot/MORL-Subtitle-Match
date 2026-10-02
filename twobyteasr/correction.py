@@ -1,5 +1,8 @@
 ﻿"""correction stage implementation extracted from subtitle_core."""
 
+import json
+import re
+
 # The core owns runtime configuration; these imports preserve the existing public contract.
 from subtitle_core import *  # noqa: F401,F403
 from twobyteasr.text_similarity import levenshtein, phonetic_text
@@ -69,7 +72,7 @@ def split_boundary_cohesion_term(left_text, right_text):
     return ""
 
 
-def split_items_for_api(items, max_cues=API_BATCH_MAX_CUES):
+def split_items_for_api(items, max_cues=API_BATCH_MAX_CUES, max_chars=API_BATCH_MAX_CHARS):
     batches = []
     current = []
     current_chars = 0
@@ -78,7 +81,7 @@ def split_items_for_api(items, max_cues=API_BATCH_MAX_CUES):
         cost = len(item.text) + 32
         if current and (
             len(current) >= max_cues
-            or current_chars + cost > API_BATCH_MAX_CHARS
+            or current_chars + cost > max_chars
         ):
             carry = None
             if (
@@ -98,34 +101,63 @@ def split_items_for_api(items, max_cues=API_BATCH_MAX_CUES):
     return batches
 
 
-def extract_json_object_text(content):
-    """从模型输出中取出第一个 JSON 对象文本。"""
-    text_value = str(content or "").strip()
+def _decode_json_value(content):
+    """Decode the first complete JSON value, tolerating fences and short prose.
+
+    ``find('{')/rfind('}')`` loses nested objects and rejects valid top-level
+    arrays.  ``raw_decode`` lets the JSON decoder determine the real boundary
+    while still accepting providers that prepend a short explanation.
+    """
+    text_value = str(content or "").lstrip("\ufeff").strip()
     if not text_value:
-        return ""
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_value, re.S | re.I)
-    if fence:
-        return fence.group(1).strip()
-    start = text_value.find("{")
-    end = text_value.rfind("}")
-    if start >= 0 and end > start:
-        return text_value[start : end + 1].strip()
-    return text_value
+        raise ValueError("模型没有返回 JSON。")
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text_value, re.S | re.I)
+    candidates = [fence.group(1).strip()] if fence else [text_value]
+    if not fence:
+        candidates.append(text_value.replace("\ufeff", "", 1).strip())
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        for index, char in enumerate(candidate):
+            if char not in "[{\"":
+                continue
+            try:
+                value, _ = decoder.raw_decode(candidate[index:])
+            except json.JSONDecodeError:
+                continue
+            # Some gateways double-encode JSON as a JSON string.
+            if isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(value, (dict, list)):
+                return value
+    if "{" in text_value or "[" in text_value:
+        raise ValueError("模型 JSON 解析失败：响应不完整或格式损坏。")
+    raise ValueError("模型没有返回 JSON。")
+
+
+def extract_json_object_text(content):
+    """从模型输出中提取完整 JSON 值的文本（兼容旧调用名）。"""
+    value = _decode_json_value(content)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def parse_qwen_object(content):
-    content = extract_json_object_text(content)
-    content = str(content).strip()
-    content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
-    content = re.sub(r"\s*```$", "", content)
-    start = content.find("{")
-    end = content.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("模型没有返回 JSON 对象。")
-    data = json.loads(content[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("Qwen 返回的 JSON 不是对象。")
-    return data
+    data = _decode_json_value(content)
+    if isinstance(data, dict):
+        return data
+    # A few OpenAI-compatible gateways ignore the requested object mode and
+    # return the obvious schema array.  Coerce only unambiguous shapes; all
+    # downstream schema validation remains in charge of the actual fields.
+    if isinstance(data, list):
+        if all(isinstance(item, dict) and "id" in item for item in data):
+            return {"cues": data}
+        if all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in data):
+            return {"boundaries": data}
+        if all(isinstance(item, dict) and {"from", "to"}.issubset(item) for item in data):
+            return {"mappings": data}
+    raise ValueError("模型 JSON 顶层类型不符合对象契约。")
 
 
 def parse_qwen_json(content):

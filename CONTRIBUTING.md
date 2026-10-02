@@ -2,6 +2,12 @@
 
 2ByteASR currently targets Windows 10/11 with an NVIDIA CUDA GPU. Changes that affect subtitle text, speaker assignment, timing, caching, or output paths should include a regression test.
 
+## Contribution license
+
+New original contributions must be submitted by someone entitled to contribute them and are provided under the project's **GPL-3.0-only** license. See [LICENSE](LICENSE) and [PROJECT_LICENSE.md](PROJECT_LICENSE.md). Clearly identify any third-party content, its exact source, license and required notices; do not submit incompatible code, credentials, private data or assets you cannot redistribute.
+
+Contributors retain their copyrights and attribution. This is not a copyright assignment or a grant allowing the author to unconditionally relicense everyone's contributions as proprietary software. Preserve legitimate third-party copyright, LICENSE and NOTICE files. Earlier contributions under different terms require their own rights analysis; this rule does not retroactively change them.
+
 ## Development setup
 
 1. Run `setup_environment.bat`.
