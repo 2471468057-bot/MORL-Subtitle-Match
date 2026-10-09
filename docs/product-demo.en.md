@@ -1,32 +1,61 @@
-# 2ByteASR: interface and feature tour
+# 2ByteASR: a tour of the interface
 
-Go from imported media to a finished subtitled video in one workflow.
+Everything below is the real app (development build, 2026-10-09). The sample is a self-made animation with two synthetic Chinese voices, recognised locally with MOSS + FireRedASR2-AED + Qwen3-ASR. How the assets were made is described in the [asset notes](assets/readme/README.md) (Chinese). Clips without "English UI" in the caption show the Chinese interface.
 
-![2ByteASR home screen](assets/readme/overview.png)
+## Home and recognition
 
-## Desktop home
+![Home screen in English: media drop zone, the three recognition roles, AI smart segmentation and content terms](assets/readme/home-en.png)
 
-Manage media, glossaries, and recognition settings from the home screen. The translucent Studio shortcut uses the latest project's thumbnail as its background, ready for you to pick up where you left off.
+Home (English UI): drop in media, choose primary transcription, subtitle timeline and text review, then click "Start subtitles".
 
-![Desktop app home screen](assets/readme/desktop-brand.png)
+![Progress page: current step, step log and the full run log](assets/readme/progress.png)
+
+Progress: the current step, the time and result of each step, and the full run log.
+
+![Completion page: subtitle count, elapsed time, items to check and a subtitle preview](assets/readme/completion.png)
+
+Completion: subtitle count, elapsed time, items to check and a full preview.
 
 ## Subtitle Studio
 
-![The editing workflow open in Subtitle Studio](assets/readme/studio-result.png)
+![Subtitle Studio in English](assets/readme/studio-en.png)
 
-### Each speaker's lines on their own track
+Studio (English UI): captions list, video preview, style panel and a timeline with one track per speaker.
 
-![Sample A/B/A dialogue and the corresponding subtitle tracks](assets/readme/speaker-tracks.png)
+![Razor: after merging, drag the razor to preview both halves, then cut](assets/readme/razor.gif)
 
-### Split subtitles and apply a text candidate
+Razor: drag to preview both halves and release to cut; cuts land on word boundaries.
 
-![Two cuts produce three subtitle segments](assets/readme/word-split.png)
-![Applying the mission candidate updates the current subtitle](assets/readme/candidate-review.png)
+![Review mode: compare the text from different models and adopt one](assets/readme/review.gif)
 
-### Glossaries, stream highlights, and subtitle designs
+Review: versions from different models side by side with the differences highlighted; click to adopt.
 
-![Glossary terms organized by game](assets/readme/glossary.png)
-![Highlight candidates with explanations and timeline selections](assets/readme/live-clips.png)
-![Woodcut and CRT subtitle designs](assets/readme/caption-effects.png)
+![Speaker manager in English: names, colours and default styles](assets/readme/speakers-en.png)
 
-[Back to the product overview](../README_EN.md)
+Speaker manager (English UI): names, colours and default styles.
+
+## Export
+
+![Subtitles with a soft pop-in effect in the exported video](assets/readme/output.gif)
+
+Cut from the MP4 the app actually exported.
+
+![Encode finished: codec, resolution, bitrate and time taken](assets/readme/export.png)
+
+Encode finished (the local output path is masked).
+
+## Terms, models and themes
+
+![Term library in English](assets/readme/glossary-en.png)
+
+Term library (English UI): terms, misrecognitions, sources and confirmation status per game.
+
+![Model workshop in English](assets/readme/workshop-en.png)
+
+Model workshop (English UI): models per role with size, runtime and reference scores.
+
+![Five UI themes](assets/readme/themes.png)
+
+Five UI themes: Deep Grape / Burgundy, Warm Cream / Green, Warm Night / Cream, Lavender Workspace and Slate / Editorial.
+
+[Back to the overview](../README_EN.md) · [User guide](product-guide.en.md)

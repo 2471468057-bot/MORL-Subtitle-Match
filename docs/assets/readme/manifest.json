@@ -1,115 +1,235 @@
 {
-  "assets": [
+  "schema": 1,
+  "updated": "2026-10-09",
+  "source": "real desktop window captures, development build 2026-10-09",
+  "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
+  "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
+  "edits": "scale, rounded frame, palette encoding, GIF trimming; export.png has the local output path masked",
+  "total_bytes": 6980179,
+  "files": [
     {
-      "file": "speaker-tracks.gif",
-      "type": "fixed camera; original React components; real pointer clicks",
-      "seconds": 8,
-      "fps": 25,
-      "width": 1080,
-      "bytes": 378027,
-      "sha256": "fcbca941d830d1859e6c1a59571ef82e38320ffd3600287c92b93dde6dede2e4"
+      "path": "docs/assets/readme/banner-en-dark.png",
+      "bytes": 297710,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "07fb4e9d7dfdd1523546b027e3ff1c42ce9f91853755294e97cc0eca91d467dd"
     },
     {
-      "file": "word-split.gif",
-      "type": "fixed camera; original React components; real pointer clicks",
-      "seconds": 10,
-      "fps": 25,
-      "width": 1080,
-      "bytes": 1127045,
-      "sha256": "b0ba9eca62304393f9f55db94dc9a69f2a0473d45f1681d37264b9dd155d6670"
+      "path": "docs/assets/readme/banner-en-light.png",
+      "bytes": 282640,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "3598a986dc4ed1f088e8a341cd8a683986af64bac1f48c0ca2c2c0840565552b"
     },
     {
-      "file": "candidate-review.gif",
-      "type": "fixed camera; original React components; real pointer clicks",
-      "seconds": 9,
-      "fps": 25,
-      "width": 1080,
-      "bytes": 245129,
-      "sha256": "9a8c77753d9fcf69d1377fb3e8190022e0d9f4e618ba45e0d4b3d47075727fc5"
+      "path": "docs/assets/readme/banner-ja-dark.png",
+      "bytes": 303182,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "95967d3b987345750c40eaea440e10ea66fbd4c66dd2ef5316995382f9ba4117"
     },
     {
-      "file": "live-clips.gif",
-      "type": "fixed camera; original React components; real pointer clicks",
-      "seconds": 11,
-      "fps": 25,
-      "width": 1080,
-      "bytes": 635352,
-      "sha256": "f2a70e384e03dabbc05d333c2b1cede9f8dc9a96291da783b8a47cc0dcf704cd"
+      "path": "docs/assets/readme/banner-ja-light.png",
+      "bytes": 288614,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "d159baf3bc74ef2ea79621302759b074a17e172947acfe4f684551d802bae459"
     },
     {
-      "file": "caption-effects.gif",
-      "type": "existing HTML artwork replay at exact clock times",
-      "seconds": 3.8,
-      "fps": 25,
-      "width": 1080,
-      "bytes": 1400866,
-      "sha256": "9498aff83076833add559fb1c248898019484c4441c7941e6a6bdd6c404828ec"
+      "path": "docs/assets/readme/banner-zh-dark.png",
+      "bytes": 298740,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "56441f41b60bc700d8302b29a775651e83b49a96d2325175636a7000710924b1"
     },
     {
-      "file": "candidate-review.png",
-      "type": "product interaction example / static frame",
-      "bytes": 37724,
-      "sha256": "4c8fe2fca5ea8b1cc52e31e53f1abf1d65f7c314b6e96bb1d6a5b20be93e8842"
+      "path": "docs/assets/readme/banner-zh-light.png",
+      "bytes": 284284,
+      "width": 1760,
+      "height": 600,
+      "frames": 1,
+      "sha256": "6ea59e34b485861596b36d66ad750fe8a125e586c65c4ba43122dd8aef824cf9"
     },
     {
-      "file": "caption-effects.png",
-      "type": "product interaction example / static frame",
-      "bytes": 208894,
-      "sha256": "aefa9e69bcebe5faf13253159e1fccd22e8c1ae43312000e9fefcae9c66d54f6"
+      "path": "docs/assets/readme/completion.png",
+      "bytes": 90017,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "04dbd766ab4d55a29f76934e2f11e8605d5757c2bbb2ec652b001412b752b5c2"
     },
     {
-      "file": "desktop-brand.png",
-      "type": "native window",
-      "bytes": 258350,
-      "sha256": "a93f39c499fd18b6cf67c7fcb39e094088869f45aa003fd1c3d1b0e6a0f7a31e"
+      "path": "docs/assets/readme/export.png",
+      "bytes": 89092,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "65b104b5d2c2cfabe3f71467467c9bb7726b18fd832bf5db3229f8179d36ec6e"
     },
     {
-      "file": "glossary.png",
-      "type": "product interaction example / static frame",
-      "bytes": 96480,
-      "sha256": "71b510203c6617d5df0dba1648ae4480c4e54e265dcdfd32d6caea5c6ed11c2d"
+      "path": "docs/assets/readme/glossary-en.png",
+      "bytes": 118654,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "13e63699adbf96b4b0e87af346bbfd117662250e17bc9f16359ad5a669fdc286"
     },
     {
-      "file": "live-clips.png",
-      "type": "product interaction example / static frame",
-      "bytes": 67579,
-      "sha256": "325feb4f0e21d198a7609433f3701d8e2f66f0a4380c3c3c01c6b6b1fb4c91ec"
+      "path": "docs/assets/readme/glossary-ja.png",
+      "bytes": 120238,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "0994530b9dbcb9c2f3043eb1219e21b124ed5bf5575e7eaeaf4c0e684dfe8136"
     },
     {
-      "file": "model-roles.png",
-      "type": "product interaction example / static frame",
-      "bytes": 91225,
-      "sha256": "92f992458fe6182e36687a917870cdcb3fecf15c84875e7c949385cf1b904195"
+      "path": "docs/assets/readme/glossary.png",
+      "bytes": 118335,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "6a17d58118a1b0e295888415beb0c4de445f8690e811e54745350821dc4d6b8e"
     },
     {
-      "file": "overview.png",
-      "type": "product interaction example / static frame",
-      "bytes": 100920,
-      "sha256": "42709af066cc151f715c3be013664c05fc0e63419bdb8412feb5078f173316d9"
+      "path": "docs/assets/readme/home-en.png",
+      "bytes": 102521,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "8018d70abf944577b597560d3d2d832ef85d28611114979321a6830dbac8af87"
     },
     {
-      "file": "speaker-tracks.png",
-      "type": "product interaction example / static frame",
-      "bytes": 43173,
-      "sha256": "d4209402be9f0ae55e6fa24a703463983e254d7ed67c62ae123dac584bb51540"
+      "path": "docs/assets/readme/home-ja.png",
+      "bytes": 104970,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "c800a549f48b5552e76a1814aedf843fd5be46cc4ff0df02248f39897955f8ac"
     },
     {
-      "file": "studio-result.png",
-      "type": "product interaction example / static frame",
-      "bytes": 136004,
-      "sha256": "c7f267242077c32569eee96ce04f0276a29df23175707ba8d00dbe0b9139841c"
+      "path": "docs/assets/readme/home.png",
+      "bytes": 96088,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "0d3cd12aaf10ca563243085ed560770ce143c2f013a4ba0372b3d9275e1ba62a"
     },
     {
-      "file": "word-split.png",
-      "type": "product interaction example / static frame",
-      "bytes": 78495,
-      "sha256": "23c3366308fea0ad08d23fc383dfa8880ae8935c0bb2a1aa9092f43c531d33dd"
+      "path": "docs/assets/readme/output.gif",
+      "bytes": 2193812,
+      "width": 800,
+      "height": 450,
+      "frames": 84,
+      "sha256": "a9e68c8c01ce45da0fba34203eb7ea81746e8959b5212ff7a540520934817a1d"
+    },
+    {
+      "path": "docs/assets/readme/progress.png",
+      "bytes": 170821,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "ae833826ddb65a9947d79a0713119ae8cb62355106058f53b684e32bf87f8e22"
+    },
+    {
+      "path": "docs/assets/readme/razor.gif",
+      "bytes": 397260,
+      "width": 1100,
+      "height": 733,
+      "frames": 51,
+      "sha256": "837e35522dafe63606b39ae36a2483c9cadd40ab6743089529ecc5404e6e8bdc"
+    },
+    {
+      "path": "docs/assets/readme/review.gif",
+      "bytes": 307855,
+      "width": 1100,
+      "height": 733,
+      "frames": 25,
+      "sha256": "33505cca8f3776c1518e1a6adcd63d1c706cf2ed0758b2c81fbaa1caebbc8453"
+    },
+    {
+      "path": "docs/assets/readme/speakers-en.png",
+      "bytes": 85443,
+      "width": 1557,
+      "height": 1038,
+      "frames": 1,
+      "sha256": "45e4973343074fecf925e5ca00de6f0fcff22ca38f43fca811b765f6ea9088ac"
+    },
+    {
+      "path": "docs/assets/readme/speakers-ja.png",
+      "bytes": 84238,
+      "width": 1557,
+      "height": 1038,
+      "frames": 1,
+      "sha256": "62a1d9fc605328c2432f3010bee753d8bc18096382e10188891419bad0e6d669"
+    },
+    {
+      "path": "docs/assets/readme/speakers.png",
+      "bytes": 69735,
+      "width": 1540,
+      "height": 1027,
+      "frames": 1,
+      "sha256": "a283bb13789b9c18ae705079772a1984fd7a0a4ec7aa3143baaf5b9368cac1d4"
+    },
+    {
+      "path": "docs/assets/readme/studio-en.png",
+      "bytes": 144810,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "34f4d16e92dbe6dac79f051af817a8ccb3ed7f3ed1eef46aef24bdc753d23951"
+    },
+    {
+      "path": "docs/assets/readme/studio-ja.png",
+      "bytes": 142710,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "95580ea2c8865807cee8a0a7d58d767037519dc62b430d83b68cf8f7cc769d8f"
+    },
+    {
+      "path": "docs/assets/readme/studio.png",
+      "bytes": 149059,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "58607cf2298a36d1f1d4bb7d6f85a62be4efc52ec6243af93fe9cec7cf4482c6"
+    },
+    {
+      "path": "docs/assets/readme/themes.png",
+      "bytes": 112955,
+      "width": 1964,
+      "height": 876,
+      "frames": 1,
+      "sha256": "0116fca9f4a3a2e64ad0603ce11c9b1c9af2b4976bd08e7821373d590a2127b0"
+    },
+    {
+      "path": "docs/assets/readme/workshop-en.png",
+      "bytes": 182397,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "a77749f8fb936111a7b4009d0e824a00b0cf281a764364327da5e3524d510501"
+    },
+    {
+      "path": "docs/assets/readme/workshop-ja.png",
+      "bytes": 176142,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "0f66e3b39bc58b11f35ae053eabfb73da43d9782c7c5afef1dfdf3452a428aa3"
+    },
+    {
+      "path": "docs/assets/readme/workshop.png",
+      "bytes": 167857,
+      "width": 1760,
+      "height": 1173,
+      "frames": 1,
+      "sha256": "df342f858d31fbfdd70f4112f89e2b2e1bf50d1db6b9c3584dc6e8c5c341f560"
     }
-  ],
-  "source": "website/product/readme.jsx; original product components; fixed camera",
-  "not_claimed": [
-    "inference speed",
-    "recognition accuracy"
-  ],
-  "gif_bytes": 3786419
+  ]
 }

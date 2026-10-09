@@ -1,33 +1,45 @@
-# README 素材来源与复现
+# README 素材说明
 
-首图为主页 PNG；五张 GIF 只演示各自功能，固定镜头，不驱动产品页滚动。转写/切分/复核/切片共用原 React 组件和状态，切分、撤销、采用、加入剪辑是真实指针点击。字幕作品保持原木刻与 CRT 美术。所有预置示例均不代表模型识别速度或准确率。
+2026-10-09 更新。README 与界面一览里的图片、动图全部改为软件真实窗口截图，替换此前用网页重建界面录制的展示图。
 
-| 文件 | 内容 | 时长 / 输出 |
-| --- | --- | --- |
-| overview.png | 主页、素材入口与三种识别角色 | 静态 PNG |
-| speaker-tracks.gif | A → B → A 逐句转写并落轨，窗口保持不动 | 8秒 / 1080px / 25fps |
-| word-split.gif | 两次点击切分，轨道1→2→3段，逐次撤销 | 10秒 / 1080px / 25fps |
-| candidate-review.gif | 比较候选，采用 FireRed，当前字幕人物→任务，重置 | 9秒 / 1080px / 25fps |
-| live-clips.gif | 切换三种候选，理由和选区更新，加入剪辑后重置 | 11秒 / 1080px / 25fps |
-| caption-effects.gif | 原木刻压印和CRT的完整入场/停留/退场 | 3.8秒 / 1080px / 25fps |
-| desktop-brand.png | 新冻结 EXE 正常主窗口，隔离空配置 | 原生窗口截图 |
-| 其他 PNG | 功能动图关键帧、最终Studio和术语库 | 静态替代 |
+## 读者需要知道的
 
-体积与 SHA256 见 [manifest.json](manifest.json)。旧17秒滚动总览已撤下。五张 GIF 使用单一全局调色板、不透明差分帧和统一40ms帧间隔，减少色彩跳变与透明帧残留。四个固定功能窗口尺寸及顶栏逐帧一致；动效只发生在文本、控件和选区内部。
+- **画面是真的**：截图来自 2026-10-09 的开发版桌面程序，比本仓库的 0.5.0 源码快照（2026-10-02）更新，界面会有差别。
+- **素材是自制的**：示例视频是项目自己绘制的横版小游戏画面，配合 Windows 自带中文语音合成的两人对话（男声 Kangkang、女声 Yaoyao）。没有使用游戏实录、直播录像、私人媒体、用户配置或密钥。
+- **识别是真的跑过的**：34 秒示例在本机用 MOSS + FireRedASR2-AED + Qwen3-ASR 本地识别（RTX 5070 Ti，约 2 分 42 秒，含模型加载），关闭 AI 断句与 AI 校对。得到 14 条字幕，说话人正确分成两轨；一处“它／他”同音分歧和几处规则断句不当，正是动图里用剃刀与候选对照修正的内容。
+- **只做了这些处理**：缩放、圆角、调色板压缩、裁出动图片段；`export.png` 中本机输出路径用色块遮住。没有修改界面文字或数据。
+- **不是基准**：耗时和结果只代表这一段示例，不说明模型速度或准确率。
 
-## 复现
+## 文件
 
-1. 准备项目已有网站依赖，运行 `node website/scripts/build-product.mjs` 与 `node website/scripts/build-readme-scenes.mjs`。
-2. `node website/scripts/serve-product.mjs` 启动本机审核服务。
-3. `node website/scripts/capture-readme-fixed.mjs` 以25fps时间轴逐帧采样。模块位置可用 `PLAYWRIGHT_MODULE` 传入 Playwright 文件 URL；`README_RAW` 可指定原帧目录，默认在项目tmp下。
-4. `node website/scripts/render-readme-effects.mjs` 用同样25fps时钟采样原作品，循环接点遵循作品时间，不从静态停留突然跳回入场。
-5. `python website/scripts/encode-readme.py` 编码GIF、静态图、原质量本地MP4与SHA清单。
-6. `node website/scripts/preview-readme.mjs` 和 `node website/scripts/verify-readme.mjs` 检查本地浅/深色及390px布局。Marked模块可用 `MARKED_MODULE` 指定。
+| 文件 | 内容 |
+| --- | --- |
+| `banner-{zh,en,ja}-{dark,light}.png` | 页首品牌图：角色形象、三种识别角色，以及软件实际导出成片中的一帧 |
+| `studio.png` · `studio-en.png` · `studio-ja.png` | 字幕工作台全貌（中文 1320×880、英日 1600×1000 逻辑尺寸） |
+| `home.png` · `home-en.png` · `home-ja.png` | 首页，已有一个最近工程 |
+| `progress.png` · `completion.png` | 实际识别过程中的进度页与完成页 |
+| `razor.gif` | 合并两段后用剃刀重新切分，按录制时间戳播放 |
+| `review.gif` | 审核模式对照 MOSS／FireRed 与 Qwen3-ASR 的不同文字并采用 |
+| `output.gif` | 截自软件导出的 MP4（12.9–21.3 秒），10 fps |
+| `speakers*.png` · `export.png` | 说话人管理、压制完成页 |
+| `glossary*.png` · `workshop*.png` · `themes.png` | 术语库、模型工坊、五套主题首页拼图 |
 
-`readme.jsx/readme.css` 是独立录制入口，正式网站滚动方式不变。旧 `capture-readme.mjs` 仅保留历史录制参考，不再用于当前README。
+逐个文件的尺寸与 SHA-256 见 [manifest.json](manifest.json)。英文、日文版只替换了能直接切换语言的整窗截图；剃刀、审核、进度等功能动图使用中文界面。
 
-桌面图通过 `scripts/verify_frozen_brand.py --exe <新EXE> --output <全新tmp目录>`生成；只使用 `packaged=true` 的回执。原素材没有私人媒体、用户配置、密钥或模型目录。
+## 怎么做出来的
 
-## 查看边界
+在隔离的 Windows 私有桌面里启动正常主窗口：用户数据、缓存、报告、工程都写到临时目录，只读取已登记的本地运行环境和模型目录，并阻止对外网络连接。脚本按真实按钮与鼠标事件操作（点击开始识别、拖动剃刀与合并工具、点选候选卡片、导出成片），用窗口原生截图保存画面。
 
-本地预览不能替代 GitHub 目标分支线上渲染。当前修改未推送、未部署；五段新MP4交付在本地 `releases/daily-20260930/demo/`。
+## 这次发现、尚未修复的界面问题
+
+已记入开发仓库的已知问题清单，README 素材采用了避开它们的取景：
+
+- 时间轴放大后、面板高度较低时，视频轨会盖住最下面一条字幕轨。
+- 识别进度的“本地识别”分组卡在两步之间会短暂显示回“等待”。
+- 本地 MOSS + FireRed + Qwen 流程不发出逐段文字事件，“最新识别内容”一直为空。
+- 样式面板选用带退场的动效后，样式预览播放一次后停在空白。
+- 英文界面在 1320 宽时部分按钮与标签挤压、截断。
+
+## 与 0.5.0 源码清单的关系
+
+`SHA256SUMS.txt` 和 `SOURCE_*` 清单记录的是 2026-10-02 的 0.5.0 源码快照，不覆盖之后的文档与展示图更新；本次没有改动这些清单、任何 Release 或安装包。
