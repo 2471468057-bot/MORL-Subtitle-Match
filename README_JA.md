@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/banner-ja-dark.png">
-  <img alt="2ByteASR · 兔白字幕" src="docs/assets/readme/banner-ja-light.png" width="100%">
-</picture>
+<img alt="2ByteASR · 兔白字幕" src="docs/assets/readme/banner-ja.png" width="100%">
 
 ### ゲーム実況の字幕を、認識から完成動画まで。
 

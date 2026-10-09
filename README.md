@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/banner-zh-dark.png">
-  <img alt="兔白字幕 2ByteASR" src="docs/assets/readme/banner-zh-light.png" width="100%">
-</picture>
+<img alt="兔白字幕 2ByteASR" src="docs/assets/readme/banner-zh.png" width="100%">
 
 ### 游戏实况字幕，从识别到成片。
 

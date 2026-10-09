@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/banner-en-dark.png">
-  <img alt="2ByteASR · 兔白字幕" src="docs/assets/readme/banner-en-light.png" width="100%">
-</picture>
+<img alt="2ByteASR · 兔白字幕" src="docs/assets/readme/banner-en.png" width="100%">
 
 ### Game stream subtitles, from recognition to final cut.
 

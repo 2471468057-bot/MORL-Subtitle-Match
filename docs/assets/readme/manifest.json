@@ -5,55 +5,31 @@
   "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
   "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
   "edits": "scale, rounded frame, palette encoding, crops of the window region where the action happens; export.png has the local output path masked; banners combine brand text with unmodified UI crops",
-  "total_bytes": 5152276,
+  "total_bytes": 3560146,
   "files": [
     {
-      "path": "docs/assets/readme/banner-en-dark.png",
-      "bytes": 365306,
+      "path": "docs/assets/readme/banner-en.png",
+      "bytes": 198186,
       "width": 1760,
       "height": 660,
       "frames": 1,
-      "sha256": "27f8768c3dcc7e1ad64ff80753fae4eba992d699634bdcf7f8fffe10b23defa5"
+      "sha256": "53cbd0b8fad133bfeb3811499adc8e3858f08cf987e38bf8bf638d2bd580f271"
     },
     {
-      "path": "docs/assets/readme/banner-en-light.png",
-      "bytes": 345086,
+      "path": "docs/assets/readme/banner-ja.png",
+      "bytes": 201751,
       "width": 1760,
       "height": 660,
       "frames": 1,
-      "sha256": "d473a3437132a9f5a40a44233e094137073bd9d1c6b04fd9218fdee3bdae52c9"
+      "sha256": "98334ce855fe57f2738eeefd34441bed3dcdd501a124493787190ef2237071a6"
     },
     {
-      "path": "docs/assets/readme/banner-ja-dark.png",
-      "bytes": 381913,
+      "path": "docs/assets/readme/banner-zh.png",
+      "bytes": 201652,
       "width": 1760,
       "height": 660,
       "frames": 1,
-      "sha256": "c783c157794e2fc166a607d4abe8316f89e4677f85e7863a5de40dfb33d2a353"
-    },
-    {
-      "path": "docs/assets/readme/banner-ja-light.png",
-      "bytes": 368982,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "237746fbb04f5f67a70aa410279a274663936877262f0c8922dbbe52617a2cd2"
-    },
-    {
-      "path": "docs/assets/readme/banner-zh-dark.png",
-      "bytes": 372352,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "caca5117cd0ff8a1f4b6df8280b6141685a9f49b9f42f49b5412dc79d0d70beb"
-    },
-    {
-      "path": "docs/assets/readme/banner-zh-light.png",
-      "bytes": 360080,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "620384338f34927a47c3c58d4ae2e5698416ed72cf563ebc61b1695572ffb066"
+      "sha256": "9a385b637538863481665c28f8de1b962c79f78aa71408cf79f50833084f2e65"
     },
     {
       "path": "docs/assets/readme/completion.png",
