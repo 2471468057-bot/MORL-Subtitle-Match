@@ -17,7 +17,7 @@ Proofread, cut and style in Subtitle Studio, then export subtitles or burn them 
 
 [中文](README.md) · **English** · [日本語](README_JA.md)
 
-[Download](#download-and-install) · [Features](#features) · [Models](#model-catalog) · [Run from source](#run-from-source) · [License](#license-and-third-party-terms)
+[What's different](#what-makes-it-different) · [Download](#download-and-install) · [Models](#model-catalog) · [Run from source](#run-from-source) · [License](#license-and-third-party-terms)
 
 </div>
 
@@ -25,67 +25,65 @@ Proofread, cut and style in Subtitle Studio, then export subtitles or burn them 
 
 ![Subtitle Studio in English: captions list, video preview, style panel and a timeline with one track per speaker](docs/assets/readme/studio-en.png)
 
-<sub>Every image on this page is the real app (development build, 2026-10-09). The sample is a self-made animation with two synthetic Chinese voices, recognised locally with MOSS + FireRedASR2-AED + Qwen3-ASR and then tidied up in Studio. Feature clips below show the Chinese UI; the app also ships English and Japanese UI. <a href="docs/assets/readme/README.md">About these assets</a></sub>
+<sub>Every image on this page is the real app (development build, 2026-10-09). The sample is a 34-second two-person conversation in Chinese (self-made visuals, synthetic voices), recognised locally with MOSS + FireRedASR2-AED + Qwen3-ASR and then corrected in Studio. Feature clips show the Chinese UI; the app also ships English and Japanese UI. <a href="docs/assets/readme/README.md">About these assets</a></sub>
 
-## Features
+## What makes it different
 
-- **Three models, three jobs.** Primary transcription writes the text and separates speakers, the subtitle timeline places every character in time, and text review listens again with a second model.
-- **Automatic speaker tracks.** Each person gets their own subtitle track, with a name, colour and default style.
-- **Cut by character, compare candidates.** The razor cuts along word boundaries; when models disagree, their versions sit side by side and one click adopts the right one.
-- **Game term libraries.** Character names, skills and common misrecognitions are organised per game and used in recognition and proofreading.
-- **Styles, motion and burn-in.** Presets, fonts, outlines and entrance effects preview instantly, and the video exports with subtitles burned in.
-- **Local first.** Once models are downloaded, recognition runs offline. Online recognition or AI services are optional and use your own accounts.
+### Three models listen separately, and disagreements are flagged
 
-## Bring in media and pick a recognition plan
+![Review mode: MOSS and FireRed heard one character, Qwen3-ASR heard another; clicking adopts it](docs/assets/readme/review.gif)
+
+MOSS writes the draft, then FireRedASR2-AED and Qwen3-ASR each listen again on their own, and any character that differs is recorded. Here MOSS and FireRed heard 拉住**他** ("hold him") while Qwen3-ASR heard 拉住**它** ("hold it", the monster). Review mode lists the versions side by side, highlights the differing character, and adopts one with a click.
+
+<sub>In this 34-second sample, 3 of 9 speech segments had a disagreement: FireRed heard 拿齐 as 拿起 and 捡掉 as 剪掉, and MOSS wrote 他 for 它. Each one is listed side by side in review; none is changed silently.</sub>
+
+### Every character is timed, so the razor cuts between characters
+
+![After merging two subtitles, dragging the razor shows both halves and cuts between two characters on release](docs/assets/readme/razor.gif)
+
+FireRedASR2-AED provides start and end times at the character and word level, so segmentation and cuts follow character boundaries. The local rules split a phrase in the wrong place: merge the two pieces, drag the razor to the right spot while the card previews both halves, and release to cut. Timing follows the characters, and every cut can be undone.
+
+### One track per speaker, automatically
+
+![The timeline with each speaker on their own subtitle track, above the video track and waveform](docs/assets/readme/tracks.png)
+
+Once MOSS has told the speakers apart, each person's lines go on their own track. Names, colours and default styles are set in the speaker manager, and exports can merge speakers into one file or split them.
+
+### Term libraries organised per game
+
+![Term library: terms, misrecognitions, sources and confirmation status per game](docs/assets/readme/glossary-en.png)
+
+Character names, skills and common misrecognitions are kept per game with sources and confirmation status. They guide recognition and help catch misspelled names when proofreading, and they carry over to the next recording.
+
+## From media to final video
 
 ![Home screen in English: media drop zone, the three role cards, AI smart segmentation and content terms](docs/assets/readme/home-en.png)
 
-Media, recognition plan and terms share one page. "Pick a goal first" offers ready-made combinations, for example the quality-first **MOSS + FireRedASR2-AED + Qwen3-ASR**, and every role can switch model or be turned off. AI smart segmentation and AI proofreading are optional steps you can turn off on the home screen; when on, they use a service you configure.
-
-## Every step is visible
+Media, recognition plan and terms share one page. "Pick a goal first" offers ready-made combinations, for example the quality-first **MOSS + FireRedASR2-AED + Qwen3-ASR**, and every role can switch model or be turned off. Once downloaded, models run offline on your machine. AI smart segmentation and AI proofreading are optional steps you can turn off on the home screen; when on, they use a service you configure.
 
 <p align="center">
   <img src="docs/assets/readme/progress.png" width="49%" alt="Progress page: step 6 of local recognition, Qwen re-checking the text, with timings for each step">
   <img src="docs/assets/readme/completion.png" width="49%" alt="Completion page: 14 subtitles, 2:42 elapsed, items to check and a full subtitle preview">
 </p>
 
-The progress page shows the current step and the time and result of every step; the full run log is saved with the project report. When it finishes you get the subtitle count, items to check and a full preview, ready to export or to open in Studio.
+The progress page shows the current step and the time and result of every step, and the full run log is saved with the project report. The completion page gives the subtitle count, items to check and a full preview.
 
 <sub>One real run of the 34-second sample on a local RTX 5070 Ti, model loading included. Timing varies with hardware and media.</sub>
-
-## A razor that cuts between characters
-
-![Merging two subtitles, then dragging the razor between two characters while a card previews both halves](docs/assets/readme/razor.gif)
-
-The local rules split a phrase in the wrong place. Merge the two pieces, drag the razor to the right spot while the card previews both halves, and release to cut. Cuts land on recognised word boundaries and can always be undone.
-
-## When models disagree, compare them
-
-![Review mode: MOSS and FireRed heard one character, Qwen3-ASR heard another; clicking adopts it and moves on](docs/assets/readme/review.gif)
-
-MOSS and FireRedASR2-AED heard 拉住**他** ("hold him"), Qwen3-ASR heard 拉住**它** ("hold it", referring to the monster). Review mode lists the versions side by side, highlights the differing character, adopts one with a click and moves to the next line.
-
-## Styles, motion and the final video
-
-<p align="center"><img src="docs/assets/readme/output.gif" width="800" alt="Exported video: subtitles over gameplay with a soft pop-in effect"></p>
 
 <p align="center">
   <img src="docs/assets/readme/speakers-en.png" width="49%" alt="Speaker manager: rename speakers and set colours and default styles">
   <img src="docs/assets/readme/export.png" width="49%" alt="Encode finished: H.264, 1920×1080, 30 fps, bitrate and time taken">
 </p>
 
-The speaker manager renames speakers and sets colours and default styles. The style panel changes size, outline and entrance motion with an instant preview. When encoding finishes you see codec, resolution, bitrate and time taken. The animation above is cut from the MP4 the app actually exported.
+In Subtitle Studio you proofread, adjust styles and entrance motion, export SRT, ASS, TXT or JSON, or encode a video with the subtitles burned in. The encode page reports codec, resolution, bitrate and time taken.
 
 <sub>The local output path on the encode page has been masked.</sub>
 
 ## More
 
-<p align="center">
-  <img src="docs/assets/readme/glossary-en.png" width="49%" alt="Term library: terms, misrecognitions, sources and confirmation status per game">
-  <img src="docs/assets/readme/workshop-en.png" width="49%" alt="Model workshop: pick models per role and see size, runtime and reference scores">
-</p>
+![Model workshop in English: pick models per role and see size, runtime and reference scores](docs/assets/readme/workshop-en.png)
 
-The **term library** keeps character names, skills and common misrecognitions per game, with sources and confirmation status. The **model workshop** lists the models for each role with size, runtime and reference scores, and downloads or switches them in one place.
+The **Model workshop** lists the models for each role with size, runtime and reference scores, and downloads or switches them in one place.
 
 ![Five UI themes: Deep Grape, Warm Cream, Warm Night, Lavender and Slate](docs/assets/readme/themes.png)
 

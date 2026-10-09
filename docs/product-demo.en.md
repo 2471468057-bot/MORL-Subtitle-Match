@@ -34,11 +34,11 @@ Review: versions from different models side by side with the differences highlig
 
 Speaker manager (English UI): names, colours and default styles.
 
+![Timeline: each speaker on their own subtitle track](assets/readme/tracks.png)
+
+Speaker tracks: each person's lines go on their own track automatically.
+
 ## Export
-
-![Subtitles with a soft pop-in effect in the exported video](assets/readme/output.gif)
-
-Cut from the MP4 the app actually exported.
 
 ![Encode finished: codec, resolution, bitrate and time taken](assets/readme/export.png)
 

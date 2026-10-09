@@ -4,56 +4,56 @@
   "source": "real desktop window captures, development build 2026-10-09",
   "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
   "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
-  "edits": "scale, rounded frame, palette encoding, GIF trimming; export.png has the local output path masked",
-  "total_bytes": 6980179,
+  "edits": "scale, rounded frame, palette encoding, crops of the window region where the action happens; export.png has the local output path masked; banners combine brand text with unmodified UI crops",
+  "total_bytes": 5152276,
   "files": [
     {
       "path": "docs/assets/readme/banner-en-dark.png",
-      "bytes": 297710,
+      "bytes": 365306,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "07fb4e9d7dfdd1523546b027e3ff1c42ce9f91853755294e97cc0eca91d467dd"
+      "sha256": "27f8768c3dcc7e1ad64ff80753fae4eba992d699634bdcf7f8fffe10b23defa5"
     },
     {
       "path": "docs/assets/readme/banner-en-light.png",
-      "bytes": 282640,
+      "bytes": 345086,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "3598a986dc4ed1f088e8a341cd8a683986af64bac1f48c0ca2c2c0840565552b"
+      "sha256": "d473a3437132a9f5a40a44233e094137073bd9d1c6b04fd9218fdee3bdae52c9"
     },
     {
       "path": "docs/assets/readme/banner-ja-dark.png",
-      "bytes": 303182,
+      "bytes": 381913,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "95967d3b987345750c40eaea440e10ea66fbd4c66dd2ef5316995382f9ba4117"
+      "sha256": "c783c157794e2fc166a607d4abe8316f89e4677f85e7863a5de40dfb33d2a353"
     },
     {
       "path": "docs/assets/readme/banner-ja-light.png",
-      "bytes": 288614,
+      "bytes": 368982,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "d159baf3bc74ef2ea79621302759b074a17e172947acfe4f684551d802bae459"
+      "sha256": "237746fbb04f5f67a70aa410279a274663936877262f0c8922dbbe52617a2cd2"
     },
     {
       "path": "docs/assets/readme/banner-zh-dark.png",
-      "bytes": 298740,
+      "bytes": 372352,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "56441f41b60bc700d8302b29a775651e83b49a96d2325175636a7000710924b1"
+      "sha256": "caca5117cd0ff8a1f4b6df8280b6141685a9f49b9f42f49b5412dc79d0d70beb"
     },
     {
       "path": "docs/assets/readme/banner-zh-light.png",
-      "bytes": 284284,
+      "bytes": 360080,
       "width": 1760,
-      "height": 600,
+      "height": 660,
       "frames": 1,
-      "sha256": "6ea59e34b485861596b36d66ad750fe8a125e586c65c4ba43122dd8aef824cf9"
+      "sha256": "620384338f34927a47c3c58d4ae2e5698416ed72cf563ebc61b1695572ffb066"
     },
     {
       "path": "docs/assets/readme/completion.png",
@@ -120,14 +120,6 @@
       "sha256": "0d3cd12aaf10ca563243085ed560770ce143c2f013a4ba0372b3d9275e1ba62a"
     },
     {
-      "path": "docs/assets/readme/output.gif",
-      "bytes": 2193812,
-      "width": 800,
-      "height": 450,
-      "frames": 84,
-      "sha256": "a9e68c8c01ce45da0fba34203eb7ea81746e8959b5212ff7a540520934817a1d"
-    },
-    {
       "path": "docs/assets/readme/progress.png",
       "bytes": 170821,
       "width": 1760,
@@ -137,19 +129,19 @@
     },
     {
       "path": "docs/assets/readme/razor.gif",
-      "bytes": 397260,
-      "width": 1100,
-      "height": 733,
+      "bytes": 365315,
+      "width": 1320,
+      "height": 425,
       "frames": 51,
-      "sha256": "837e35522dafe63606b39ae36a2483c9cadd40ab6743089529ecc5404e6e8bdc"
+      "sha256": "0bd0203792d2386fd4e03b684605d1b940bae9df52e159a9fe2d622fafcee940"
     },
     {
       "path": "docs/assets/readme/review.gif",
-      "bytes": 307855,
-      "width": 1100,
-      "height": 733,
+      "bytes": 216218,
+      "width": 1096,
+      "height": 722,
       "frames": 25,
-      "sha256": "33505cca8f3776c1518e1a6adcd63d1c706cf2ed0758b2c81fbaa1caebbc8453"
+      "sha256": "2e7fbd06e8aeaf91e047a0f82011398fc3e6271109320b85832cb39dc084b279"
     },
     {
       "path": "docs/assets/readme/speakers-en.png",
@@ -206,6 +198,14 @@
       "height": 876,
       "frames": 1,
       "sha256": "0116fca9f4a3a2e64ad0603ce11c9b1c9af2b4976bd08e7821373d590a2127b0"
+    },
+    {
+      "path": "docs/assets/readme/tracks.png",
+      "bytes": 50942,
+      "width": 1760,
+      "height": 387,
+      "frames": 1,
+      "sha256": "a383773cd3f0c450b6bcc74f8b49ab64479aa0b0091e447475724eb40c737821"
     },
     {
       "path": "docs/assets/readme/workshop-en.png",
