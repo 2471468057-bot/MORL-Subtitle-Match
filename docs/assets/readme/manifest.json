@@ -1,35 +1,27 @@
 {
   "schema": 1,
   "updated": "2026-10-09",
-  "source": "real desktop window captures, development build 2026-10-09",
+  "source": "feature animations: HyperFrames HTML compositions rendered to animated WebP; screenshots: real desktop window captures, development build 2026-10-09",
   "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
   "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
-  "edits": "scale, rounded frame, palette encoding, crops of the window region where the action happens; export.png has the local output path masked; banners combine brand text with unmodified UI crops",
-  "total_bytes": 3560146,
+  "edits": "screenshots: scale, rounded frame, palette encoding, crops; export.png has the local output path masked",
+  "total_bytes": 8151948,
   "files": [
     {
-      "path": "docs/assets/readme/banner-en.png",
-      "bytes": 198186,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "53cbd0b8fad133bfeb3811499adc8e3858f08cf987e38bf8bf638d2bd580f271"
+      "path": "docs/assets/readme/caption-effects.gif",
+      "bytes": 1400866,
+      "width": 1080,
+      "height": 342,
+      "frames": 95,
+      "sha256": "9498aff83076833add559fb1c248898019484c4441c7941e6a6bdd6c404828ec"
     },
     {
-      "path": "docs/assets/readme/banner-ja.png",
-      "bytes": 201751,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "98334ce855fe57f2738eeefd34441bed3dcdd501a124493787190ef2237071a6"
-    },
-    {
-      "path": "docs/assets/readme/banner-zh.png",
-      "bytes": 201652,
-      "width": 1760,
-      "height": 660,
-      "frames": 1,
-      "sha256": "9a385b637538863481665c28f8de1b962c79f78aa71408cf79f50833084f2e65"
+      "path": "docs/assets/readme/clips.webp",
+      "bytes": 1165144,
+      "width": 1100,
+      "height": 550,
+      "frames": 249,
+      "sha256": "db3b9fb8988d32b21c71b27803c2c349f74004ea2a1d618685acc332ccc4e7c1"
     },
     {
       "path": "docs/assets/readme/completion.png",
@@ -96,6 +88,14 @@
       "sha256": "0d3cd12aaf10ca563243085ed560770ce143c2f013a4ba0372b3d9275e1ba62a"
     },
     {
+      "path": "docs/assets/readme/icon.png",
+      "bytes": 76082,
+      "width": 222,
+      "height": 256,
+      "frames": 1,
+      "sha256": "065f1292281f0c4f0869c0d372509a277683925de43c6c3a0917b4c902d78776"
+    },
+    {
       "path": "docs/assets/readme/progress.png",
       "bytes": 170821,
       "width": 1760,
@@ -104,20 +104,28 @@
       "sha256": "ae833826ddb65a9947d79a0713119ae8cb62355106058f53b684e32bf87f8e22"
     },
     {
-      "path": "docs/assets/readme/razor.gif",
-      "bytes": 365315,
-      "width": 1320,
-      "height": 425,
-      "frames": 51,
-      "sha256": "0bd0203792d2386fd4e03b684605d1b940bae9df52e159a9fe2d622fafcee940"
+      "path": "docs/assets/readme/razor.webp",
+      "bytes": 655824,
+      "width": 1100,
+      "height": 550,
+      "frames": 188,
+      "sha256": "d26e8462aa37cb2465b3f5ace06e0aecd7d6ce0ddeefb2756df7f4e27cb4f3dd"
     },
     {
-      "path": "docs/assets/readme/review.gif",
-      "bytes": 216218,
-      "width": 1096,
-      "height": 722,
-      "frames": 25,
-      "sha256": "2e7fbd06e8aeaf91e047a0f82011398fc3e6271109320b85832cb39dc084b279"
+      "path": "docs/assets/readme/review.webp",
+      "bytes": 805300,
+      "width": 1100,
+      "height": 550,
+      "frames": 180,
+      "sha256": "554b7364b1223800ed91c20da4d06237ed8653d1ddfd3ec6f11b7201f6dfab0b"
+    },
+    {
+      "path": "docs/assets/readme/roles.webp",
+      "bytes": 962326,
+      "width": 1100,
+      "height": 550,
+      "frames": 244,
+      "sha256": "a120b3c52af4c88b1dcd4e0c85cf70dfce867f2b88c75a8e5e804aa5e935c244"
     },
     {
       "path": "docs/assets/readme/speakers-en.png",
@@ -166,6 +174,14 @@
       "height": 1173,
       "frames": 1,
       "sha256": "58607cf2298a36d1f1d4bb7d6f85a62be4efc52ec6243af93fe9cec7cf4482c6"
+    },
+    {
+      "path": "docs/assets/readme/terms.webp",
+      "bytes": 709382,
+      "width": 1100,
+      "height": 550,
+      "frames": 139,
+      "sha256": "daded3c5f443d0930fbfb6fa953afd5170f377657eb11bffe63c5e7013047b5f"
     },
     {
       "path": "docs/assets/readme/themes.png",

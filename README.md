@@ -1,134 +1,90 @@
 <div align="center">
 
-<img alt="兔白字幕 2ByteASR" src="docs/assets/readme/banner-zh.png" width="100%">
+<img src="docs/assets/readme/icon.png" width="104" alt="兔白字幕">
 
-### 游戏实况字幕，从识别到成片。
+# 2ByteASR · 兔白字幕
 
-三个本地模型分工识别，每个字都有时间；<br>
-在字幕工作台里校对、剪辑、调样式，导出字幕或直接压制成片。
+**准确识别字幕，轻松剪辑视频。**
 
-[![Windows x64](https://img.shields.io/badge/Windows-x64-b34470?style=flat-square)](#下载与安装)
-[![macOS 实验](https://img.shields.io/badge/macOS-Apple%20Silicon%20%E5%AE%9E%E9%AA%8C-7a6a8c?style=flat-square)](#下载与安装)
-[![版本 0.5.0 预发布](https://img.shields.io/badge/0.5.0-%E9%A2%84%E5%8F%91%E5%B8%83-d6957c?style=flat-square)](#下载与安装)
-[![GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-a48ad9?style=flat-square)](#许可与第三方说明)
+面向游戏实况的免费字幕识别与视频编辑工具，支持本地部署。<br>
+从识别、校对到特效字幕与视频输出，一站完成。
+
+[下载与快速开始](#下载与快速开始) · [功能演示](#一份字幕三种分工) · [实际界面](#实际界面) · [模型](#模型目录)
 
 **中文** · [English](README_EN.md) · [日本語](README_JA.md)
 
-[有什么不一样](#和普通字幕工具哪里不一样) · [下载与安装](#下载与安装) · [模型目录](#模型目录) · [从源码运行](#从源码运行) · [许可](#许可与第三方说明)
-
 </div>
 
-<br>
+## 一份字幕，三种分工
 
-![兔白字幕字幕工作台：字幕列表、视频预览、样式面板与按说话人分轨的时间轴](docs/assets/readme/studio.png)
+转写先把话写出来，时间轴把每个字落到对应的时间，复核让同一句的不同结果放在一起比较。按素材和设备选择组合，再按需开启 AI 断句。
 
-<sub>本页图片均为软件真实界面（2026-10-09 开发版）。示例素材是一段 34 秒的双人对话（自制画面、合成语音），字幕由本机 MOSS + FireRedASR2-AED + Qwen3-ASR 识别，再在工作台里修正。<a href="docs/assets/readme/README.md">素材说明</a></sub>
+![一份字幕三种分工：MOSS 写出文字并分出说话人，FireRed 给每个字标上时间，Qwen3-ASR 再听一遍核对，最后按说话人放进各自的字幕轨](docs/assets/readme/roles.webp)
 
-## 和普通字幕工具哪里不一样
-
-### 三个模型各听一遍，分歧标出来让你选
-
-![审核模式：MOSS 与 FireRed 听成“他”，Qwen3-ASR 听成“它”，点选后采用](docs/assets/readme/review.gif)
-
-主稿来自 MOSS，FireRedASR2-AED 和 Qwen3-ASR 再各自独立听一遍，哪怕只有一个字不一致也会记下来。上面这句 MOSS 和 FireRed 都听成“拉住**他**”，Qwen3-ASR 听出是“拉住**它**”；审核模式把不同写法并排列出、标出差异字，点一下就采用，跳到下一条。
-
-<sub>这段 34 秒示例共 9 段语音，3 段出现分歧：FireRed 把“拿**齐**”听成“拿**起**”、“捡掉”听成“**剪**掉”，MOSS 把“它”写成“他”。每一处都会在审核里并排列出，不会被悄悄改掉。</sub>
-
-### 每个字都有时间，剃刀切在字缝里
-
-![合并两段后拖动剃刀，预览卡显示前后两段，松开在“走”和“我”之间切开](docs/assets/readme/razor.gif)
-
-FireRedASR2-AED 给出字词级的起止时间，断句和切分都沿着字的边界走。本地规则把“先走”切成了两半：合并两段，按住剃刀拖到“走”和“我”之间，预览卡实时显示前段和后段，松开即切开，时间跟着字走，随时可以撤销。
-
-### 说话人自动分轨
-
-![时间轴上两位说话人各占一条字幕轨，下方是视频轨与波形](docs/assets/readme/tracks.png)
-
-MOSS 区分出不同的说话人后，每个人的字幕自动放进自己的轨道。名字、颜色和默认样式在说话人管理里统一改，导出时可以合并成一份，也可以按人分开。
-
-### 按游戏整理的术语库
-
-![游戏术语库：按游戏整理术语、错词、来源与确认状态](docs/assets/readme/glossary.png)
-
-角色名、技能和常见错词按游戏归档，标明来源与确认状态。识别时作为参考词，校对时用来找出写错的专名；换一段素材不用从头整理。
-
-## 从素材到成片
-
-![首页：素材入口、主力转写／字幕时间轴／文字复核三张角色卡、AI 智能断句与内容术语](docs/assets/readme/home.png)
-
-首页把素材、识别方案和术语放在同一页。“先选目标”提供现成组合，例如质量优先的 **MOSS + FireRedASR2-AED + Qwen3-ASR**，每个角色都能单独换模型或关闭；模型下载后在本机离线运行。AI 智能断句和 AI 校对是可选步骤，可以在首页关闭，开启时使用你自己配置的服务。
-
-<p align="center">
-  <img src="docs/assets/readme/progress.png" width="49%" alt="识别进度：本地识别第 6 步，Qwen 正在独立复核文字，处理记录列出每步用时">
-  <img src="docs/assets/readme/completion.png" width="49%" alt="完成页：14 条字幕、用时 2:42、待检查项与全部字幕预览">
-</p>
-
-进度页列出当前步骤、每一步的用时与结果，完整运行日志同步保存在项目报告中；完成页给出字幕条数、待检查项和全部字幕预览。
-
-<sub>示例为 34 秒素材在本机 RTX 5070 Ti 上的一次实际运行，含模型加载；不同设备和素材的耗时会不同。</sub>
-
-<p align="center">
-  <img src="docs/assets/readme/speakers.png" width="49%" alt="说话人管理：为两位说话人改名、设颜色与默认样式">
-  <img src="docs/assets/readme/export.png" width="49%" alt="压制完成：H.264、1920×1080、30 fps、码率与耗时">
-</p>
-
-在字幕工作台里校对、调整样式和入场动效，导出 SRT／ASS／TXT／JSON，或直接压制带字幕的视频；压制完成后列出编码、分辨率、码率和耗时。
-
-<sub>压制完成页中本机的输出路径已遮住。</sub>
-
-## 更多
-
-![模型工坊：按角色挑选模型，查看体积、运行方式与参考指数](docs/assets/readme/workshop.png)
-
-**模型工坊**按角色列出可用模型，显示体积、运行方式和参考指数，一键下载或切换。
-
-![五套界面主题：深葡萄紫、暖奶油、暖夜炭、薰衣草、岩灰](docs/assets/readme/themes.png)
-
-默认的**深葡萄紫**之外，还有暖奶油、暖夜炭、薰衣草和岩灰四套主题；界面语言可选中文、English、日本語。
-
-## 模型目录
-
-**主力转写**
-
-- 本地：**MOSS-Transcribe-Diarize**（多人与说话人区分）、SenseVoice Small（可用 CPU）、FireRedASR2-AED、Qwen3-ASR 1.7B、Paraformer Large、Whisper large-v3-turbo、Fun-ASR Nano、FireRedASR2-LLM、GLM-ASR-Nano、Canary-Qwen-2.5B（英语）
-- 在线（自备账号）：Qwen Audio 3.1 长音频转写、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 兼容接口
-
-**字幕时间轴**
-
-- 本地：**FireRedASR2-AED**、Qwen3-ForcedAligner 0.6B、Paraformer Large、Whisper large-v3-turbo
-
-**文字复核**
-
-- 本地：**Qwen3-ASR 1.7B**、SenseVoice Small、Whisper large-v3-turbo、FireRedASR2-LLM、Fun-ASR Nano
-- 在线：与主力转写相同的在线接口
-
-粗体为“质量优先”组合。MOSS、FireRedASR2-AED、Qwen3-ASR 等本地模型需要 NVIDIA CUDA 显卡；SenseVoice Small 可以只用 CPU。模型权重不随程序附带，在模型工坊里按需下载，每个模型遵守各自的许可。在线接口按服务方条款计费，其中部分为实验接入；Omnilingual ASR LLM 7B 目前只列出权重，原生 Windows 暂不支持推理。
-
-## 下载与安装
-
-> [!NOTE]
-> 公开安装包尚未发布。0.5.0 预发布（Windows x64 与 macOS Apple Silicon 实验版）正式发布后会出现在 [Releases](https://github.com/NOTBAD314/2ByteASR/releases)。现在可以先[从源码运行](#从源码运行)。
-
-| 系统 | 要求 | 状态 |
+| 角色 | 帮你做什么 | 代表方案 |
 | --- | --- | --- |
-| Windows | Windows 10 22H2（19045）及以上，x64；本地 GPU 模型需 NVIDIA 显卡 | 主要平台 |
-| macOS | macOS 15 及以上，Apple Silicon | 实验：已验证 SenseVoice CPU 主流程，未作 Developer ID 签名与公证，见[说明](docs/deployment/macos-experimental.zh-CN.md) |
+| 主力转写 | 写出文字；MOSS 还能分出不同的说话人，各放一条字幕轨 | MOSS、SenseVoice、Whisper |
+| 字词时间轴 | 给每个字标上起止时间，断句和切分都沿着字的边界 | FireRedASR2-AED、Paraformer；已有文本可用 Qwen3-ForcedAligner |
+| 文字复核 | 用另一个模型再听一遍，标出写法不同的字 | Qwen3-ASR 等本地／在线方案 |
 
-**上手三步**
+## 切到字词边界，调整字幕节奏
 
-1. 打开**模型工坊**，下载要用的模型，或填写在线服务的账号与密钥。
-2. 回到首页，拖入视频或音频，选好识别方案，点**开始生成字幕**。
-3. 完成后进入**字幕工作台**校对、精修，导出字幕或压制成片。
+每个字都有自己的起止时间。拖动剃刀，它只会停在字与字之间，预览卡同时显示前后两段；松开就切开，时间跟着字走。切错了，一键撤销。
 
-| 用途 | 格式 |
-| --- | --- |
-| 导入 | MP4、MOV、MKV、WebM、FLV、AVI；MP3、WAV、M4A、FLAC、AAC |
-| 字幕与文稿 | SRT、ASS、TXT、JSON；说话人可合并或分别导出 |
-| 成片 | MP4、MKV、MOV |
+![剃刀沿着字与字之间移动，预览前段和后段，松开后切成两条字幕，再撤销](docs/assets/readme/razor.webp)
 
-更多安装、模型和格式说明见[使用指南](docs/product-guide.zh-CN.md)。
+## 同一句，对照候选再采用
 
-## 从源码运行
+“他”还是“它”？三个模型各自听一遍，写法不同的字会被标出来。在同一条字幕下看清差异和来源，点一下采用，当前字幕随之更新。
+
+![三个模型的写法并排比较，点选 Qwen3-ASR 的“它”后字幕更新](docs/assets/readme/review.webp)
+
+## 游戏术语库：整理一次，反复使用
+
+角色名、别名和常见错词，按游戏归档。核对参考词与来源，确认后用于识别和校对；换一段素材，不必从头整理。
+
+![术语库按游戏整理，字幕里写错的“阿米亚”“原石技艺”对照词库改成“阿米娅”“源石技艺”](docs/assets/readme/terms.webp)
+
+## 直播切片与特效字幕
+
+**先找到值得剪的片段。** 结合直播弹幕 XML 和字幕，找到“残血反杀”“翻车爆笑”“弹幕集中”等候选，每条写明理由和时间范围，选好后加入剪辑。
+
+![弹幕热度曲线标出高能片段，选中“残血反杀”后加入剪辑，时间范围同步选中](docs/assets/readme/clips.webp)
+
+**再让一句话有自己的表情。** 字体、材质、入场与退场一起构成字幕作品。已有样式可以复用，也可以配置 AI 设计服务生成并修改。字幕设计和直播切片可以分别使用。
+
+![木刻压印与 CRT 计分屏完整入场、停留和退场](docs/assets/readme/caption-effects.gif)
+
+*木刻压印：木板扣合、刻印显字、收拢退场。CRT 计分屏：通电、磷光显字、关屏退场。*
+
+## 实际界面
+
+<p align="center">
+  <img src="docs/assets/readme/studio.png" width="49%" alt="字幕工作台：字幕列表、视频预览、样式面板与按说话人分轨的时间轴">
+  <img src="docs/assets/readme/home.png" width="49%" alt="首页：素材、三种识别角色、AI 智能断句与内容术语">
+</p>
+
+左边是字幕工作台，右边是首页。更多截图见[界面一览](docs/product-demo.zh-CN.md)。
+
+## 下载与快速开始
+
+安装包将发布在 [GitHub Releases](https://github.com/NOTBAD314/2ByteASR/releases)：Windows x64 与 macOS Apple Silicon（实验版）。0.5.0 预发布目前尚未公开，可以先[从源码运行](#从源码运行)。
+
+1. **安装并启动。** Windows 运行 Setup 安装包；Mac 打开 DMG，将 `2ByteASR.app` 拖入 `Applications` 后启动。
+2. **准备识别方案。** 在模型工坊准备本地模型，或配置自己的在线服务。
+3. **导入并识别。** 选择素材、内容与词库，检查转写、字词时间和说话人结果。
+4. **进入字幕工作台。** 校对、拆分或合并，调整字幕与画面，再导出字幕、文稿或压制成片。
+
+默认采用**深葡萄紫**主题，也可以在外观设置中换成暖奶油、暖夜炭、薰衣草或岩灰。
+
+### 必要条件
+
+- **系统：** Windows 10 22H2（19045）及以上的 x64 系统；macOS 15 及以上的 Apple Silicon 设备（实验版，未作 Developer ID 签名与公证，见[说明](docs/deployment/macos-experimental.zh-CN.md)）。
+- **本地识别：** 模型权重在模型工坊按需下载。SenseVoice 支持 CPU；MOSS、FireRedASR2-AED、Qwen3-ASR 等使用 NVIDIA CUDA。
+- **在线服务：** 使用自己的账号或 API 密钥，按服务提供方的规则计费。
+- **输出：** SRT、ASS、TXT、JSON、说话人分轨，以及 MP4、MKV、MOV 视频。
+
+### 从源码运行
 
 ```powershell
 git clone https://github.com/NOTBAD314/2ByteASR.git
@@ -137,16 +93,21 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-本仓库是 0.5.0 的独立源码范围（2026-10-02 快照），不包含完整安装包的全部对应源码，也未验证可直接完整打包；上面的截图来自更新的开发版，界面会有差别。构建条件见[源码范围](SOURCE_ONLY_SCOPE.md)与[构建说明](BUILD_FROM_SOURCE.md)，参与开发见[贡献指南](CONTRIBUTING.md)。
+本仓库是 0.5.0 的独立源码范围，不是完整安装包的全部对应源码，也未验证可直接完整打包，详见[源码范围与构建条件](SOURCE_ONLY_SCOPE.md)。
 
-## 许可与第三方说明
+## 模型目录
 
-- **自有代码**采用 [GPL-3.0-only](LICENSE)（[适用范围](PROJECT_LICENSE.md)）。官方版本免费提供；可以依 GPL 商用、修改和分发，分发时须履行提供对应源码等义务。私人修改无需公开；用本软件做出的普通字幕、视频和图片不会仅因此适用 GPL。
-- **第三方组件**保留各自许可，例如 Qt／PySide6、FFmpeg、mpv。高保真渲染用到的 **Remotion** 对个人和员工不超过 3 人的营利组织免费，更大的营利组织需另购其 Company License；**GSAP** 采用其标准条款，不是 MIT。逐项说明见[第三方声明](THIRD_PARTY_NOTICES.md)。
-- **模型权重**不随程序分发，下载后按各自许可使用（Apache-2.0、MIT、CC-BY-4.0、FunASR 模型许可协议等），见[模型许可表](licenses/MODELS.md)。
-- **在线服务**使用你自己的账号与密钥，按服务方条款计费；启用后，相应音频或文字会发送到所选服务。
-- 完整安装包的公开分发材料仍在整理，进度见[分发状态](licenses/DISTRIBUTION-STATUS.md)与[对应源码提供说明](SOURCE_DELIVERY.md)。
+- **主力转写：** MOSS-Transcribe-Diarize（多人与说话人区分）、SenseVoice Small（可用 CPU）、FireRedASR2-AED、Qwen3-ASR 1.7B、Paraformer Large、Whisper large-v3-turbo、Fun-ASR Nano、FireRedASR2-LLM、GLM-ASR-Nano、Canary-Qwen-2.5B（英语）
+- **字词时间轴：** FireRedASR2-AED、Qwen3-ForcedAligner 0.6B、Paraformer Large、Whisper large-v3-turbo
+- **文字复核：** Qwen3-ASR 1.7B、SenseVoice Small、Whisper large-v3-turbo、FireRedASR2-LLM、Fun-ASR Nano
+- **在线接口（自备账号）：** Qwen Audio 3.1 长音频转写、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 兼容接口
 
-## 反馈
+模型权重不随程序附带，在模型工坊按需下载，并遵守各自的许可。
 
-在 [Issues](https://github.com/NOTBAD314/2ByteASR/issues) 提交问题时，请附上版本、所用模型、复现步骤和截图。
+## 更多文档与反馈
+
+[界面一览](docs/product-demo.zh-CN.md) · [使用指南](docs/product-guide.zh-CN.md) · [源码提供说明](SOURCE_DELIVERY.md) · [反馈问题](https://github.com/NOTBAD314/2ByteASR/issues)
+
+反馈时附上版本、模型、复现步骤和截图，方便定位问题。
+
+项目自有代码采用 **GPL-3.0-only**（[标准英文全文](LICENSE) / [适用范围](PROJECT_LICENSE.md)）。官方版本免费提供；允许依 GPL 商用、修改和收费分发，分发时须履行对应源码等条件。私人修改无需公开，普通字幕、视频和图片不会仅因使用本软件生成而自动适用 GPL。第三方组件保留各自许可：高保真渲染用到的 Remotion 对个人和员工不超过 3 人的营利组织免费，更大的营利组织需另购其 Company License；GSAP 采用其标准条款。详见[第三方说明](THIRD_PARTY_NOTICES.md)与[模型许可表](licenses/MODELS.md)，完整安装包的分发材料仍在整理中（[分发状态](licenses/DISTRIBUTION-STATUS.md)）。

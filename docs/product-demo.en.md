@@ -22,14 +22,6 @@ Completion: subtitle count, elapsed time, items to check and a full preview.
 
 Studio (English UI): captions list, video preview, style panel and a timeline with one track per speaker.
 
-![Razor: after merging, drag the razor to preview both halves, then cut](assets/readme/razor.gif)
-
-Razor: drag to preview both halves and release to cut; cuts land on word boundaries.
-
-![Review mode: compare the text from different models and adopt one](assets/readme/review.gif)
-
-Review: versions from different models side by side with the differences highlighted; click to adopt.
-
 ![Speaker manager in English: names, colours and default styles](assets/readme/speakers-en.png)
 
 Speaker manager (English UI): names, colours and default styles.
