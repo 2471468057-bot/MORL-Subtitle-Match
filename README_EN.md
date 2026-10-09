@@ -19,7 +19,7 @@ Transcribe, proofread, design animated subtitles, and export your video in one p
 
 Transcription turns speech into text, timing places every character on the timeline, and review lets you compare different readings of the same line. Choose a combination for your media and hardware, then enable AI sentence segmentation as needed.
 
-![Three roles: MOSS writes the text and separates speakers, FireRed puts every character on the clock, Qwen3-ASR listens again to check, and lines land on per-speaker tracks](docs/assets/readme/roles.webp)
+![Three roles: MOSS writes the text and separates speakers, FireRed times every word, Qwen3-ASR listens again to check, and lines land on per-speaker tracks](docs/assets/readme/roles-en.webp)
 
 | Role | What it does | Options |
 | --- | --- | --- |
@@ -31,25 +31,25 @@ Transcription turns speech into text, timing places every character on the timel
 
 Every character has its own start and end time. Drag the razor and it only stops between characters, with a card previewing both halves; release to cut and the timing follows the text. Cut in the wrong place? Undo with one key.
 
-![The razor moves between characters, previews both halves, cuts the line in two, then undoes](docs/assets/readme/razor.webp)
+![The razor moves from word to word, previews both halves, cuts the line in two, then undoes](docs/assets/readme/razor-en.webp)
 
 ## Compare alternatives, then apply your choice
 
 “他” (him) or “它” (it)? Three models each listen separately, and characters they write differently are flagged. See the differences and their sources under the same subtitle, then click to apply one and the current line updates.
 
-![The three models' versions side by side; choosing Qwen3-ASR's 它 updates the subtitle](docs/assets/readme/review.webp)
+![The three models' versions side by side; choosing Qwen3-ASR's “it” updates the subtitle](docs/assets/readme/review-en.webp)
 
 ## Game glossaries: organize once, use again
 
 Keep character names, aliases, and common recognition errors organized by game. Check reference terms and their sources, then confirm them for recognition and proofreading. Your glossary is ready for the next recording.
 
-![A per-game term library corrects misspelled names in the subtitles](docs/assets/readme/terms.webp)
+![A per-game glossary corrects misspelled names in the subtitles, such as Amia to Amiya](docs/assets/readme/terms-en.webp)
 
 ## Stream highlights and animated subtitles
 
 **Find the moments worth cutting.** Use stream chat XML and subtitles to find candidates such as a low-health comeback, a funny failure, or a burst of chat activity. Each candidate explains why and gives its time range; add the ones you like to your edit.
 
-![A chat-activity curve marks highlight moments; adding the comeback clip selects its range on the timeline](docs/assets/readme/clips.webp)
+![A chat-activity curve marks highlight moments; adding the comeback clip selects its range on the timeline](docs/assets/readme/clips-en.webp)
 
 **Give each line its own expression.** Fonts, materials, entrances, and exits come together in a subtitle design. Reuse an existing style, or configure an AI design service to create and revise one. Subtitle design and highlight selection can be used independently.
 

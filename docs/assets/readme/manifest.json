@@ -5,7 +5,7 @@
   "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
   "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
   "edits": "screenshots: scale, rounded frame, palette encoding, crops; export.png has the local output path masked",
-  "total_bytes": 8151948,
+  "total_bytes": 17072170,
   "files": [
     {
       "path": "docs/assets/readme/caption-effects.gif",
@@ -14,6 +14,22 @@
       "height": 342,
       "frames": 95,
       "sha256": "9498aff83076833add559fb1c248898019484c4441c7941e6a6bdd6c404828ec"
+    },
+    {
+      "path": "docs/assets/readme/clips-en.webp",
+      "bytes": 1180830,
+      "width": 1100,
+      "height": 550,
+      "frames": 250,
+      "sha256": "55663a05aa424e9bcd90a4b829fc1938a602fc87753e5cb060c36a2a92817364"
+    },
+    {
+      "path": "docs/assets/readme/clips-ja.webp",
+      "bytes": 1252152,
+      "width": 1100,
+      "height": 550,
+      "frames": 249,
+      "sha256": "8bb2d74512b5b5b89a2389a4fd44d676851e551cb070c1b393333c9603eade0b"
     },
     {
       "path": "docs/assets/readme/clips.webp",
@@ -104,6 +120,22 @@
       "sha256": "ae833826ddb65a9947d79a0713119ae8cb62355106058f53b684e32bf87f8e22"
     },
     {
+      "path": "docs/assets/readme/razor-en.webp",
+      "bytes": 652052,
+      "width": 1100,
+      "height": 550,
+      "frames": 184,
+      "sha256": "ff56f7691dbef2ee605f843faac94be0e7a66b459e118a255749dec747155164"
+    },
+    {
+      "path": "docs/assets/readme/razor-ja.webp",
+      "bytes": 661954,
+      "width": 1100,
+      "height": 550,
+      "frames": 174,
+      "sha256": "10d56701fadb2e1347de4f1b1548448239a12f59c52da92c37ce71ee1e846a73"
+    },
+    {
       "path": "docs/assets/readme/razor.webp",
       "bytes": 655824,
       "width": 1100,
@@ -112,12 +144,44 @@
       "sha256": "d26e8462aa37cb2465b3f5ace06e0aecd7d6ce0ddeefb2756df7f4e27cb4f3dd"
     },
     {
+      "path": "docs/assets/readme/review-en.webp",
+      "bytes": 774924,
+      "width": 1100,
+      "height": 550,
+      "frames": 188,
+      "sha256": "e9e78e4d0dd0acf03f6bea75c974083aefacad007d09debb614d78c35641dbfe"
+    },
+    {
+      "path": "docs/assets/readme/review-ja.webp",
+      "bytes": 783992,
+      "width": 1100,
+      "height": 550,
+      "frames": 175,
+      "sha256": "064dac6349b16e5516148805d5c037ea10cc7bac8e549b2babaa7502486a9ef4"
+    },
+    {
       "path": "docs/assets/readme/review.webp",
       "bytes": 805300,
       "width": 1100,
       "height": 550,
       "frames": 180,
       "sha256": "554b7364b1223800ed91c20da4d06237ed8653d1ddfd3ec6f11b7201f6dfab0b"
+    },
+    {
+      "path": "docs/assets/readme/roles-en.webp",
+      "bytes": 1055952,
+      "width": 1100,
+      "height": 550,
+      "frames": 237,
+      "sha256": "73be9d69b50ff74e1829f0598ef7ebf4f8b8a3ca96579c487742f0170004f41b"
+    },
+    {
+      "path": "docs/assets/readme/roles-ja.webp",
+      "bytes": 905956,
+      "width": 1100,
+      "height": 550,
+      "frames": 222,
+      "sha256": "bb7384baf5ccebd0d8e2f98a82b21b4c182f68bbff8bf44ee49a11383a409395"
     },
     {
       "path": "docs/assets/readme/roles.webp",
@@ -176,12 +240,28 @@
       "sha256": "58607cf2298a36d1f1d4bb7d6f85a62be4efc52ec6243af93fe9cec7cf4482c6"
     },
     {
-      "path": "docs/assets/readme/terms.webp",
-      "bytes": 709382,
+      "path": "docs/assets/readme/terms-en.webp",
+      "bytes": 937168,
       "width": 1100,
       "height": 550,
-      "frames": 139,
-      "sha256": "daded3c5f443d0930fbfb6fa953afd5170f377657eb11bffe63c5e7013047b5f"
+      "frames": 157,
+      "sha256": "948da0971a74db2faf9687d8c5e8fc327138e2e94e0bdc2370ed3512137221a3"
+    },
+    {
+      "path": "docs/assets/readme/terms-ja.webp",
+      "bytes": 739534,
+      "width": 1100,
+      "height": 550,
+      "frames": 155,
+      "sha256": "fc5a3803a081170d42af67a662d49204cc51da032268bcc0f6bd60e796cdb7c3"
+    },
+    {
+      "path": "docs/assets/readme/terms.webp",
+      "bytes": 685090,
+      "width": 1100,
+      "height": 550,
+      "frames": 140,
+      "sha256": "fff6240ec0446a765c6e750826d649600250f9fc5230343f5129dde0e3e5842d"
     },
     {
       "path": "docs/assets/readme/themes.png",
