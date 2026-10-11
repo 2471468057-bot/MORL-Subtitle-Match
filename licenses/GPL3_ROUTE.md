@@ -40,8 +40,8 @@ Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**�
    - **libplacebo 没有本地源码改动。** mpv-winbuild-cmake 的 `packages/libplacebo.cmake` 没有补丁步骤，该文件自 2025-09-01 起未变，覆盖 2026-08-14 的构建。它删掉 `3rdparty/glad` 和 `3rdparty/fast_float` 两个子模块目录，改为链接另行取得的 glad（`glad2`）与 fast_float（`main`），`git describe --dirty` 因此显示 `-dirty`。对应源码是上游 libplacebo 提交 `22ee762` 加该配方，均公开。
    - **PyAV 的 MSYS2 运行库只有 `libiconv-2.dll` 需要提供源码。** 这个文件是 libiconv 1.19，LGPL。本版 Release 已附 MSYS2 官方源码包 `mingw-w64-libiconv-1.19-1.src.tar.zst` 及其签名。其余几个不需要提供源码：`libgcc_s_seh-1`、`libstdc++-6` 适用 GCC 运行库例外，`libwinpthread-1` 是 MIT 类许可，`zlib1` 是 zlib 许可。
    - **compositor 的 x264 已满足**：GPL 版 `compile-x264.mjs` 加实际编入的 x264 `b35605a` 源码。
-   - **仍缺 ①**：gyan.dev FFmpeg 9.0 essentials 里静态外部库的确切版本、源码与补丁，以及 gyan 的构建脚本。gyan 的说明只指向 FFmpeg 源码，并写明外部库来自 MSYS2 UCRT64；版本清单在原始压缩包的 README，本项目当时只随附了 `bin/`。
-   - **仍缺 ②**：Remotion 在 `rust-ffmpeg-splitter@39ddfbb` 直接提交了预编译的 `x265-windows/lib/libx265.a`（x265 3.4，`X265_BUILD 198`），没有给出编译它的命令。源码 `419182243`（含 x265 自带 CMake 构建系统）已附。
+   - **仍缺（唯一一处）**：gyan FFmpeg 9.0 essentials（`ffmpeg.exe`、`ffprobe.exe`）。已确认与 gyan 官方 9.0 压缩包逐字节相同，FFmpeg 本体 `n9.0` 已附，包内 README 列出的外部库版本已全部列入来源索引（openal-soft 只写了“latest”）。仍缺 gyan 的构建脚本与可能的补丁，以及 13 个未标版本的链接库与 openal-soft 的确切版本。
+   - **compositor 的 x265 已满足**：随附库是 x265 默认 8 位配置（`[Windows][GCC 12.2.0][64 bit] 8bit`），源码 `419182243` 含 CMake 构建系统，相关补丁 `x265-api.patch` 改的是 FFmpeg 且已附；只缺 Remotion 当年的命令行记录，不是必要材料。
 4. **素材**：`assets/theme-references/balatro-crt-mult.png` 已在 `SOURCE_FILE_DECISIONS.json` 里按“inherited approved source/material role”纳入公开源码，运行时不使用；`docs/release-0.2.6-test.2-zh` 分支的截图是当时按需求做的产品概览。两者都不含密钥或口令，本轮不改写历史。
 5. 已登记：随附第三方程序按 SHA-256 记在 [0.6.5-binary-register.json](materials/runtime/0.6.5-binary-register.json)。
 
