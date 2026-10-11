@@ -10,11 +10,12 @@
    ：固定快照 → PyInstaller → 编译 `2ByteASRUpdater.exe` → 写 `2byteasr_components.json` → 载荷扫描（只有已复核例外可放行）→ Build Truth → Setup。
 3. `python -B scripts/release_pipeline.py feed --build <build> --assets releases/X.Y.Z --notes-json docs/releases/X.Y.Z.in-app.json --previous-manifest https://github.com/NOTBAD314/2ByteASR/releases/download/v<上一版>/2ByteASR-update.json`
    ：内容没变的元件直接引用上一版已公开的固定附件，只为变化的元件生成新包；生成并签名 `2ByteASR-update.json(.sig)`。
-4. `python -B scripts/release_pipeline.py sources --build <build> --assets releases/X.Y.Z --review-commit <commit> --extra <固定第三方源码包>`，然后 `sums --assets releases/X.Y.Z`。
+4. `python -B scripts/release_pipeline.py sources --build <build> --assets releases/X.Y.Z --review-commit <commit> --extra <固定第三方源码包>`，然后 `sums --assets releases/X.Y.Z`，再 `python -B scripts/release_signing.py sign --manifest releases/X.Y.Z/SHA256SUMS.txt` 生成 `SHA256SUMS.txt.sig`（同一把 Ed25519 密钥；`upload` 与两种核对会一并处理它）。
 5. 用 `scripts/verify_release_install.py`（隔离 profile、AUDIT 安装）做全新安装、旧版覆盖升级、卸载；用 `scripts/qa_update_feed.py` 做只在本机的下一版更新与故障测试（渠道 `qa-local`，永不上传）。
-6. `python -B scripts/release_public_tree.py --stage <build>/source --base origin/main --branch release/vX.Y.Z ...`：以公开线为父提交、只更新程序源码路径，并扫描密钥/个人路径；`git push origin release/vX.Y.Z`（提交信息带 `[skip ci]`）。
+6. `python -B scripts/release_public_tree.py --stage <build>/source --base origin/main --branch release/vX.Y.Z ...`：以公开线为父提交、只更新程序源码路径，并扫描密钥/个人路径；文件按原始字节写入（不经开发目录的 `.gitattributes` 换行转换）。推送前运行 `python -B scripts/release_pipeline.py verify-source --build <build> --commit <release commit>`，干净检出必须逐字节重现构建源码指纹（0.6.5 的第一个发布提交 `f9b2ea71` 因换行被转换而未通过，已由 `a74c6d64` 纠正）；`git push origin release/vX.Y.Z`（提交信息带 `[skip ci]`）。
 7. `python -B scripts/release_pipeline.py upload --assets releases/X.Y.Z --tag vX.Y.Z --target <release commit> --title ... --notes-file docs/releases/X.Y.Z.md`
-   ：建立**草稿**并上传，逐件核对大小与服务端 SHA-256，认证读回小文件。
+   ：建立**草稿**并上传，逐件核对大小与服务端 SHA-256，认证读回小文件。中途失败就原样重跑：已上传且一致的附件会跳过，不一致的拒绝替换。
+   若之后要改草稿说明，用 API 修改时必须同时带上 `tag_name` 与 `target_commitish`（只改 body 会让 GitHub 把草稿的 tag 清成 `untagged-…`，0.6.5 实际遇到过），改完再跑一次 `verify-draft`。
 8. 所有者检查后手动 Publish。之后运行 `python -B scripts/release_pipeline.py verify-public --tag vX.Y.Z --assets releases/X.Y.Z`（不带任何凭据），或在 GitHub Actions 手动运行 `verify-public-release`，确认 Setup、更新清单及其引用的全部附件都能匿名下载。
 
 `.github/workflows/release.yml` 不再在推送 tag 时构建或创建 Release，只做手动匿名校验。仓库仍为私有时，匿名下载必然失败；这不是发布脚本的问题。

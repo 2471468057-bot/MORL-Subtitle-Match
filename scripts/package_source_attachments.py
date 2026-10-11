@@ -17,6 +17,9 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--stage',type=Path,required=True);ap.add_argument('--release',type=Path,required=True)
     ap.add_argument('--extract',type=Path,required=True);ap.add_argument('--review-commit',required=True)
+    # Public source packages omit attachments that are not build inputs and may
+    # carry internal review material (e.g. website/, tests/ fixtures from real tasks).
+    ap.add_argument('--exclude-prefix',nargs='*',default=[])
     a=ap.parse_args();stage=a.stage.resolve();release=a.release.resolve();extract=a.extract.resolve()
     if not stage.is_relative_to(ROOT/'tmp') or not release.is_relative_to(ROOT/'releases') or not extract.is_relative_to(ROOT/'tmp') or extract.exists():raise ValueError('Only a staged tree and NEW local output under this workspace')
     evidence=stage.parent/'evidence';snapshot=json.loads((evidence/'snapshot-manifest.json').read_text('utf8'))
@@ -35,17 +38,22 @@ def main():
         if digest(stage/item['path']) != item['sha256']:
             raise ValueError('Frozen attachment input mismatch: '+item['path'])
     files=[]
+    excluded=[]
     for current,dirs,names in os.walk(stage):
         dirs[:]=[d for d in dirs if d not in {'.git','__pycache__','tmp'}]
         for name in names:
             p=Path(current)/name
             if p.is_symlink():raise ValueError('Unexpected symlink')
             rel=p.relative_to(stage).as_posix()
+            if rel=='SOURCE_SNAPSHOT.json':continue  # written fresh below; a rerun must not add it twice
+            if any(rel.startswith(prefix) for prefix in a.exclude_prefix):
+                excluded.append(rel);continue
             if name.lower() in {'.env','secrets.json','secrets.dat','2byteasr_settings.json'}:raise ValueError('Personal configuration must not be copied: '+rel)
             files.append({'path':rel,'bytes':p.stat().st_size,'sha256':digest(p)})
     files.sort(key=lambda d:d['path'])
     paths=[p for p in (evidence/'source-paths.z').read_bytes().decode('utf8').split('\0') if p]
-    receipt={'format':'2ByteASR-source-snapshot-1','identity':snapshot['identity'],'license_review_commit':a.review_commit,'build_input_paths':paths,'files':files,'not_a_clean_git_commit':True,'public_distribution_status':'blocked: exact C/D gaps in licenses/GPL3_ROUTE.md','prebuilt_dependencies_are_not_corresponding_source':True}
+    receipt={'format':'2ByteASR-source-snapshot-1','identity':snapshot['identity'],'license_review_commit':a.review_commit,'build_input_paths':paths,'files':files,'not_a_clean_git_commit':True,'public_distribution_status':'blocked: exact C/D gaps in licenses/GPL3_ROUTE.md','prebuilt_dependencies_are_not_corresponding_source':True,
+             'excluded_prefixes':list(a.exclude_prefix),'excluded_file_count':len(excluded)}
     (stage/'SOURCE_SNAPSHOT.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2),'utf8')
     release.mkdir(parents=True,exist_ok=True)
     for index,dest in enumerate(outputs):

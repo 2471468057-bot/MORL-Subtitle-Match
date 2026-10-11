@@ -10,6 +10,8 @@ Typical next release (only the version file changes by hand):
         --previous-manifest https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-update.json
     python -B scripts/release_pipeline.py sources --build tmp/release-066/build-r1 --assets releases/0.6.6
     python -B scripts/release_pipeline.py sums --assets releases/0.6.6
+    python -B scripts/release_signing.py sign --manifest releases/0.6.6/SHA256SUMS.txt
+    python -B scripts/release_pipeline.py verify-source --build tmp/release-066/build-r1 --commit <commit>
     python -B scripts/release_pipeline.py upload --assets releases/0.6.6 --tag v0.6.6 --target <commit> \
         --notes-file docs/releases/0.6.6.md
     # after the owner publishes:
@@ -285,7 +287,8 @@ def cmd_sources(args) -> None:
     stage = Path(freeze["stage"])
     extract = build / "source-extract-check"
     _run([sys.executable, "-B", ROOT / "scripts" / "package_source_attachments.py", "--stage", stage,
-          "--release", assets, "--extract", extract, "--review-commit", args.review_commit])
+          "--release", assets, "--extract", extract, "--review-commit", args.review_commit,
+          "--exclude-prefix", *args.exclude_prefix])
     shutil.rmtree(extract, ignore_errors=True)
     for extra in args.extra or ():
         source = Path(extra)
@@ -309,7 +312,9 @@ def cmd_sums(args) -> None:
     lines = []
     for path in sorted(assets.iterdir(), key=lambda p: p.name.lower()):
         if path.is_file() and path.name != target.name and path.suffix not in (".sha256",) \
-                and not path.name.endswith((".tmp", ".part")) and path.name not in ("source-attachments.json",):
+                and not path.name.endswith((".tmp", ".part")) and path.name not in ("source-attachments.json",
+                                                                                     "SHA256SUMS.txt.sig") \
+                and not path.name.startswith(("draft-verification-", "public-verification-")):
             lines.append(f"{file_sha256(path)}  {path.name}")
     target.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
     _log(f"SHA256SUMS: {len(lines)} files")
@@ -318,7 +323,8 @@ def cmd_sums(args) -> None:
 def upload_list(assets: Path) -> list[Path]:
     sums = (assets / "SHA256SUMS.txt").read_text("ascii").splitlines()
     names = [line.split("  ", 1)[1] for line in sums if line.strip()]
-    return [assets / name for name in names] + [assets / "SHA256SUMS.txt"]
+    signed = [assets / "SHA256SUMS.txt.sig"] if (assets / "SHA256SUMS.txt.sig").is_file() else []
+    return [assets / name for name in names] + [assets / "SHA256SUMS.txt"] + signed
 
 
 # --------------------------------------------------------------------------- upload
@@ -409,9 +415,16 @@ def cmd_verify_draft(args) -> None:
     check = assets.parent / f".draft-readback-{args.tag}"
     shutil.rmtree(check, ignore_errors=True)
     check.mkdir()
-    for name in (UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME, "SHA256SUMS.txt"):
+    for name in (UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME, "SHA256SUMS.txt", "SHA256SUMS.txt.sig"):
         if name in remote:
-            _gh("release", "download", args.tag, "--repo", REPOSITORY, "--pattern", name, "--dir", str(check))
+            for attempt in range(4):  # a just-uploaded asset can briefly fail to download
+                try:
+                    _gh("release", "download", args.tag, "--repo", REPOSITORY, "--pattern", name, "--dir", str(check))
+                    break
+                except subprocess.CalledProcessError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(10 * (attempt + 1))
             report.setdefault("readback", {})[name] = (file_sha256(check / name) == file_sha256(assets / name))
     shutil.rmtree(check, ignore_errors=True)
     report["all_ok"] = all(r["ok"] for r in report["assets"]) and not extra and all(report.get("readback", {}).values())
@@ -475,6 +488,45 @@ def cmd_verify_public(args) -> None:
         raise SystemExit(1)
 
 
+# --------------------------------------------------------------------- verify-source
+
+
+def cmd_verify_source(args) -> None:
+    """A clean checkout of the release commit must reproduce the build's source fingerprint."""
+    import tempfile
+    build = Path(args.build).resolve()
+    identity = json.loads((build / "payload" / "2ByteASR" / "2byteasr_build.json").read_text("utf-8"))
+    paths = sorted((p for p in (build / "evidence" / "source-paths.z").read_bytes().decode("utf-8").split("\0") if p),
+                   key=str.lower)
+    with tempfile.TemporaryDirectory(prefix="verify-source-", dir=ROOT / "tmp") as folder:
+        checkout = Path(folder) / "checkout"
+        subprocess.run(["git", "worktree", "add", "--detach", str(checkout), args.commit], cwd=ROOT, check=True,
+                       capture_output=True)
+        try:
+            digest, missing, differing = hashlib.sha256(), [], []
+            for rel in paths:
+                path = checkout / rel
+                if not path.is_file():
+                    missing.append(rel)
+                    continue
+                data = path.read_bytes()
+                if data != (build / "source" / rel).read_bytes():
+                    differing.append(rel)
+                raw = rel.encode("utf-8")
+                digest.update(len(raw).to_bytes(4, "big"))
+                digest.update(raw)
+                digest.update(len(data).to_bytes(8, "big"))
+                digest.update(data)
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(checkout)], cwd=ROOT, capture_output=True)
+    report = {"commit": args.commit, "build_fingerprint": identity["source_sha256"], "inputs": len(paths),
+              "checkout_fingerprint": digest.hexdigest(), "missing": missing, "differing": differing,
+              "ok": digest.hexdigest() == identity["source_sha256"] and not missing and not differing}
+    print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in report.items()}))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -504,6 +556,8 @@ def main() -> None:
     p.add_argument("--assets", required=True)
     p.add_argument("--review-commit", required=True)
     p.add_argument("--extra", nargs="*", help="Fixed third-party source archives to ship unchanged")
+    p.add_argument("--exclude-prefix", nargs="*", default=["website/", "tests/"],
+                   help="Non-build attachments left out of the public source package")
     p.set_defaults(func=cmd_sources)
     p = sub.add_parser("sums")
     p.add_argument("--assets", required=True)
@@ -525,6 +579,10 @@ def main() -> None:
     p.add_argument("--tag", required=True)
     p.add_argument("--full", action="store_true")
     p.set_defaults(func=cmd_verify_public)
+    p = sub.add_parser("verify-source", help="clean checkout of the release commit reproduces the build fingerprint")
+    p.add_argument("--build", required=True)
+    p.add_argument("--commit", required=True)
+    p.set_defaults(func=cmd_verify_source)
     args = parser.parse_args()
     args.func(args)
 

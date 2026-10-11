@@ -1,0 +1,164 @@
+{
+ "schema": "2byteasr-binary-register/1",
+ "release": "0.6.5",
+ "build": "r9 2026-10-11T06:51:05Z",
+ "source_fingerprint": "88dd50773fcad681c6bf2c73c28a53aa6749b4424c40019165bad3d48f66fbfb",
+ "note": "SHA-256 of the files actually shipped; identifies binaries, grants no licence.",
+ "groups": {
+  "ffmpeg-cli (gyan.dev 9.0 essentials)": {
+   "version_output": [
+    "ffmpeg version 9.0-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "built with gcc 16.1.0 (Rev2, Built by MSYS2 project)"
+   ],
+   "files": [
+    {
+     "path": "tools/ffmpeg/bin/ffmpeg.exe",
+     "bytes": 102802944,
+     "sha256": "227af0691433b703ffc5725e47f7d06eefc34b4a72e7870e73d30e2cda483ecf"
+    },
+    {
+     "path": "tools/ffmpeg/bin/ffprobe.exe",
+     "bytes": 102599168,
+     "sha256": "901f0efe4793cbb0f017101e3427f816e8fbf9a407bd585f49df30f4325cfd88"
+    }
+   ]
+  },
+  "node": {
+   "version_output": [
+    "v24.13.0"
+   ],
+   "files": [
+    {
+     "path": "tools/node/node.exe",
+     "bytes": 89953280,
+     "sha256": "d14ba95cdce1ef7dc9ad3ac74949ca5db38b27378ee30f30a23cf26f9e875a11"
+    }
+   ]
+  },
+  "mpv": {
+   "version_output": [
+    "mpv v0.41.0-923-g7b8915bc1 Copyright © 2000-2026 mpv/MPlayer/mplayer2 projects",
+    " built on Aug 14 2026 00:27:31"
+   ],
+   "files": [
+    {
+     "path": "tools/mpv/d3dcompiler_43.dll",
+     "bytes": 4481992,
+     "sha256": "4b074a3976399dc735484f5d43d04b519b7bdee8ac719d9ab8ed6bd4e6be0345"
+    },
+    {
+     "path": "tools/mpv/mpv.com",
+     "bytes": 3584,
+     "sha256": "3b09e8c3bdffb80141a6717d1002029de7da25d1d63f07870c27db493dc10eaf"
+    },
+    {
+     "path": "tools/mpv/mpv.exe",
+     "bytes": 119761408,
+     "sha256": "09dc5c350a70b536cc91015e7a856f77c933fa9d7f4c41563666e51c998a0243"
+    }
+   ]
+  },
+  "remotion-compositor-win32-x64-msvc 4.0.513": {
+   "version_output": [
+    "ffmpeg version n7.1 Copyright (c) 2000-2024 the FFmpeg developers",
+    "built with gcc 10-win32 (GCC) 20220113"
+   ],
+   "files": [
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/avcodec-61.dll",
+     "bytes": 18414080,
+     "sha256": "f20de600c7a762768705821be4d7c7ec27524bd8f338659937785d7df0650914"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/avdevice-61.dll",
+     "bytes": 128512,
+     "sha256": "b83c1035e74bd590bbb60387421a8f9428b69cee531199d6e5d38000979a0b75"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/avfilter-10.dll",
+     "bytes": 1181696,
+     "sha256": "856f2dc37b14f42e526be3ec378d420d4c6714ec1c191bc60c51de48040bc30b"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/avformat-61.dll",
+     "bytes": 981504,
+     "sha256": "d143e11641ec99b82787306aa9921348b10cacbe55ffbf4d9439f1b15fbe76a7"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/avutil-59.dll",
+     "bytes": 743424,
+     "sha256": "3cbe1a3eaf12996de9915e3c9ad7f7f349912b3557208a470d926ecd34b39597"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/ffmpeg.exe",
+     "bytes": 325120,
+     "sha256": "cec8044dabd562f06fc4a6ed1cd59b8289680f542ef4ccf07d1924c5b340bc68"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/ffprobe.exe",
+     "bytes": 170496,
+     "sha256": "3c7c023ed30f7034daa099f617ddf70dec87492dfb2bfb5000ece5a8768b0769"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/libgcc_s_seh-1.dll",
+     "bytes": 83150,
+     "sha256": "22f5d5bafd409871d8041686e55e3af1939d60f37cb1a48e7a4785136d0e9870"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/libssp-0.dll",
+     "bytes": 43431,
+     "sha256": "647dbde6fe577e2d8710f96510556c2405a42a4f10fc30e4e10521ce036584b4"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/libstdc++-6.dll",
+     "bytes": 1444997,
+     "sha256": "65b141802009fd5e12c9ff1cc7c561f1be0607b5ec641971b313d8269e353606"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/libvpx-1.dll",
+     "bytes": 3419339,
+     "sha256": "e7da5d371cd3607cfe8d9819da040e2761074ad1c58ddcd7f8f47a9ebc088f0f"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/libwinpthread-1.dll",
+     "bytes": 58621,
+     "sha256": "e814c9ce497ccb9a79ab4180e0cffaafa987e33a1b7474f12f70cecb1e868705"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/msvcr100.dll",
+     "bytes": 823808,
+     "sha256": "e8684453d54a1bf9b9ed4b9d32c0e01da034debcd91fc35b2fd66d11b760845b"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/remotion.exe",
+     "bytes": 1252998,
+     "sha256": "99a3152d04c923f2880c8dd8107435c312d90be4b5846e287ea436c182145391"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/swresample-5.dll",
+     "bytes": 110080,
+     "sha256": "e6f1c1196d0cb9ecac3801056a9d43533a56a7c9e7977eda9817aec6be011c21"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/swscale-8.dll",
+     "bytes": 564736,
+     "sha256": "4b97a9efb593bd217d105dfc6e62c5c7fd61b3db57fb072751cd6030aecef860"
+    },
+    {
+     "path": "renderer/node_modules/@remotion/compositor-win32-x64-msvc/zlib1.dll",
+     "bytes": 75776,
+     "sha256": "fb23ab0f7f3def5a6af4653b2c70b5e3a42b5ae329d1c71ad986ba85ea439cf1"
+    }
+   ],
+   "licence_relevant_configure": [
+    "--enable-libfdk-aac",
+    "--enable-gpl",
+    "--enable-encoder=libfdk_aac",
+    "--enable-encoder=libx264",
+    "--enable-encoder=libx265",
+    "--enable-libx264",
+    "--enable-libx265"
+   ]
+  }
+ }
+}

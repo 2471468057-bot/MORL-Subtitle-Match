@@ -113,6 +113,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         if name.endswith(".json") and self.mode == "slow-manifest":
+            self._record(status="received-holding-20s")
             time.sleep(20)
         data = file.read_bytes()
         if archive and self.mode == "corrupt":
