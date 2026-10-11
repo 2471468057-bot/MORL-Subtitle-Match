@@ -1,0 +1,23 @@
+/* README scene stage: one replica at a fixed 1360 × auto camera. */
+html,
+body {
+  margin: 0;
+  width: 1360px;
+  min-width: 1360px;
+  background: var(--ink-0);
+  overflow: hidden;
+}
+body::before {
+  display: none;
+}
+.readme-stage {
+  width: 1360px;
+}
+.readme-stage * {
+  animation: none !important;
+  transition: none !important;
+  caret-color: transparent;
+}
+.readme-stage > .app {
+  margin: 24px;
+}

@@ -1,0 +1,334 @@
+/* Hero: one statement, then the real app at full width, leaning toward the pointer. */
+.hero {
+  padding: clamp(36px, 4.5vw, 72px) 0 clamp(96px, 10vw, 160px);
+  overflow: hidden;
+}
+.hero-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr);
+  gap: clamp(32px, 5vw, 96px);
+  align-items: end;
+}
+.hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+}
+.hero-brand span + span {
+  color: var(--tx-3);
+}
+.hero h1 {
+  margin: 28px 0 0;
+  font-weight: 900;
+  font-size: clamp(44px, 5.6vw, 96px);
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+  font-feature-settings: "palt";
+}
+.hero-lede {
+  margin: 0;
+  color: var(--tx-3);
+  font-size: clamp(17px, 1.3vw, 20px);
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 18px 0 0;
+  color: var(--tx-4);
+  font-size: 13.5px;
+}
+
+/* the stage */
+.stage {
+  position: relative;
+  margin: clamp(64px, 7vw, 112px) 0 0;
+  perspective: 2600px;
+  perspective-origin: 50% 30%;
+}
+.stage-3d {
+  --rx: 0deg;
+  --ry: 0deg;
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: rotateX(calc(9deg + var(--rx))) rotateY(calc(-6deg + var(--ry)));
+  transform-origin: 50% 45%;
+}
+.layer {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  user-select: none;
+  transform-style: preserve-3d;
+}
+.layer.back {
+  transform: translateZ(0);
+}
+.layer.front {
+  transform: translateZ(90px);
+}
+.layer-scale {
+  transform-origin: 0 0;
+}
+.layer .app {
+  border-radius: 16px;
+}
+.layer.back .app {
+  box-shadow: 0 40px 80px rgba(6, 4, 9, 0.6);
+}
+.layer.front .app {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 50px 90px rgba(6, 4, 9, 0.7);
+}
+.stage-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.stage-labels span {
+  position: absolute;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--tx-3);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.stage-labels b {
+  color: var(--tx);
+  font-weight: 900;
+  font-size: 15px;
+}
+
+/* compare: the same clip, before and after */
+.cmp {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) 56px minmax(0, 1.25fr);
+  align-items: stretch;
+}
+.cmp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: clamp(24px, 2.4vw, 40px);
+  border-radius: 16px;
+}
+.cmp-col.raw {
+  background: var(--surf-1);
+  border: 1px solid var(--line);
+}
+.cmp-col.good {
+  background: #1f1a24;
+  border: 1px solid #3a2f40;
+}
+.cmp-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.cmp-label b {
+  font-weight: 900;
+  font-size: 18px;
+}
+.raw .cmp-label b {
+  color: var(--tx-3);
+}
+.cmp-label span {
+  color: var(--tx-4);
+  font-size: 13px;
+}
+.cmp-raw {
+  margin: 0;
+  color: var(--tx-3);
+  font-size: clamp(17px, 1.35vw, 21px);
+  line-height: 1.9;
+  word-break: break-all;
+}
+.cmp-raw u {
+  text-decoration: underline wavy #c26a5c;
+  text-underline-offset: 5px;
+  color: #e3a091;
+}
+.cmp-cons {
+  display: grid;
+  gap: 8px;
+  margin: auto 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--tx-4);
+  font-size: 14px;
+}
+.cmp-cons li::before {
+  content: "×";
+  margin-right: 10px;
+  color: #c26a5c;
+}
+.cmp-arrow {
+  display: grid;
+  place-items: center;
+  color: var(--tx-4);
+}
+.cmp-rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cmp-rows li {
+  display: grid;
+  grid-template-columns: 96px 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: clamp(16px, 1.3vw, 20px);
+}
+.cmp-rows li.row-S01 {
+  background: rgba(149, 203, 209, 0.06);
+}
+.cmp-rows li.row-S01 .cmp-text {
+  color: #c6e9ee;
+}
+.k-time {
+  color: #d8b77a;
+  font-size: 13.5px;
+}
+.cmp-rows .spk {
+  height: 22px;
+  font-size: 11.5px;
+}
+.cmp-text {
+  font-weight: 500;
+}
+/* The raw block is unbroken Chinese or Japanese; English breaks at spaces. */
+:lang(en) .cmp-raw {
+  word-break: normal;
+}
+.cmp-text mark {
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.k-fix {
+  color: #8fe0b2;
+  background: rgba(105, 207, 155, 0.14);
+}
+.k-review {
+  color: #c9b4f2;
+  background: rgba(164, 138, 217, 0.18);
+}
+.cmp-keys {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  margin: 36px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.cmp-keys li {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 4px 12px;
+}
+.cmp-keys i {
+  grid-row: span 2;
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 3px;
+}
+.key-spk i {
+  background: #95cbd1;
+}
+.key-time i {
+  background: #d8b77a;
+}
+.key-fix i {
+  background: #69cf9b;
+}
+.key-review i {
+  background: #a48ad9;
+}
+.cmp-keys b {
+  font-weight: 900;
+  font-size: 17px;
+}
+.cmp-keys span {
+  color: var(--tx-3);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+/* Latin and Japanese headlines run longer than the Chinese two-liner. */
+@media (min-width: 1001px) {
+  :lang(en) .hero-head {
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+  }
+}
+:lang(en) .hero h1 {
+  font-size: clamp(40px, 4.6vw, 80px);
+  line-height: 1.04;
+}
+:lang(ja) .hero h1 {
+  font-size: clamp(38px, 5vw, 88px);
+  letter-spacing: 0;
+  line-height: 1.14;
+}
+
+@media (max-width: 1000px) {
+  .hero-head {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .cmp {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .cmp-arrow {
+    transform: rotate(90deg);
+  }
+  .cmp-keys {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .hero-brand {
+    display: none;
+  }
+  .hero h1 {
+    margin-top: 6px;
+  }
+  .stage-labels {
+    display: none;
+  }
+  .stage-3d {
+    transform: none;
+  }
+  .layer.front {
+    transform: none;
+  }
+  .cmp-rows li {
+    grid-template-columns: 78px 40px minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 8px;
+  }
+  .cmp-keys {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,239 @@
+/* 先选目标: goal list beside the real role cards (recognition_plans.py). */
+.goal-list {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.plan-stage {
+  min-width: 0;
+}
+.goal-hint {
+  margin: 0 0 14px;
+  color: var(--tx-3);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.goal {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 2px 12px;
+  align-items: baseline;
+  padding: 13px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--tx-2);
+  text-align: left;
+}
+.goal:hover {
+  background: var(--surf-1);
+}
+.goal[aria-checked="true"] {
+  background: var(--surf-2);
+  color: var(--tx);
+}
+.goal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--tx-4);
+  align-self: center;
+}
+.goal[aria-checked="true"] .goal-dot {
+  border-color: var(--ch);
+  background: var(--ch);
+  box-shadow: inset 0 0 0 2.5px var(--surf-2);
+}
+.goal-name {
+  font-weight: 500;
+  font-size: 16px;
+}
+.goal-vram {
+  grid-column: 3;
+  grid-row: 1;
+  font-size: 12px;
+  color: var(--tx-3);
+  white-space: nowrap;
+}
+.goal-desc {
+  grid-column: 2 / -1;
+  font-size: 13.5px;
+  color: var(--tx-3);
+  line-height: 1.6;
+}
+.plan-app {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-height: 420px;
+}
+.plan-ai {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--a-zone-ai) 6%, var(--a-surface));
+  border-color: color-mix(in srgb, var(--a-zone-ai) 24%, var(--a-surface));
+}
+.plan-app-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.plan-app-title {
+  font-size: 18px;
+}
+.plan-goal {
+  min-width: 240px;
+}
+.plan-roles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.plan-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--a-panel);
+  border: 1px solid var(--a-line);
+  color: var(--a-tx2);
+  font-size: 12.5px;
+}
+.model-picker {
+  position: absolute;
+  z-index: 5;
+  top: 54px;
+  right: 18px;
+  bottom: 18px;
+  width: 470px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--a-elev);
+  border: 1px solid var(--a-line2);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  animation: pop-in 0.18s var(--ease);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.picker-search input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--a-tx);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.picker-list {
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 9px;
+  border: 1px solid var(--a-line);
+  background: var(--a-surface);
+}
+.picker-row.is-selected {
+  border-color: color-mix(in srgb, var(--a-ok) 50%, var(--a-line));
+}
+.picker-name {
+  font-size: 13.5px;
+}
+.picker-meta {
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.picker-off {
+  align-self: flex-start;
+}
+.model-logo {
+  flex: none;
+  border-radius: 8px;
+  background: #f4f1f6;
+  object-fit: contain;
+  padding: 3px;
+}
+.mono-logo {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font: 900 11px var(--font);
+  color: #3a2f46;
+  background: #e4dcef;
+}
+
+/* fluid plan card (narrow phones) */
+.app-frame.is-fluid .plan-roles {
+  grid-template-columns: 1fr;
+}
+.app-frame.is-fluid .role-card {
+  min-height: 0;
+}
+.app-frame.is-fluid .model-picker {
+  left: 8px;
+  right: 8px;
+  width: auto;
+  top: 8px;
+  max-height: none;
+}
+.app-frame.is-fluid .plan-app-head {
+  flex-wrap: wrap;
+}
+.app-frame.is-fluid .plan-goal {
+  min-width: 0;
+  flex: 1;
+}
+.run-caption {
+  margin: 0 0 16px;
+  color: var(--tx-2);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+@media (max-width: 640px) {
+  .plan-app {
+    padding: 14px;
+    min-height: 0;
+  }
+  .plan-app-head {
+    flex-wrap: wrap;
+  }
+  .plan-goal {
+    min-width: 0;
+    flex: 1;
+  }
+  .plan-roles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .role-card {
+    min-height: 0;
+  }
+  .plan-foot {
+    flex-wrap: wrap;
+  }
+  .model-picker {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+}

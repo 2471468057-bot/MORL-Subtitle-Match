@@ -1,0 +1,506 @@
+/* Desktop UI replica. Every colour is a --a-* variable so the five real
+   themes can be swapped at runtime; defaults are the grape theme. */
+.app {
+  --a-bg: #19151c;
+  --a-surface: #252028;
+  --a-elev: #2f2935;
+  --a-panel: #1e1a22;
+  --a-input: #1b171e;
+  --a-sel: #3a3241;
+  --a-timeline: #17131a;
+  --a-media: #0e0c10;
+  --a-line: #342d3a;
+  --a-line2: #4a4152;
+  --a-tx: #f4eee9;
+  --a-tx2: #d0c6cd;
+  --a-tx3: #a69ba6;
+  --a-accent: #b34470;
+  --a-accent-hi: #c1517d;
+  --a-accent-soft: #3a2231;
+  --a-accent-tx: #ec8db0;
+  --a-ok: #69cf9b;
+  --a-warn: #e9b65b;
+  --a-warn-soft: #3a2f1c;
+  --a-bad: #f3866b;
+  --a-bad-soft: #3d2425;
+  --a-info: #86b4f7;
+  --a-shell: #141117;
+  --a-disabled: #716779;
+  --a-on-accent: #fff6f9;
+  --a-on-vivid: #19151c;
+  --a-role-p: #a48ad9;
+  --a-role-t: #d6957c;
+  --a-role-r: #c48cb4;
+  --a-zone-studio: #cc7f9e;
+  --a-zone-ai: #b585c4;
+  --a-zone-content: #8aa5b8;
+  position: relative;
+  background: var(--a-bg);
+  color: var(--a-tx);
+  font: 500 13px/1.5 var(--font);
+  border: 1px solid var(--a-line2);
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: left;
+  transition:
+    background 0.3s,
+    color 0.3s,
+    border-color 0.3s;
+}
+.app * {
+  transition-property: background-color, border-color, color;
+  transition-duration: 0.25s;
+}
+.app b,
+.app strong,
+.app h3,
+.app h4 {
+  font-weight: 900;
+}
+.app h3,
+.app h4 {
+  margin: 0;
+}
+.app .t2 {
+  color: var(--a-tx2);
+}
+.app .t3 {
+  color: var(--a-tx3);
+}
+.app .grow {
+  flex: 1;
+  min-width: 0;
+}
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.app-card {
+  background: var(--a-surface);
+  border: 1px solid var(--a-line);
+  border-radius: 10px;
+}
+.app-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--a-line2);
+  background: var(--a-elev);
+  color: var(--a-tx);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.app-btn:hover:not(:disabled) {
+  background: var(--a-sel);
+}
+.app-btn.primary {
+  background: var(--a-accent);
+  border-color: var(--a-accent-hi);
+  color: var(--a-on-accent);
+}
+.app-btn.primary:hover:not(:disabled) {
+  background: var(--a-accent-hi);
+}
+.app-btn.soft {
+  background: var(--a-accent-soft);
+  border-color: color-mix(in srgb, var(--a-accent) 45%, var(--a-line));
+  color: var(--a-accent-tx);
+}
+.app-btn.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--a-tx2);
+}
+.app-btn.icon-only {
+  padding: 0;
+  width: 30px;
+}
+.app-btn:disabled {
+  opacity: 0.45;
+}
+.app-btn.on {
+  background: var(--a-sel);
+  border-color: var(--a-line2);
+}
+.app-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--a-tx3) 14%, transparent);
+  color: var(--a-tx2);
+}
+.app-chip.warn {
+  background: var(--a-warn-soft);
+  color: var(--a-warn);
+}
+.app-chip.ok {
+  background: color-mix(in srgb, var(--a-ok) 16%, var(--a-surface));
+  color: var(--a-ok);
+}
+.app-chip.bad {
+  background: var(--a-bad-soft);
+  color: var(--a-bad);
+}
+.app-chip.info {
+  background: color-mix(in srgb, var(--a-info) 16%, var(--a-surface));
+  color: var(--a-info);
+}
+.app-chip.accent {
+  background: var(--a-accent-soft);
+  color: var(--a-accent-tx);
+}
+.app-chip.square {
+  border-radius: 5px;
+}
+.app-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--a-line);
+  background: var(--a-input);
+  color: var(--a-tx2);
+  font-size: 12.5px;
+  min-width: 0;
+}
+input.app-field {
+  width: 100%;
+  outline: none;
+}
+input.app-field:focus {
+  border-color: var(--a-accent);
+}
+.app-field .icon {
+  color: var(--a-tx3);
+}
+.app-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--a-line);
+  padding: 0 10px;
+}
+.app-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 8px 8px;
+  border: 0;
+  background: none;
+  color: var(--a-tx3);
+  font-size: 12.5px;
+  white-space: nowrap;
+  box-shadow: inset 0 -2px transparent;
+}
+.app-tabs button[aria-selected="true"] {
+  color: var(--a-tx);
+  box-shadow: inset 0 -2px var(--a-accent-tx);
+}
+.app-tabs button:hover {
+  color: var(--a-tx);
+}
+.app-toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 99px;
+  border: 1px solid var(--a-line2);
+  background: var(--a-input);
+  flex: none;
+  padding: 0;
+}
+.app-toggle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--a-tx3);
+  transition: transform 0.2s var(--ease), background 0.2s;
+}
+.app-toggle[aria-checked="true"] {
+  background: var(--a-accent);
+  border-color: var(--a-accent-hi);
+}
+.app-toggle[aria-checked="true"]::after {
+  transform: translateX(14px);
+  background: var(--a-on-accent);
+}
+.app-check {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--a-line2);
+  background: var(--a-input);
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  color: var(--a-on-accent);
+}
+.app-check[aria-checked="true"] {
+  background: var(--a-accent);
+  border-color: var(--a-accent-hi);
+}
+/* icon tile used by role cards and actions */
+.app-tile {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--tile, var(--a-accent));
+  color: var(--a-on-vivid);
+  flex: none;
+}
+.app-tile.soft {
+  background: color-mix(in srgb, var(--tile, var(--a-accent)) 18%, var(--a-surface));
+  color: var(--tile, var(--a-accent-tx));
+}
+/* speakers: one hue per label, shared by list tags and timeline clips */
+.spk {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font: 500 11px var(--mono);
+  border: 1px solid;
+}
+.spk.s0 {
+  color: #ee9cbd;
+  border-color: #7a3d58;
+  background: #2c1a24;
+}
+.spk.s1 {
+  color: #95cbd1;
+  border-color: #3e6268;
+  background: #182326;
+}
+.spk.s2 {
+  color: #e7ab86;
+  border-color: #7a5236;
+  background: #2a1e17;
+}
+/* window chrome for the brand bar (home, progress) */
+.app-brandbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 64px;
+  padding: 0 18px 0 16px;
+  background: var(--a-shell);
+  border-bottom: 1px solid var(--a-line);
+}
+.app-brandbar img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+.app-brandbar .wordmark {
+  display: flex;
+  gap: 14px;
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.app-brandbar .tools {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.app-brandbar .tools .app-btn {
+  min-height: 30px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+/* scaled stage: fixed design width, scaled to the column */
+.app-frame {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.app-frame > .app-frame-inner {
+  transform-origin: 0 0;
+}
+.app-frame.is-fluid > .app-frame-inner {
+  transform: none !important;
+  width: 100% !important;
+}
+/* role cards (home recognition plan) */
+.role-card {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 226px;
+  padding: 16px 16px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--role) 32%, var(--a-surface));
+  background: color-mix(in srgb, var(--role) 8%, var(--a-surface));
+  color: var(--a-tx);
+  font: inherit;
+  text-align: left;
+}
+button.role-card:hover {
+  background: color-mix(in srgb, var(--role) 13%, var(--a-surface));
+}
+.role-card.is-active {
+  border-color: var(--role);
+  box-shadow: 0 0 0 1px var(--role);
+}
+.role-card .app-tile {
+  --tile: var(--role);
+  margin-bottom: 12px;
+}
+.role-label {
+  color: var(--role);
+  font-weight: 900;
+  font-size: 13px;
+}
+.role-model {
+  margin: 2px 0 12px;
+  font-size: 27px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: role-in 0.35s var(--ease);
+}
+.role-card.is-off .role-model {
+  color: var(--a-tx3);
+}
+.role-desc {
+  min-height: 40px;
+  color: var(--a-tx2);
+  font-size: 13px;
+}
+.role-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--role) 22%, var(--a-surface));
+  font-size: 12px;
+}
+.role-size {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.role-more {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+.role-more span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.role-card.compact {
+  min-height: 0;
+  padding: 12px 12px 10px;
+}
+.role-card.compact .app-tile {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.role-card.compact .role-model {
+  font-size: 21px;
+  margin-bottom: 8px;
+}
+@keyframes role-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+/* neutral media placeholder (test card) */
+.signal {
+  position: relative;
+  overflow: hidden;
+  background: #141217;
+  container-type: inline-size;
+}
+.signal > svg {
+  width: 100%;
+  height: 100%;
+}
+.signal-ch,
+.signal-tc {
+  position: absolute;
+  top: 3.2cqw;
+  font-size: 1.5cqw;
+  color: rgba(255, 255, 255, 0.62);
+  letter-spacing: 0.06em;
+}
+.signal-ch {
+  left: 3.2cqw;
+}
+.signal-tc {
+  right: 3.2cqw;
+}
+.signal-badge {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 0.6cqw;
+  padding: 1.4cqw 2.6cqw;
+  border-radius: 0.8cqw;
+  background: rgba(14, 12, 18, 0.72);
+  border: 0.12cqw solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.86);
+}
+.signal-badge b {
+  font-size: 2.3cqw;
+  letter-spacing: 0.32em;
+  font-weight: 500;
+}
+.signal-badge span {
+  font-size: 1.4cqw;
+  color: rgba(255, 255, 255, 0.6);
+}
+.burned-caption {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: 7%;
+  text-align: center;
+  color: #fff;
+  font-weight: 900;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0.16em #000;
+  text-wrap: balance;
+}
+/* Japanese captions break between phrases, not inside a word. */
+:lang(ja) .burned-caption {
+  word-break: auto-phrase;
+}

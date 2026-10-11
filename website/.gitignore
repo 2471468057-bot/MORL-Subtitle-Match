@@ -1,0 +1,12 @@
+node_modules/
+build/
+deliverables/
+!public/assets/woodland.mp4
+
+!review/interaction.mp4
+!review/screenshots/
+!review/screenshots/*.png
+
+product-build/
+product/generated-themes.js
+!product-review/interaction.mp4

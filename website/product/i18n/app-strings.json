@@ -1,0 +1,1058 @@
+{
+ "0.8B 本地模型仍需要独立运行环境和显存；作为复核后端不提供 MOSS 的说话人区分。": {
+  "en": "The installed Nano checkpoint is not the separate 31-language MLT-Nano checkpoint and has no native speaker separation.",
+  "ja": "0.8Bのローカルモデルにも独立した実行環境とVRAMが必要です。確認用のためMOSSの話者分離は提供しません。"
+ },
+ "0.8B 端到端；官方称低延迟实时转写，无公开 RTF": {
+  "en": "0.8B end-to-end; claimed low-latency real-time ASR without published RTF",
+  "ja": "0.8Bエンドツーエンド、低遅延リアルタイムと記載、RTF未公開"
+ },
+ "1.7B 自回归 LLM-ASR；无官方 RTF": {
+  "en": "1.7B autoregressive LLM-ASR; no official RTF",
+  "ja": "1.7B自己回帰LLM-ASR、公式RTFなし"
+ },
+ "11 种语言 · 字/词级强制对齐": {
+  "en": "11 languages · character / word forced alignment",
+  "ja": "11言語 · 文字/単語レベル強制アライメント"
+ },
+ "2Byte 默认": {
+  "en": "2Byte Default",
+  "ja": "2Byte デフォルト"
+ },
+ "AA 实测": {
+  "en": "AA measurement",
+  "ja": "AA実測"
+ },
+ "AA 实测 GPT Transcribe SF 40.8（含网络）": {
+  "en": "AA measured GPT Transcribe SF 40.8, including network",
+  "ja": "AA実測GPT Transcribe SF 40.8、通信を含む"
+ },
+ "AA 实测 Speed Factor 170.9（含网络）": {
+  "en": "AA measured Speed Factor 170.9, including network",
+  "ja": "AA実測Speed Factor 170.9、通信を含む"
+ },
+ "AA 实测（Groq 路由）": {
+  "en": "AA measurement via Groq",
+  "ja": "Groq経由のAA実測"
+ },
+ "AAS 中文 33.1ms，同表最佳（NFA 109.8 / MFA 161.1）": {
+  "en": "Chinese AAS 33.1 ms, best in table (NFA 109.8 / MFA 161.1)",
+  "ja": "中国語AAS 33.1 ms、同一表で最高（NFA 109.8 / MFA 161.1）"
+ },
+ "AI 字幕设计": {
+  "en": "AI Subtitle Design",
+  "ja": "AI字幕デザイン"
+ },
+ "AI 智能断句": {
+  "en": "AI smart segmentation",
+  "ja": "AI自動文分割"
+ },
+ "AI 校对建议": {
+  "en": "AI suggestions",
+  "ja": "AI 校正の提案"
+ },
+ "AI 词库校对": {
+  "en": "AI glossary proofreading",
+  "ja": "AI 用語集校正"
+ },
+ "AISHELL-1 1.95% / WS meeting 6.97%，跨集表现差异大": {
+  "en": "AISHELL-1 1.95% / WS meeting 6.97%; performance varies across sets",
+  "ja": "AISHELL-1 1.95% / WS meeting 6.97%、データ間の差が大きい"
+ },
+ "AISHELL-1 2.96% / WS 7.44·7.84%，同表全面优于 Whisper-Large-v3": {
+  "en": "AISHELL-1 2.96%, WS 7.44/7.84%; beats Whisper-Large-v3 throughout the table",
+  "ja": "AISHELL-1 2.96%、WS 7.44/7.84%。同一表でWhisper-Large-v3を上回る"
+ },
+ "AISHELL-4 同表最佳，但属长音频多人口径，与朗读集不可直比": {
+  "en": "Best AISHELL-4 result; long-form multi-speaker tests cannot directly compare with read speech",
+  "ja": "AISHELL-4で最高。ただし長時間・複数話者と朗読のデータは直接比較できません"
+ },
+ "AI设计": {
+  "en": "AI Design",
+  "ja": "AI デザイン"
+ },
+ "API 转写": {
+  "en": "API transcription",
+  "ja": "API転写"
+ },
+ "English 专用的高吞吐主力转写候选。": {
+  "en": "High-throughput English-only primary transcription candidate.",
+  "ja": "英語専用の高スループット主文字起こし候補。"
+ },
+ "FireRed 官方同表": {
+  "en": "FireRed official comparison table",
+  "ja": "FireRed公式比較表"
+ },
+ "GPT-4o-Transcribe 中文集：Fleurs-zh 2.44 优 / WS 15.30·32.27 差": {
+  "en": "GPT-4o-Transcribe Chinese: strong Fleurs-zh 2.44, weak WS 15.30/32.27",
+  "ja": "GPT-4o-Transcribe中国語：Fleurs-zh 2.44は良好、WS 15.30/32.27は弱め"
+ },
+ "MAI 2.1｜待服务商验证": {
+  "en": "MAI 2.1 | Provider verification pending",
+  "ja": "MAI 2.1｜サービス提供元の検証待ち"
+ },
+ "OpenAI 兼容 ASR": {
+  "en": "OpenAI-compatible ASR",
+  "ja": "OpenAI互換ASR"
+ },
+ "OpenASR Mean WER 5.63%；经 turbo 锚换算 AA 尺度": {
+  "en": "OpenASR mean WER 5.63%, calibrated to AA via turbo",
+  "ja": "OpenASR平均WER 5.63%をturbo経由でAAへ較正"
+ },
+ "OpenRouter · 新版映射需验证": {
+  "en": "OpenRouter · New model mapping needs verification",
+  "ja": "OpenRouter · 新モデルの対応付けは要検証"
+ },
+ "Qwen Audio 3.1｜长音频转写": {
+  "en": "Qwen Audio 3.1 | Long audio transcription",
+  "ja": "Qwen Audio 3.1｜長時間音声の文字起こし"
+ },
+ "Qwen 官方同表": {
+  "en": "Qwen official comparison table",
+  "ja": "Qwen公式比較表"
+ },
+ "RTF 0.0197（单张 H100 · SGLang Omni · 长音频 · 并发 1）": {
+  "en": "RTF 0.0197 (one H100, SGLang Omni, long audio, concurrency 1)",
+  "ja": "RTF 0.0197（H100 1枚、SGLang Omni、長時間音声、並列数1）"
+ },
+ "RTF 0.0251（V100·batch1）；HF 卡称 GPU 120x 实时": {
+  "en": "RTF 0.0251 (V100, batch 1); HF card claims GPU 120× real time",
+  "ja": "RTF 0.0251（V100、batch 1）、HFカードはGPUでリアルタイム120倍と記載"
+ },
+ "RTFx 145.28（官方卡自报同榜结果）": {
+  "en": "RTFx 145.28, self-reported official leaderboard result",
+  "ja": "RTFx 145.28、公式カード掲載の同ランキング自己申告値"
+ },
+ "RTFx 200.19（OpenASR 榜单统一环境）": {
+  "en": "RTFx 200.19 in the unified OpenASR environment",
+  "ja": "OpenASR統一環境でRTFx 200.19"
+ },
+ "RTFx 418（OpenASR 榜单，全目录最快）": {
+  "en": "RTFx 418 on OpenASR, fastest in this catalog",
+  "ja": "OpenASR RTFx 418、このカタログで最速"
+ },
+ "WenetSpeech net 6.35%（Qwen 表复测）经 Qwen3-ASR 锚换算": {
+  "en": "WenetSpeech net 6.35% in Qwen's retest, calibrated through Qwen3-ASR",
+  "ja": "Qwen再評価のWenetSpeech net 6.35%をQwen3-ASR基準で較正"
+ },
+ "Whisper 云端加速 · OpenAI 转写协议": {
+  "en": "Cloud-accelerated Whisper · OpenAI transcription protocol",
+  "ja": "Whisperクラウド高速化 · OpenAI転写プロトコル"
+ },
+ "large-v3 同表外推": {
+  "en": "Extrapolation from large-v3",
+  "ja": "large-v3からの推定"
+ },
+ "turbo 模型级参考": {
+  "en": "Turbo model-level reference",
+  "ja": "turboモデル水準の参考値"
+ },
+ "■ 退出审核": {
+  "en": "■ Exit Review",
+  "ja": "■ 確認を終了"
+ },
+ "⚠ 候选文本存在差异": {
+  "en": "⚠ Candidate texts differ",
+  "ja": "⚠ 候補の文字が異なります"
+ },
+ "上一条": {
+  "en": "Previous",
+  "ja": "前へ"
+ },
+ "上一条字幕": {
+  "en": "Previous Subtitle",
+  "ja": "前の字幕"
+ },
+ "上游 fairseq2 不支持原生 Windows；当前仅可下载权重": {
+  "en": "Upstream fairseq2 does not support native Windows; only weight downloads are currently available",
+  "ja": "上流のfairseq2はネイティブWindowsに非対応。現在は重みのダウンロードのみ可能"
+ },
+ "下一条": {
+  "en": "Next",
+  "ja": "次へ"
+ },
+ "下一条字幕": {
+  "en": "Next Subtitle",
+  "ja": "次の字幕"
+ },
+ "下载体积与显存占用较高；它在本项目中是复核角色，不替代完整任务流程。": {
+  "en": "Requires a substantial download and GPU memory; it remains a review stage in this workflow.",
+  "ja": "ダウンロード容量とVRAM使用量が大きめです。このアプリでは確認役であり、処理全体を置き換えません。"
+ },
+ "不包含 MOSS 的说话人区分；不同硬件上的速度差异较大。": {
+  "en": "No MOSS-style speaker separation; speed varies substantially by hardware and runtime.",
+  "ja": "MOSSの話者分離は含みません。処理速度はハードウェアに大きく左右されます。"
+ },
+ "不占本地空间": {
+  "en": "No local storage",
+  "ja": "ローカル容量を消費しない"
+ },
+ "不支持中文": {
+  "en": "Chinese not supported",
+  "ja": "中国語には非対応"
+ },
+ "不能独立转写，也不负责识别或纠正字幕内容": {
+  "en": "Cannot transcribe independently or recognize or correct subtitle content",
+  "ja": "単独で文字起こしできず、字幕内容の認識・修正も行いません"
+ },
+ "中文 / 方言高精度转写，并支持细粒度时间轴。": {
+  "en": "High-accuracy Chinese and dialect transcription with fine-grained timestamps.",
+  "ja": "中国語・方言を高精度に文字起こしし、細かな時刻調整にも対応します。"
+ },
+ "中文/方言语音识别与细粒度时间轴。": {
+  "en": "Chinese and dialect recognition with fine-grained subtitle timing.",
+  "ja": "中国語・方言の音声認識と細かな時刻調整。"
+ },
+ "中文/粤语/英语/日语/韩语 · CPU 也可运行": {
+  "en": "Chinese / Cantonese / English / Japanese / Korean · CPU capable",
+  "ja": "中国語/広東語/英語/日本語/韓国語 · CPUでも動作"
+ },
+ "中文、粤语及英语转写，适合低音量语音素材。": {
+  "en": "Chinese, Cantonese and English transcription, suited to quiet speech.",
+  "ja": "中国語、広東語、英語の文字起こし。小音量の音声に適しています。"
+ },
+ "中文、英文、粤语与方言场景的轻量主力转写候选。": {
+  "en": "Compact primary transcription candidate for Chinese, English, Cantonese and dialects.",
+  "ja": "中国語、英語、広東語、方言向けの軽量な主文字起こし候補。"
+ },
+ "中文与方言 · 可独立生成字幕": {
+  "en": "Chinese & dialects · can generate subtitles independently",
+  "ja": "中国語と方言 · 単体で字幕生成が可能"
+ },
+ "中文多人转写与说话人区分": {
+  "en": "Chinese multi-speaker transcription and speaker separation",
+  "ja": "中国語複数話者の転写と話者分離"
+ },
+ "中文快速转写，并支持时间轴。": {
+  "en": "Fast Chinese transcription with timestamp support.",
+  "ja": "中国語の高速文字起こしと時刻調整に対応します。"
+ },
+ "中文方言与多语种的本地文字复核。": {
+  "en": "Local review for Chinese dialects, English and Japanese.",
+  "ja": "中国語方言・多言語のローカルテキスト確認。"
+ },
+ "中文方言与多语言转写，可提供独立文字复核证据。": {
+  "en": "Chinese dialect and multilingual transcription with independent text review evidence.",
+  "ja": "中国語方言と多言語の文字起こし。独立したテキスト確認の根拠を提供できます。"
+ },
+ "中文证据两极（4o 系）": {
+  "en": "Mixed Chinese evidence for the 4o family",
+  "ja": "4o系列の中国語成績は両極端"
+ },
+ "中文长音频 · 支持热词": {
+  "en": "Chinese long audio · hot-word support",
+  "ja": "中国語長音声 · ホットワード対応"
+ },
+ "中文长音频 · 说话人区分": {
+  "en": "Chinese long audio · speaker separation",
+  "ja": "中国語長音声 · 話者分離"
+ },
+ "中文长音频的第一遍转写与说话人区分。": {
+  "en": "First-pass transcription and speaker separation for long Chinese audio.",
+  "ja": "中国語長音声の初回転写と話者分離。"
+ },
+ "中文长音频识别与轻量时间轴后端。": {
+  "en": "Chinese long-audio recognition and a lightweight timeline backend.",
+  "ja": "中国語の長時間音声認識と軽量な時刻調整バックエンド。"
+ },
+ "为极广语言覆盖提供 1600+ 语言主力转写候选。": {
+  "en": "Primary transcription candidate for exceptionally broad 1600+ language coverage.",
+  "ja": "1,600以上の言語を対象とする、広範な言語対応の主文字起こし候補。"
+ },
+ "主力转写": {
+  "en": "Primary transcription",
+  "ja": "メイン転写"
+ },
+ "云端加速转写，适合多语言字幕与短块复核。": {
+  "en": "Accelerated cloud transcription for multilingual subtitles and short-chunk review.",
+  "ja": "クラウドの高速文字起こし。多言語字幕や短い区間の確認に適しています。"
+ },
+ "仅可靠支持 English；训练最大音频长度 40 秒，长输入精度可能下降；NeMo 依赖较重。": {
+  "en": "English only; maximum training audio duration was 40 seconds and NeMo is a heavy dependency.",
+  "ja": "信頼できる対応言語は英語のみ。学習時の最大音声長は40秒で、長い入力では精度が低下する場合があります。NeMoの依存関係も大きめです。"
+ },
+ "仅转写": {
+  "en": "Transcribe only",
+  "ja": "転写のみ"
+ },
+ "位置": {
+  "en": "Position",
+  "ja": "位置"
+ },
+ "使用的词库": {
+  "en": "Glossaries in use",
+  "ja": "使用する用語集"
+ },
+ "依据已有文字生成字/词级时间边界。": {
+  "en": "Character and word timing from existing text.",
+  "ja": "既存テキストに基づいて文字・単語の時刻境界を生成。"
+ },
+ "依次确认素材、当前内容、启用词库和识别方案": {
+  "en": "Confirm media, content, term libraries and the recognition plan in order",
+  "ja": "素材、対象コンテンツ、有効な用語集、認識プロファイルを順に確認"
+ },
+ "依赖境外服务、账户额度、隐私策略和当前模型可用性。": {
+  "en": "Model capability, pricing and availability depend on the configured service model.",
+  "ja": "海外サービス、利用枠、プライバシー方針、現在のモデル提供状況に依存します。"
+ },
+ "依赖境外网络、Groq 账户额度和服务支持的文件/时长限制。": {
+  "en": "Requires network access, a Groq key and available quota.",
+  "ja": "海外サービスへの接続、Groqの利用枠、ファイル・音声長の制限に依存します。"
+ },
+ "修改建议": {
+  "en": "Suggested changes",
+  "ja": "修正の提案"
+ },
+ "先描述字幕视觉要求，再生成三套可编辑的视觉与动效方案。": {
+  "en": "Describe your subtitle visual requirements first, then generate three editable visual and motion proposals.",
+  "ja": "字幕のビジュアル要件を先に記述し、編集可能なビジュアルとモーションの案を3つ生成します。"
+ },
+ "先选目标": {
+  "en": "Pick a goal first",
+  "ja": "まず目標を選択"
+ },
+ "全部": {
+  "en": "All",
+  "ja": "すべて"
+ },
+ "全部说话人": {
+  "en": "All Speakers",
+  "ja": "全ての話者"
+ },
+ "关闭": {
+  "en": "Close",
+  "ja": "閉じる"
+ },
+ "兼容性、准确率、隐私、费用和稳定性均由目标服务决定；需要用户自行核对。": {
+  "en": "Accuracy, privacy, price and reliability all depend on the configured service.",
+  "ja": "互換性、精度、プライバシー、料金、安定性は接続先サービスによって異なるため、ユーザー自身で確認してください。"
+ },
+ "内容与术语": {
+  "en": "Content & terms",
+  "ja": "コンテンツと用語"
+ },
+ "内置参考": {
+  "en": "Built-in references",
+  "ja": "内蔵参照"
+ },
+ "分类": {
+  "en": "Category",
+  "ja": "分類"
+ },
+ "分辨率": {
+  "en": "Resolution",
+  "ja": "解像度"
+ },
+ "剪辑助手": {
+  "en": "Clip Assistant",
+  "ja": "クリップアシスタント"
+ },
+ "单段音频最多 40 秒，权重和显存占用明显高于 AED；长视频仍必须由 2ByteASR 分块。": {
+  "en": "Audio input is limited to 40 seconds, so long media still requires chunking.",
+  "ja": "1区間は最大40秒です。重みとVRAM使用量はAEDより大幅に多く、長い動画は2ByteASRによる分割が必要です。"
+ },
+ "压制完成": {
+  "en": "Export complete",
+  "ja": "書き出し完了"
+ },
+ "压制成片": {
+  "en": "Encode Final Video",
+  "ja": "完成動画をエンコード"
+ },
+ "原文": {
+  "en": "Original",
+  "ja": "原文"
+ },
+ "取消": {
+  "en": "Cancel",
+  "ja": "キャンセル"
+ },
+ "同级类推估算": {
+  "en": "Estimate from comparable model tiers",
+  "ja": "同水準モデルからの推定"
+ },
+ "启用后用于专名、角色名与错词修正": {
+  "en": "Used for names and corrections when enabled",
+  "ja": "有効にすると固有名詞・キャラ名・誤語の修正に使用"
+ },
+ "吸附": {
+  "en": "Snapping",
+  "ja": "スナップ"
+ },
+ "在文件夹中显示": {
+  "en": "Show in Folder",
+  "ja": "フォルダーに表示"
+ },
+ "在线": {
+  "en": "Online",
+  "ja": "オンライン"
+ },
+ "在线 API": {
+  "en": "Online API",
+  "ja": "オンラインAPI"
+ },
+ "在线 · 百炼 Key + 用户 OSS": {
+  "en": "Online · Bailian key + your OSS storage",
+  "ja": "オンライン · 百炼キー＋ユーザーの OSS"
+ },
+ "在线 · 需 Groq API Key": {
+  "en": "Online · Groq API key required",
+  "ja": "オンライン · Groq API Keyが必要"
+ },
+ "在线 · 需 OpenAI API Key": {
+  "en": "Online · OpenAI API key required",
+  "ja": "オンライン · OpenAI API Keyが必要"
+ },
+ "在线 · 需 OpenRouter Key": {
+  "en": "Online · OpenRouter key required",
+  "ja": "オンライン · OpenRouter キーが必要"
+ },
+ "在线或自托管 · OpenAI 音频协议": {
+  "en": "Online or self-hosted · OpenAI audio protocol",
+  "ja": "オンラインまたはセルフホスト · OpenAIオーディオプロトコル"
+ },
+ "填充": {
+  "en": "Fill",
+  "ja": "塗り"
+ },
+ "外观": {
+  "en": "Appearance",
+  "ja": "外観"
+ },
+ "多人语音转写 + 说话人区分，适合直播和多人录音。": {
+  "en": "Multi-speaker transcription and speaker diarization for livestreams and group recordings.",
+  "ja": "複数話者の文字起こしと話者分離。配信や複数人の録音に適しています。"
+ },
+ "多语言 · 词汇与文字复核参考": {
+  "en": "Multilingual · vocabulary and text-review reference",
+  "ja": "多言語 · 語彙とテキストレビューの参考"
+ },
+ "多语言 · 通用内容": {
+  "en": "Multilingual · general content",
+  "ja": "多言語 · 汎用コンテンツ"
+ },
+ "多语言与中文方言 · LLM 驱动": {
+  "en": "Multilingual & Chinese dialects · LLM driven",
+  "ja": "多言語と中国語方言 · LLM駆動"
+ },
+ "多语言文字复核与术语证据补充。": {
+  "en": "Multilingual text review and terminology evidence.",
+  "ja": "多言語テキストの確認と用語の照合。"
+ },
+ "多语言通用转写，适合多种语言的视频字幕。": {
+  "en": "General multilingual transcription for video subtitles in many languages.",
+  "ja": "多言語の汎用文字起こし。さまざまな言語の動画字幕に適しています。"
+ },
+ "多语言高精度转写，适合通用字幕识别。": {
+  "en": "High-accuracy multilingual transcription for general subtitles.",
+  "ja": "高精度な多言語文字起こし。一般的な字幕認識に適しています。"
+ },
+ "大小": {
+  "en": "Size",
+  "ja": "サイズ"
+ },
+ "字体": {
+  "en": "Font",
+  "ja": "フォント"
+ },
+ "字号": {
+  "en": "Font Size",
+  "ja": "フォントサイズ"
+ },
+ "字幕列表": {
+  "en": "Captions List",
+  "ja": "字幕リスト"
+ },
+ "字幕工作台": {
+  "en": "Subtitle Studio",
+  "ja": "字幕スタジオ"
+ },
+ "字幕时间轴": {
+  "en": "Subtitle timeline",
+  "ja": "字幕タイムライン"
+ },
+ "官方 RTF+120x 声明": {
+  "en": "Official RTF and 120× real-time claim",
+  "ja": "公式RTFとリアルタイム120倍の記載"
+ },
+ "官方卡跨集区间": {
+  "en": "Official cross-dataset range",
+  "ja": "公式データセット間の範囲"
+ },
+ "官方当前要求 Transformers 源码/5.x 路径，与主环境锁定版本不兼容，必须隔离。": {
+  "en": "The current official path requires Transformers source / 5.x and must stay outside the main environment.",
+  "ja": "現在の公式要件はTransformersのソース版または5.xで、メイン環境の固定バージョンと互換性がないため、環境を分離する必要があります。"
+ },
+ "官方环境参考": {
+  "en": "Official environment reference",
+  "ja": "公式環境の参考値"
+ },
+ "官方示例 RTF 0.0681；vLLM 服务化更快但无公开数值": {
+  "en": "Official sample RTF 0.0681; vLLM serving is faster but has no published value",
+  "ja": "公式サンプルRTF 0.0681。vLLMサーバーは高速だが公開値なし"
+ },
+ "官方示例+TensorRT 区间": {
+  "en": "Official sample + TensorRT range",
+  "ja": "公式サンプルとTensorRTの範囲"
+ },
+ "官方示例+档位估算": {
+  "en": "Official sample + tier estimate",
+  "ja": "公式サンプルと水準推定"
+ },
+ "官方称 >15x Whisper-Large；论文 10s 音频 70ms（RTF≈0.007）": {
+  "en": "Claimed >15× Whisper-Large; paper reports 70 ms for 10 s audio, RTF≈0.007",
+  "ja": "公式はWhisper-Largeの15倍超、論文は10秒音声70 ms、RTF約0.007"
+ },
+ "官方称同类开源均错最低 4.10；中文成绩图为图片无文本数值": {
+  "en": "Official claim: lowest open-model average error 4.10; Chinese chart has no text values",
+  "ja": "公式は同種公開モデル最低の平均誤差4.10と記載。中国語図にテキスト値なし"
+ },
+ "官方速度图示+论文延迟": {
+  "en": "Official speed chart and paper latency",
+  "ja": "公式速度図と論文の遅延"
+ },
+ "宽度": {
+  "en": "Width",
+  "ja": "幅"
+ },
+ "对齐精度": {
+  "en": "Alignment accuracy",
+  "ja": "アライメント精度"
+ },
+ "导出字幕": {
+  "en": "Export subtitles",
+  "ja": "字幕を書き出し"
+ },
+ "工具面板": {
+  "en": "Tools Panel",
+  "ja": "ツールパネル"
+ },
+ "已关闭": {
+  "en": "Off",
+  "ja": "オフ"
+ },
+ "已完成": {
+  "en": "Completed",
+  "ja": "完了"
+ },
+ "已有字幕的高精度字词时间轴对齐。": {
+  "en": "High-precision character and word alignment for existing subtitles.",
+  "ja": "既存字幕の文字・単語を高精度に時刻へ整列します。"
+ },
+ "已确认": {
+  "en": "Confirmed",
+  "ja": "確認済み"
+ },
+ "已选": {
+  "en": "Selected",
+  "ja": "選択済み"
+ },
+ "帧率": {
+  "en": "Frame Rate",
+  "ja": "フレームレート"
+ },
+ "平均码率": {
+  "en": "Average bitrate",
+  "ja": "平均ビットレート"
+ },
+ "应用到": {
+  "en": "Apply to",
+  "ja": "適用先"
+ },
+ "建议": {
+  "en": "Suggested",
+  "ja": "提案"
+ },
+ "建议确认": {
+  "en": "Review Suggested",
+  "ja": "確認を推奨"
+ },
+ "开启": {
+  "en": "On",
+  "ja": "オン"
+ },
+ "开始时间": {
+  "en": "Start Time",
+  "ja": "開始時間"
+ },
+ "开始生成字幕": {
+  "en": "Start subtitles",
+  "ja": "字幕生成を開始"
+ },
+ "当前": {
+  "en": "Current",
+  "ja": "現在"
+ },
+ "当前 2ByteASR 将它用于时间轴角色；主力多人转写仍以 MOSS 为准。": {
+  "en": "The installed checkpoint is Chinese-specific, not the multilingual Paraformer family.",
+  "ja": "現在の2ByteASRでは時刻調整に使用します。複数話者の主文字起こしはMOSSが担当します。"
+ },
+ "当前不提供 MOSS 的多人说话人骨架；更适合做独立文字证据。": {
+  "en": "Does not provide the MOSS multi-speaker backbone.",
+  "ja": "MOSSの複数話者の骨格は提供しません。独立したテキスト照合に適しています。"
+ },
+ "当前正确": {
+  "en": "Current is correct",
+  "ja": "現在の字幕は正しい"
+ },
+ "待你复核": {
+  "en": "Not reviewed",
+  "ja": "未確認"
+ },
+ "待确认": {
+  "en": "Unconfirmed",
+  "ja": "未確認"
+ },
+ "必须先有可靠文本；错字、漏字、多人重叠和强噪声会直接影响对齐，且本地运行需要 CUDA。": {
+  "en": "Requires reliable input text; omissions, overlap and noise directly affect alignment.",
+  "ja": "信頼できるテキストが必要です。誤字、脱字、話者の重なり、強い雑音は整列精度に直接影響します。ローカル実行にはCUDAが必要です。"
+ },
+ "我的词库": {
+  "en": "My term libraries",
+  "ja": "マイ用語集"
+ },
+ "批量替换": {
+  "en": "Batch Replace",
+  "ja": "一括置換"
+ },
+ "技术报告同表对照": {
+  "en": "Same-table technical report comparison",
+  "ja": "技術報告の同一表比較"
+ },
+ "把视频或音频拖到这里": {
+  "en": "Drop video or audio here",
+  "ja": "動画・音声をここにドロップ"
+ },
+ "按词库匹配": {
+  "en": "Match glossary",
+  "ja": "用語集で照合"
+ },
+ "描边": {
+  "en": "Outline",
+  "ja": "縁取り"
+ },
+ "撤销": {
+  "en": "Undo",
+  "ja": "元に戻す"
+ },
+ "播放": {
+  "en": "Play",
+  "ja": "再生"
+ },
+ "播放成片": {
+  "en": "Play Video",
+  "ja": "動画を再生"
+ },
+ "支持多选；也可以点击右侧“选择素材”": {
+  "en": "Multi-select supported; or click “Choose media” on the right",
+  "ja": "複数選択可。右側の「素材を選択」も利用できます"
+ },
+ "文件名": {
+  "en": "Filename",
+  "ja": "ファイル名"
+ },
+ "文字": {
+  "en": "Text",
+  "ja": "文字"
+ },
+ "文字复核": {
+  "en": "Text review",
+  "ja": "テキストレビュー"
+ },
+ "文本": {
+  "en": "Text",
+  "ja": "テキスト"
+ },
+ "断句、时间轴与字幕节奏校准": {
+  "en": "Sentence segmentation, timeline and caption pacing calibration",
+  "ja": "文分割・タイムライン・字幕テンポの調整"
+ },
+ "新建": {
+  "en": "New",
+  "ja": "新規作成"
+ },
+ "无 turbo 专属中文数据；large-v3 经 Qwen 表换算约 62，turbo 略降": {
+  "en": "No turbo-specific Chinese data; large-v3 calibrates to about 62 via Qwen, with a small reduction for turbo",
+  "ja": "turbo専用の中国語データなし。Qwen経由でlarge-v3約62、turboは小幅減"
+ },
+ "时长": {
+  "en": "Duration",
+  "ja": "長さ"
+ },
+ "时间轴": {
+  "en": "Timeline",
+  "ja": "タイムライン"
+ },
+ "普通话 4 集均值 CER 2.89%，该表最佳": {
+  "en": "Mandarin 4-set mean CER 2.89%, best in this table",
+  "ja": "普通話4セット平均CER 2.89%、同一表で最高"
+ },
+ "普通话 4 集均值 CER 3.05%（同表第 2）": {
+  "en": "Mandarin 4-set mean CER 3.05%, second in this table",
+  "ja": "普通話4セット平均CER 3.05%、同一表で2位"
+ },
+ "普通话 4 集均值 CER 3.76%（FireRed 复测 Qwen3-ASR-1.7B）": {
+  "en": "Mandarin 4-set mean CER 3.76% (FireRed retest of Qwen3-ASR-1.7B)",
+  "ja": "普通話4セット平均CER 3.76%（FireRedによるQwen3-ASR-1.7B再評価）"
+ },
+ "暂停": {
+  "en": "Pause",
+  "ja": "一時停止"
+ },
+ "最近": {
+  "en": "Recent",
+  "ja": "最近"
+ },
+ "最近工程": {
+  "en": "Recent projects",
+  "ja": "最近のプロジェクト"
+ },
+ "未选择": {
+  "en": "Not selected",
+  "ja": "未選択"
+ },
+ "本地": {
+  "en": "Local",
+  "ja": "ローカル"
+ },
+ "本地 · ModelScope / FunASR": {
+  "en": "Local · ModelScope / FunASR",
+  "ja": "ローカル · ModelScope / FunASR"
+ },
+ "本地 · ModelScope / Hugging Face": {
+  "en": "Local · ModelScope / Hugging Face",
+  "ja": "ローカル · ModelScope / Hugging Face"
+ },
+ "本地 · NVIDIA CUDA": {
+  "en": "Local · NVIDIA CUDA",
+  "ja": "ローカル · NVIDIA CUDA"
+ },
+ "本批字幕": {
+  "en": "Subtitle batch",
+  "ja": "このバッチの字幕"
+ },
+ "本机运行需要 CUDA；时间戳质量仍会受原始音频、多人重叠说话影响。": {
+  "en": "Local use requires CUDA; overlap and source audio quality still affect timestamps.",
+  "ja": "ローカル実行にはCUDAが必要です。時刻の精度は音声品質や複数話者の重なりにも左右されます。"
+ },
+ "术语 / 纠错": {
+  "en": "Term / correction",
+  "ja": "用語 / 誤り修正"
+ },
+ "术语库": {
+  "en": "Term library",
+  "ja": "用語集"
+ },
+ "术语库校对": {
+  "en": "Glossary correction",
+  "ja": "用語集で校正"
+ },
+ "来源": {
+  "en": "Source",
+  "ja": "ソース"
+ },
+ "校对字幕、剪辑片段、调整样式并压制成片": {
+  "en": "Proofread, cut clips, style and render",
+  "ja": "字幕の校正、カット編集、スタイル調整、書き出し"
+ },
+ "样式": {
+  "en": "Style",
+  "ja": "スタイル"
+ },
+ "样式库": {
+  "en": "Styles",
+  "ja": "スタイル"
+ },
+ "格式": {
+  "en": "Format",
+  "ja": "形式"
+ },
+ "档位估算": {
+  "en": "Tier estimate",
+  "ja": "水準推定"
+ },
+ "检查更新": {
+  "en": "Check for updates",
+  "ja": "更新を確認"
+ },
+ "模型层=whisper-large-v3-turbo；中文无 turbo 专属数据": {
+  "en": "Whisper-large-v3-turbo model; no turbo-specific Chinese data",
+  "ja": "Whisper-large-v3-turboモデル、中国語専用データなし"
+ },
+ "模型工坊": {
+  "en": "Model workshop",
+  "ja": "モデルワークショップ"
+ },
+ "模型约 30 GiB，BF16 推理约需 17 GiB 显存；官方 RTF 接近实时，不适合低显存机器。": {
+  "en": "Roughly 30 GiB on disk and about 17 GiB BF16 VRAM; official speed is near real time.",
+  "ja": "モデルは約30 GiBで、BF16推論には約17 GiBのVRAMが必要です。公式RTFはリアルタイムに近く、VRAMの少ないPCには適しません。"
+ },
+ "波形": {
+  "en": "Waveform",
+  "ja": "波形"
+ },
+ "洛克王国：世界": {
+  "en": "Roco Kingdom: World",
+  "ja": "Roco Kingdom: World"
+ },
+ "添加专有名词": {
+  "en": "Add proper nouns",
+  "ja": "固有名詞を追加"
+ },
+ "添加字幕": {
+  "en": "Add Subtitle",
+  "ja": "字幕を追加"
+ },
+ "添加术语": {
+  "en": "Add term",
+  "ja": "用語を追加"
+ },
+ "游戏 / 内容名称": {
+  "en": "Game / Content Name",
+  "ja": "ゲーム・コンテンツ名"
+ },
+ "点击更换": {
+  "en": "Click to change",
+  "ja": "クリックして変更"
+ },
+ "状态": {
+  "en": "Status",
+  "ja": "状態"
+ },
+ "用于本批字幕": {
+  "en": "Use for this batch",
+  "ja": "このバッチの字幕で使用"
+ },
+ "画面": {
+  "en": "Video",
+  "ja": "映像"
+ },
+ "省显存": {
+  "en": "Save VRAM",
+  "ja": "VRAM節約"
+ },
+ "示例 RTF 0.087（PyTorch）；TensorRT-LLM 官方加速 12.7x（H20）": {
+  "en": "Sample RTF 0.087 (PyTorch); official TensorRT-LLM speedup 12.7× on H20",
+  "ja": "サンプルRTF 0.087（PyTorch）、公式TensorRT-LLMはH20で12.7倍"
+ },
+ "管理术语库": {
+  "en": "Manage term libraries",
+  "ja": "用語集を管理"
+ },
+ "素材": {
+  "en": "Media",
+  "ja": "メディア"
+ },
+ "绝区零": {
+  "en": "Zenless Zone Zero",
+  "ja": "ゼンレスゾーンゼロ"
+ },
+ "综合档位估算": {
+  "en": "Overall tier estimate",
+  "ja": "総合的な水準推定"
+ },
+ "缩放": {
+  "en": "Scale",
+  "ja": "スケール"
+ },
+ "缩略图": {
+  "en": "Thumbnails",
+  "ja": "サムネイル"
+ },
+ "联网补充核验（可选）": {
+  "en": "Additional web verification (optional)",
+  "ja": "追加のWeb検証（任意）"
+ },
+ "自定义": {
+  "en": "Custom",
+  "ja": "カスタム"
+ },
+ "自定义模型、地址与密钥": {
+  "en": "Custom model, URL and key",
+  "ja": "モデル・アドレス・キーをカスタマイズ"
+ },
+ "英语高吞吐转写，适合批量处理英语素材。": {
+  "en": "High-throughput English transcription for batch processing.",
+  "ja": "高スループットの英語文字起こし。英語素材の一括処理に適しています。"
+ },
+ "规范写法 / 最终输出": {
+  "en": "Canonical spelling / final output",
+  "ja": "正式表記 / 最終出力"
+ },
+ "视频": {
+  "en": "Video",
+  "ja": "動画"
+ },
+ "角色": {
+  "en": "Characters",
+  "ja": "キャラクター"
+ },
+ "让角色名、技能和游戏专名更容易识别正确。": {
+  "en": "Improve recognition of character names, skills and game-specific terms.",
+  "ja": "キャラ名・スキル・ゲームの固有名詞を正しく認識しやすくなります。"
+ },
+ "设置": {
+  "en": "Settings",
+  "ja": "設定"
+ },
+ "设置 AI": {
+  "en": "AI settings",
+  "ja": "AI 設定"
+ },
+ "识别方案": {
+  "en": "Recognition plan",
+  "ja": "認識プラン"
+ },
+ "详情": {
+  "en": "Details",
+  "ja": "詳細"
+ },
+ "说话人": {
+  "en": "Speakers",
+  "ja": "話者"
+ },
+ "说话人标签不等于真实姓名": {
+  "en": "Speaker labels do not identify real names",
+  "ja": "話者ラベルは実名を表しません"
+ },
+ "说话人管理 · 待确认": {
+  "en": "Speaker Management · Confirmation Needed",
+  "ja": "話者管理 · 確認待ち"
+ },
+ "质量优先（推荐）": {
+  "en": "Quality first (recommended)",
+  "ja": "品質優先（推奨）"
+ },
+ "超多语言覆盖，适合小语种和跨语言素材。": {
+  "en": "Extensive language coverage for less common languages and multilingual media.",
+  "ja": "幅広い言語に対応し、少数言語や言語混在素材に適しています。"
+ },
+ "跟随": {
+  "en": "Follow",
+  "ja": "追従"
+ },
+ "跨榜校准（OpenASR→AA）": {
+  "en": "Cross-leaderboard calibration: OpenASR → AA",
+  "ja": "ランキング間較正：OpenASR → AA"
+ },
+ "跨表校准（Qwen 官方表）": {
+  "en": "Cross-table calibration via Qwen",
+  "ja": "Qwen公式表を介した較正"
+ },
+ "跳转": {
+  "en": "Go",
+  "ja": "移動"
+ },
+ "转写准确度": {
+  "en": "Transcription accuracy",
+  "ja": "文字起こし精度"
+ },
+ "轻量多语言语音识别与文字复核。": {
+  "en": "Lightweight multilingual recognition and text review.",
+  "ja": "軽量な多言語音声認識とテキスト確認。"
+ },
+ "轻量多语言转写，低配置设备也能使用。": {
+  "en": "Lightweight multilingual transcription, including on lower-spec computers.",
+  "ja": "軽量な多言語文字起こし。低スペックのPCでも使用できます。"
+ },
+ "返回结果": {
+  "en": "Back to results",
+  "ja": "結果に戻る"
+ },
+ "进入字幕工作台": {
+  "en": "Open Subtitle Studio",
+  "ja": "字幕スタジオを開く"
+ },
+ "连接用户自备的 OpenAI 兼容音频转写服务。": {
+  "en": "Connect a user-provided OpenAI-compatible transcription service.",
+  "ja": "ユーザーが用意したOpenAI互換音声文字起こしサービスに接続します。"
+ },
+ "连接自备语音转写服务，能力取决于配置型号。": {
+  "en": "Connect your own transcription service; capabilities depend on the configured model.",
+  "ja": "ユーザーの文字起こしサービスに接続します。機能は設定したモデルによって異なります。"
+ },
+ "选择工具": {
+  "en": "Selection Tool",
+  "ja": "選択ツール"
+ },
+ "选择素材": {
+  "en": "Choose media",
+  "ja": "素材を選択"
+ },
+ "选择要导出的说话人。时间位置与空白均保留。": {
+  "en": "Choose speakers to export. Timing and gaps are preserved.",
+  "ja": "書き出す話者を選択してください。時刻と空白は保持されます。"
+ },
+ "通用云端语音转写，适合多语言字幕识别。": {
+  "en": "General cloud transcription for multilingual subtitles.",
+  "ja": "汎用クラウド文字起こし。多言語の字幕認識に適しています。"
+ },
+ "通用参考·中文证据有限": {
+  "en": "General reference; limited Chinese evidence",
+  "ja": "一般参考値、中国語の根拠は限定的"
+ },
+ "通用多语言 · 支持上下文提示": {
+  "en": "General multilingual · supports context prompts",
+  "ja": "汎用多言語 · コンテキストプロンプト対応"
+ },
+ "通用多语言语音转写与复核。": {
+  "en": "General multilingual transcription and review.",
+  "ja": "汎用の多言語文字起こしと確認。"
+ },
+ "通过 GroqCloud 调用 Whisper large-v3-turbo。": {
+  "en": "Hosted Whisper transcription through GroqCloud.",
+  "ja": "GroqCloud経由でWhisper large-v3-turboを呼び出します。"
+ },
+ "通过 OpenAI 音频转写接口提供在线复核。": {
+  "en": "Configurable OpenAI speech-to-text review source.",
+  "ja": "OpenAIの音声文字起こしAPIでオンライン確認を行います。"
+ },
+ "速度优先": {
+  "en": "Speed first",
+  "ja": "速度優先"
+ },
+ "速度指数": {
+  "en": "Speed index",
+  "ja": "速度指数"
+ },
+ "重听": {
+  "en": "Replay",
+  "ja": "聞き直す"
+ },
+ "错词复核、专名与上下文纠正": {
+  "en": "Misheard-word review, proper nouns and context correction",
+  "ja": "誤認語のレビュー、固有名詞と文脈の修正"
+ },
+ "长文件异步 · 保存 task_id 后继续查询": {
+  "en": "Asynchronous long files · Save task_id to resume checking",
+  "ja": "長時間音声を非同期処理 · task_id を保存して照会を再開"
+ },
+ "阴影": {
+  "en": "Shadow",
+  "ja": "シャドウ"
+ },
+ "需要 NVIDIA CUDA；说话人标签是区分依据，不等同于自动识别真实姓名。": {
+  "en": "Requires NVIDIA CUDA. Speaker labels distinguish voices but do not identify real names.",
+  "ja": "NVIDIA CUDAが必要です。話者ラベルは話者を区別するもので、実名を自動特定するものではありません。"
+ },
+ "需要检查": {
+  "en": "Needs Review",
+  "ja": "要確認"
+ },
+ "面向中文、方言与中英混说的高精度主力转写候选。": {
+  "en": "High-accuracy primary transcription candidate for Mandarin, dialects and English.",
+  "ja": "中国語、方言、中国語と英語の混在向けの高精度な主文字起こし候補。"
+ },
+ "预设": {
+  "en": "Presets",
+  "ja": "プリセット"
+ },
+ "高精度中文 / 方言转写，质量优先但资源占用更高。": {
+  "en": "High-accuracy Chinese and dialect transcription, prioritizing quality with higher resource use.",
+  "ja": "中国語・方言の高精度文字起こし。品質を重視するため、リソース使用量は多めです。"
+ },
+ "高级设置": {
+  "en": "Advanced settings",
+  "ja": "詳細設定"
+ }
+}

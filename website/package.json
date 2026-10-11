@@ -1,0 +1,23 @@
+{
+  "name": "2byteasr-product-page",
+  "version": "0.6.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-product.mjs",
+    "preview": "node scripts/serve-product.mjs",
+    "test": "node --test --test-isolation=none tests/product-control.test.mjs tests/product-bundle.test.mjs tests/product-editing.test.mjs tests/product-site.test.mjs tests/product-i18n.test.mjs",
+    "verify": "node scripts/verify-product.mjs",
+    "fonts": "python -X utf8 scripts/subset-fonts.py",
+    "i18n": "python -X utf8 scripts/extract_i18n.py"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "marked": "17.0.5"
+  },
+  "license": "GPL-3.0-only"
+}

@@ -1,0 +1,314 @@
+[
+  {
+    "id": "ark",
+    "name": "明日方舟",
+    "source": "PRTS Wiki",
+    "rows": [
+      {
+        "id": "ark0",
+        "name": "12F",
+        "alias": "",
+        "category": "角色",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark1",
+        "name": "阿兰娜",
+        "alias": "",
+        "category": "角色",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark2",
+        "name": "阿罗玛",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark3",
+        "name": "阿米娅",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark4",
+        "name": "阿斯卡纶",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark5",
+        "name": "阿消",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark6",
+        "name": "艾拉",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark7",
+        "name": "埃拉托",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark8",
+        "name": "艾丽妮",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "ark9",
+        "name": "爱丽丝",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      }
+    ],
+    "candidates": [
+      {
+        "name": "阿罗玛",
+        "category": "角色",
+        "source": "PRTS Wiki"
+      },
+      {
+        "name": "阿米娅",
+        "category": "角色",
+        "source": "PRTS Wiki"
+      },
+      {
+        "name": "阿斯卡纶",
+        "category": "角色",
+        "source": "PRTS Wiki"
+      }
+    ]
+  },
+  {
+    "id": "zzz",
+    "name": "绝区零",
+    "source": "绝区零官网/Wiki",
+    "rows": [
+      {
+        "id": "zzz0",
+        "name": "11号",
+        "alias": "",
+        "category": "角色",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz1",
+        "name": "艾莲",
+        "alias": "",
+        "category": "角色",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz2",
+        "name": "爱丽丝",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz3",
+        "name": "爱芮",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz4",
+        "name": "安比",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz5",
+        "name": "安东",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz6",
+        "name": "奥菲丝",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz7",
+        "name": "奥菲丝&鬼火",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz8",
+        "name": "柏妮思",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "zzz9",
+        "name": "扳机",
+        "alias": "",
+        "category": "角色",
+        "status": "reference",
+        "source": "内置参考"
+      }
+    ],
+    "candidates": [
+      {
+        "name": "爱丽丝",
+        "category": "角色",
+        "source": "绝区零官网/Wiki"
+      },
+      {
+        "name": "爱芮",
+        "category": "角色",
+        "source": "绝区零官网/Wiki"
+      },
+      {
+        "name": "安比",
+        "category": "角色",
+        "source": "绝区零官网/Wiki"
+      }
+    ]
+  },
+  {
+    "id": "roco",
+    "name": "洛克王国：世界",
+    "source": "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4",
+    "rows": [
+      {
+        "id": "roco0",
+        "name": "迪莫",
+        "alias": "",
+        "category": "精灵",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco1",
+        "name": "圣光迪莫",
+        "alias": "",
+        "category": "精灵",
+        "status": "confirmed",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco2",
+        "name": "圣草迪莫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco3",
+        "name": "圣火迪莫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco4",
+        "name": "圣水迪莫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco5",
+        "name": "喵喵",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco6",
+        "name": "喵呜",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco7",
+        "name": "魔力猫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco8",
+        "name": "叶冕魔力猫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      },
+      {
+        "id": "roco9",
+        "name": "武斗酷猫",
+        "alias": "",
+        "category": "精灵",
+        "status": "reference",
+        "source": "内置参考"
+      }
+    ],
+    "candidates": [
+      {
+        "name": "圣草迪莫",
+        "category": "精灵",
+        "source": "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4"
+      },
+      {
+        "name": "圣火迪莫",
+        "category": "精灵",
+        "source": "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4"
+      },
+      {
+        "name": "圣水迪莫",
+        "category": "精灵",
+        "source": "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4"
+      }
+    ]
+  }
+]

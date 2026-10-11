@@ -1,0 +1,1891 @@
+{
+  "schema": 2,
+  "date": "2026-10-09",
+  "version": "0.5.0",
+  "channel": "testing",
+  "scope": "当前开发工作区目录；与同版本号安装附件可能存在差异",
+  "models": [
+    {
+      "key": "spark_asr_v2",
+      "name": "Spark-ASR-2.0",
+      "summary": "讯飞原生 WSS · 中英听写 V2",
+      "mode": "在线 · AppID + APIKey + APISecret",
+      "size": "不占本地空间",
+      "description": "单会话不超过 60 秒，长音频连续切块，动态修订替换。没有原生说话人能力；时间证据不足时由所选对齐模型补充。可保留已有字幕的说话人标签。",
+      "languages": [],
+      "logo_asset": null,
+      "api_preset": "spark_asr_v2",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "summary": "讯飞原生 WSS · 中英听写 V2",
+        "limitations": ""
+      },
+      "technical": {},
+      "verification": "实验接口；实际服务端到端验证待完成",
+      "config": {
+        "short": "讯飞 Spark V2",
+        "label": "讯飞 Spark-ASR-2.0（原生 WSS）",
+        "protocol": "spark_wss",
+        "model": "spark_asr_v2",
+        "url": "wss://iat.cn-huabei-1.xf-yun.com/v1"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": null,
+        "speed": null,
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "qwen31_filetrans",
+      "name": "Qwen Audio 3.1｜长音频转写",
+      "summary": "长文件异步 · 保存 task_id 后继续查询",
+      "mode": "在线 · 百炼 Key + 用户 OSS",
+      "size": "不占本地空间",
+      "description": "qwen-audio-3.1-asr-flash-filetrans：单文件不超过 12 小时；原生分离按官方建议限 2 小时单声道。临时对象与签名链接由你的 OSS 提供，结果成功持久化后清理。超时不会自动重新付费提交。",
+      "languages": [],
+      "logo_asset": null,
+      "api_preset": "qwen31_filetrans",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "TIMESTAMP",
+        "DIARIZATION"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "summary": "长文件异步 · 保存 task_id 后继续查询",
+        "limitations": ""
+      },
+      "technical": {},
+      "verification": "实验接口；实际服务端到端验证待完成",
+      "config": {
+        "short": "Qwen 3.1 Filetrans",
+        "label": "Qwen Audio 3.1｜长音频转写",
+        "protocol": "dashscope_filetrans",
+        "model": "qwen-audio-3.1-asr-flash-filetrans",
+        "url": "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": null,
+        "speed": null,
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "moss",
+      "name": "MOSS-Transcribe-Diarize",
+      "summary": "中文长音频 · 说话人区分",
+      "mode": "本地 · NVIDIA CUDA",
+      "size": "约 1.7 GB",
+      "description": "适合中文长视频与多人内容，作为第一遍骨架保留完整语义，并提供稳定的说话人区分。",
+      "languages": [
+        "中文"
+      ],
+      "logo_asset": "openmoss.png",
+      "api_preset": null,
+      "install_keys": [
+        "moss",
+        "firered_vad",
+        "speaker_embedding"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "DIARIZATION"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "moss"
+        ]
+      ],
+      "roles": [
+        "primary"
+      ],
+      "groups": [
+        "primary"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "长音频、直播和多人录音",
+        "limitations": "说话人标签不等于真实姓名",
+        "workflow_note": "先生成文字骨架、分段和说话人证据。",
+        "advantages": [],
+        "summary": "多人语音转写 + 说话人区分，适合直播和多人录音。"
+      },
+      "technical": {
+        "purpose": "中文长音频的第一遍转写与说话人区分。",
+        "principles": "Whisper-Medium 音频编码器提取 16 kHz、80 维 mel 特征，经 4 倍时间合并和 MLP 适配器送入 Qwen3-0.6B 风格因果解码器；模型以单条序列联合生成时间戳、说话人标签、正文和可选声学事件。",
+        "limits": "需要 NVIDIA CUDA；说话人标签是区分依据，不等同于自动识别真实姓名。",
+        "io": "输入本地音频；输出初稿文本、分段和说话人证据。",
+        "url": "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize",
+        "paper": "https://arxiv.org/abs/2601.01554",
+        "official": {
+          "developer": "MOSI.AI / OpenMOSS",
+          "series": "MOSS-Transcribe-Diarize",
+          "params": "0.9B（端到端长音频多说话人模型）",
+          "languages": [
+            "50+ 语言"
+          ],
+          "architecture": "Whisper-Medium encoder + Qwen3-0.6B-style causal decoder",
+          "dialects": "官方未单独列出方言清单",
+          "audio_type": "长音频、多说话人、会议/播客/视频",
+          "license": "Apache-2.0",
+          "runtime": "Transformers 5.x / SGLang Omni / vLLM",
+          "repo": "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": true,
+      "reference": {
+        "accuracy": {
+          "score": 80,
+          "basis": "tier",
+          "label": "综合档位估算",
+          "reason": "AISHELL-4 同表最佳，但属长音频多人口径，与朗读集不可直比",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 35,
+          "basis": "official",
+          "label": "官方环境参考",
+          "reason": "RTF 0.0197（单张 H100 · SGLang Omni · 长音频 · 并发 1）",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "firered",
+      "name": "FireRedASR2-AED",
+      "summary": "中文与方言 · 可独立生成字幕",
+      "mode": "本地 · NVIDIA CUDA",
+      "size": "约 4.4 GB",
+      "description": "负责字级首尾边界，也可以单独生成中文与方言字幕。与 MOSS 组合时能明显改善时间轴。",
+      "languages": [
+        "中文",
+        "方言"
+      ],
+      "logo_asset": "firered.png",
+      "api_preset": null,
+      "install_keys": [
+        "firered_aed"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "TIMESTAMP"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "firered"
+        ],
+        [
+          "timeline",
+          "local"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "timeline"
+      ],
+      "groups": [
+        "primary",
+        "timeline"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "中文、方言及需要细粒度时间戳的字幕",
+        "limitations": "",
+        "workflow_note": "既可独立转写，也可在组合流程中提供字级时间轴。",
+        "advantages": [
+          "字级时间轴"
+        ],
+        "summary": "中文 / 方言高精度转写，并支持细粒度时间轴。"
+      },
+      "technical": {
+        "purpose": "中文/方言语音识别与细粒度时间轴。",
+        "principles": "FireRedASR2-AED 采用 Attention-based Encoder-Decoder，在单一高效模型中完成声学编码与自回归解码；官方接口可返回词级时间戳与置信度，2ByteASR 只把它用于时间轴和交叉证据。",
+        "limits": "本机运行需要 CUDA；时间戳质量仍会受原始音频、多人重叠说话影响。",
+        "io": "输入音频；输出识别文字与可用于字幕切分的时间边界。",
+        "url": "https://github.com/FireRedTeam/FireRedASR2S",
+        "hf": "https://huggingface.co/FireRedTeam/FireRedASR2-AED",
+        "paper": "https://arxiv.org/abs/2603.10420",
+        "official": {
+          "developer": "FireRedTeam",
+          "series": "FireRedASR2-AED",
+          "params": "官方 README 未单列 AED 参数量",
+          "languages": [
+            "中文",
+            "20+ 方言/口音",
+            "English",
+            "中英混说"
+          ],
+          "architecture": "Attention-based Encoder-Decoder (AED)",
+          "dialects": "粤语、四川、上海、吴语、闽南等 20+",
+          "audio_type": "语音、歌唱、歌词",
+          "license": "Apache-2.0",
+          "runtime": "PyTorch / TensorRT-LLM",
+          "repo": "https://github.com/FireRedTeam/FireRedASR2S"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": true,
+      "reference": {
+        "accuracy": {
+          "score": 97,
+          "basis": "direct",
+          "label": "FireRed 官方同表",
+          "reason": "普通话 4 集均值 CER 3.05%（同表第 2）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 30,
+          "basis": "tier",
+          "label": "官方示例+TensorRT 区间",
+          "reason": "示例 RTF 0.087（PyTorch）；TensorRT-LLM 官方加速 12.7x（H20）",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "qwen_local",
+      "name": "Qwen3-ASR 1.7B",
+      "summary": "多语言 · 词汇与文字复核参考",
+      "mode": "本地 · NVIDIA CUDA",
+      "size": "约 4.7 GB",
+      "description": "多语言语音转写模型，可独立识别字幕；在组合流程中重新听音频，为每个片段提供独立文字与词汇证据。",
+      "languages": [
+        "多语言"
+      ],
+      "logo_asset": "qwen.png",
+      "api_preset": null,
+      "install_keys": [
+        "qwen_asr"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "qwen_local"
+        ],
+        [
+          "review",
+          "local"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "通用字幕、多语言和专名复核",
+        "limitations": "",
+        "workflow_note": "可独立转写；复核阶段重新听音频，提供独立文字证据。",
+        "advantages": [],
+        "summary": "多语言高精度转写，适合通用字幕识别。"
+      },
+      "technical": {
+        "purpose": "多语言文字复核与术语证据补充。",
+        "principles": "Qwen3-ASR 是统一流式/离线的自回归语音识别模型，基于 Qwen3-Omni 的音频理解能力，同时完成语种识别和转写；需要时间戳时再配合独立的 Qwen3-ForcedAligner 非自回归对齐模型。",
+        "limits": "下载体积与显存占用较高；它在本项目中是复核角色，不替代完整任务流程。",
+        "io": "输入已分段的音频/文本上下文；输出文字候选和复核证据。",
+        "url": "https://github.com/QwenLM/Qwen3-ASR",
+        "hf": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+        "paper": "https://arxiv.org/abs/2601.21337",
+        "official": {
+          "developer": "Qwen Team / Alibaba",
+          "series": "Qwen3-ASR",
+          "params": "1.7B",
+          "languages": [
+            "30 种语言",
+            "22 种中文方言"
+          ],
+          "architecture": "Qwen3-Omni-derived autoregressive ASR",
+          "dialects": "22 种中文方言/口音",
+          "audio_type": "语音、歌唱、带 BGM 歌曲",
+          "license": "Apache-2.0",
+          "runtime": "Transformers / qwen-asr / vLLM",
+          "repo": "https://github.com/QwenLM/Qwen3-ASR"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": true,
+      "reference": {
+        "accuracy": {
+          "score": 88,
+          "basis": "direct",
+          "label": "FireRed 官方同表",
+          "reason": "普通话 4 集均值 CER 3.76%（FireRed 复测 Qwen3-ASR-1.7B）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 30,
+          "basis": "tier",
+          "label": "同级类推估算",
+          "reason": "1.7B 自回归 LLM-ASR；无官方 RTF",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "firered_llm",
+      "name": "FireRedASR2-LLM",
+      "summary": "中文普通话 / 方言 / English · 高精度 LLM ASR",
+      "mode": "本地 · 独立 FireRed LLM Runtime",
+      "size": "预计下载 17.57 GiB",
+      "description": "8B+ Encoder-Adapter-LLM 模型。独立 Runtime 已通过 Windows CUDA 双 fixture 验证，可作为主力或文字复核。",
+      "languages": [
+        "中文",
+        "方言",
+        "English"
+      ],
+      "logo_asset": "firered.png",
+      "api_preset": null,
+      "install_keys": [
+        "firered_llm"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "firered_llm"
+        ],
+        [
+          "review",
+          "firered_llm"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "中文和方言的质量优先转写",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "高精度中文 / 方言转写，质量优先但资源占用更高。"
+      },
+      "technical": {
+        "purpose": "面向中文、方言与中英混说的高精度主力转写候选。",
+        "principles": "8B+ Encoder-Adapter-LLM：语音编码器经 Adapter 接入 Qwen2-7B-Instruct，利用语言模型完成端到端转写。",
+        "limits": "单段音频最多 40 秒，权重和显存占用明显高于 AED；长视频仍必须由 2ByteASR 分块。",
+        "io": "输入最长 40 秒音频块；输出转写文本。",
+        "url": "https://github.com/FireRedTeam/FireRedASR2S",
+        "hf": "https://huggingface.co/FireRedTeam/FireRedASR2-LLM",
+        "official": {
+          "developer": "FireRedTeam",
+          "series": "FireRedASR2-LLM",
+          "params": "8B+",
+          "languages": [
+            "中文普通话",
+            "English"
+          ],
+          "architecture": "Encoder-Adapter-LLM (Qwen2-7B-Instruct)",
+          "dialects": "20+ 中文方言/口音",
+          "audio_type": "语音、歌唱、中英混说",
+          "license": "Apache-2.0",
+          "runtime": "FireRedASR2S / PyTorch",
+          "repo": "https://github.com/FireRedTeam/FireRedASR2S"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 100,
+          "basis": "direct",
+          "label": "FireRed 官方同表",
+          "reason": "普通话 4 集均值 CER 2.89%，该表最佳",
+          "approx": false,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 25,
+          "basis": "tier",
+          "label": "官方示例+档位估算",
+          "reason": "官方示例 RTF 0.0681；vLLM 服务化更快但无公开数值",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "glm_asr_nano",
+      "name": "GLM-ASR-Nano-2512",
+      "summary": "中文 / English / 粤语与方言 · 低音量鲁棒",
+      "mode": "本地 · 独立 GLM Runtime",
+      "size": "预计下载 4.21 GiB",
+      "description": "GLM 的轻量语音识别模型。使用独立 Python 3.12 与 Transformers 5 运行库，支持本地中文、粤语与英文转写。",
+      "languages": [
+        "中文",
+        "粤语",
+        "English",
+        "17种语言"
+      ],
+      "logo_asset": "zai.png",
+      "api_preset": null,
+      "install_keys": [
+        "glm_asr_nano"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "glm_asr_nano"
+        ]
+      ],
+      "roles": [
+        "primary"
+      ],
+      "groups": [
+        "primary"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "中文、粤语和低音量语音",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "中文、粤语及英语转写，适合低音量语音素材。"
+      },
+      "technical": {
+        "purpose": "中文、英文、粤语与方言场景的轻量主力转写候选。",
+        "principles": "官方描述为 1.5B 参数语音识别模型，使用 Transformers 的 GLM-ASR 条件生成架构。",
+        "limits": "官方当前要求 Transformers 源码/5.x 路径，与主环境锁定版本不兼容，必须隔离。",
+        "io": "输入音频；输出带规范文本的转写。",
+        "hf": "https://huggingface.co/zai-org/GLM-ASR-Nano-2512",
+        "official": {
+          "developer": "Z.ai",
+          "series": "GLM-ASR-Nano-2512",
+          "params": "1.5B 官方描述；HF metadata 2,257,843,200",
+          "languages": [
+            "中文",
+            "English",
+            "粤语",
+            "17 种高可用语言"
+          ],
+          "architecture": "GLM-ASR conditional generation",
+          "dialects": "粤语与其它方言优化",
+          "audio_type": "语音，包含低音量/安静语音",
+          "license": "MIT",
+          "runtime": "Transformers 5.x / SGLang（规划）",
+          "repo": "https://huggingface.co/zai-org/GLM-ASR-Nano-2512"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 75,
+          "basis": "tier",
+          "label": "通用参考·中文证据有限",
+          "reason": "官方称同类开源均错最低 4.10；中文成绩图为图片无文本数值",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 59,
+          "basis": "direct",
+          "label": "OpenASR RTFx",
+          "reason": "RTFx 145.28（官方卡自报同榜结果）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "canary_qwen",
+      "name": "Canary-Qwen-2.5B",
+      "summary": "English ASR · 标点与大小写",
+      "mode": "本地 · 独立 NVIDIA NeMo Runtime",
+      "size": "预计下载 4.77 GiB",
+      "description": "FastConformer + Qwen 的英文语音模型。自动准备独立 NeMo 运行库、模型和 tokenizer，并通过真实样本任务验证；不支持中文。",
+      "languages": [
+        "English"
+      ],
+      "logo_asset": "nvidia.png",
+      "api_preset": null,
+      "install_keys": [
+        "canary_qwen",
+        "canary_qwen_tokenizer"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "canary_qwen"
+        ]
+      ],
+      "roles": [
+        "primary"
+      ],
+      "groups": [
+        "primary"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "英语素材批量转写",
+        "limitations": "不支持中文",
+        "workflow_note": "",
+        "advantages": [
+          "高吞吐",
+          "不支持中文"
+        ],
+        "summary": "英语高吞吐转写，适合批量处理英语素材。"
+      },
+      "technical": {
+        "purpose": "English 专用的高吞吐主力转写候选。",
+        "principles": "Speech-Augmented Language Model，组合 FastConformer speech encoder 与 Qwen language model。",
+        "limits": "仅可靠支持 English；训练最大音频长度 40 秒，长输入精度可能下降；NeMo 依赖较重。",
+        "io": "输入 English 音频块；输出带标点和大小写的英文文本。",
+        "hf": "https://huggingface.co/nvidia/canary-qwen-2.5b",
+        "official": {
+          "developer": "NVIDIA",
+          "series": "Canary-Qwen-2.5B",
+          "params": "2.5B",
+          "languages": [
+            "English"
+          ],
+          "architecture": "FastConformer + Qwen Speech-Augmented Language Model",
+          "dialects": "官方未单列",
+          "audio_type": "English speech, max training duration 40s",
+          "license": "CC-BY-4.0",
+          "runtime": "NVIDIA NeMo 2.5+",
+          "repo": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 78,
+          "basis": "calibrated",
+          "label": "跨榜校准（OpenASR→AA）",
+          "reason": "OpenASR Mean WER 5.63%；经 turbo 锚换算 AA 尺度",
+          "approx": true,
+          "scene": "en"
+        },
+        "speed": {
+          "score": 100,
+          "basis": "direct",
+          "label": "OpenASR RTFx",
+          "reason": "RTFx 418（OpenASR 榜单，全目录最快）",
+          "approx": false,
+          "scene": "en"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "omni_asr_llm_7b",
+      "name": "Omnilingual ASR LLM 7B",
+      "summary": "1600+ 语言 · 高显存",
+      "mode": "仅权重 · 原生 Windows 推理不支持",
+      "size": "预计下载 29.06 GiB",
+      "description": "Meta 的 7.8B 多语言 ASR。权重可校验下载，但上游 fairseq2 不支持原生 Windows，因此当前 Windows 版不能加载或推理。下载完成不会加入识别方案。",
+      "languages": [
+        "1600+ 语言"
+      ],
+      "logo_asset": "meta.png",
+      "api_preset": null,
+      "install_keys": [
+        "omni_asr_llm_7b"
+      ],
+      "runtime_available": false,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [],
+      "roles": [],
+      "groups": [
+        "weights"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "小语种及跨语言素材",
+        "limitations": "上游 fairseq2 不支持原生 Windows；当前仅可下载权重",
+        "workflow_note": "",
+        "advantages": [
+          "7B",
+          "Windows 仅权重"
+        ],
+        "summary": "超多语言覆盖，适合小语种和跨语言素材。"
+      },
+      "technical": {
+        "purpose": "为极广语言覆盖提供 1600+ 语言主力转写候选。",
+        "principles": "Omnilingual ASR LLM 7B 支持可选语言条件，官方参数量 7,801,041,536。",
+        "limits": "模型约 30 GiB，BF16 推理约需 17 GiB 显存；官方 RTF 接近实时，不适合低显存机器。",
+        "io": "输入音频与可选 language conditioning；输出对应语言文字。",
+        "hf": "https://huggingface.co/facebook/omniASR-LLM-7B",
+        "paper": "https://ai.meta.com/research/publications/omnilingual-asr-open-source-multilingual-speech-recognition-for-1600-languages/",
+        "official": {
+          "developer": "Meta",
+          "series": "omniASR-LLM-7B",
+          "params": "7,801,041,536",
+          "languages": [
+            "1600+ 语言"
+          ],
+          "architecture": "Omnilingual wav2vec2 + LLM ASR",
+          "dialects": "按官方语言 ID 清单",
+          "audio_type": "Speech with optional language conditioning",
+          "license": "Apache-2.0",
+          "runtime": "omnilingual-asr / fairseq2",
+          "repo": "https://github.com/facebookresearch/omnilingual-asr"
+        }
+      },
+      "verification": "仅权重；上游运行库不支持原生 Windows 推理",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": null,
+        "speed": {
+          "score": 15,
+          "basis": "official",
+          "label": "官方环境参考",
+          "reason": "RTF 0.092（A100 · BF16 · batch1 · 30s）≈RTFx 11",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "groq_api",
+      "name": "Groq Whisper API",
+      "summary": "Whisper 云端加速 · OpenAI 转写协议",
+      "mode": "在线 · 需 Groq API Key",
+      "size": "不占本地空间",
+      "description": "使用 Groq 的 Whisper large-v3-turbo 转写接口，适合境外网络或已有 Groq 额度的用户。",
+      "languages": [],
+      "logo_asset": "groq.png",
+      "api_preset": "groq",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "best_for": "",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "云端加速转写，适合多语言字幕与短块复核。"
+      },
+      "technical": {
+        "purpose": "通过 GroqCloud 调用 Whisper large-v3-turbo。",
+        "principles": "使用 OpenAI 风格 audio/transcriptions 协议，把音频发送到 Groq 托管的 Whisper large-v3-turbo；模型仍是编码器-解码器 Transformer，推理由 GroqCloud 执行。",
+        "limits": "依赖境外网络、Groq 账户额度和服务支持的文件/时长限制。",
+        "io": "上传音频块；返回多语言转写文字。",
+        "url": "https://console.groq.com/docs/speech-to-text",
+        "official": {
+          "developer": "Groq（托管）/ OpenAI（模型）",
+          "series": "whisper-large-v3-turbo",
+          "params": "809M（模型）",
+          "languages": [
+            "多语言"
+          ],
+          "architecture": "Whisper encoder-decoder Transformer",
+          "dialects": "服务文档未单列",
+          "audio_type": "在线音频转写",
+          "license": "Groq 服务条款 / Whisper MIT",
+          "runtime": "GroqCloud API",
+          "repo": "https://github.com/openai/whisper"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {
+        "short": "Groq",
+        "label": "Groq Whisper",
+        "protocol": "openai_transcription",
+        "model": "whisper-large-v3-turbo",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 60,
+          "basis": "tier",
+          "label": "turbo 模型级参考",
+          "reason": "模型层=whisper-large-v3-turbo；中文无 turbo 专属数据",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 69,
+          "basis": "direct_aa",
+          "label": "AA 实测（Groq 路由）",
+          "reason": "AA 实测 Speed Factor 170.9（含网络）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "openai_api",
+      "name": "OpenAI Transcribe API",
+      "summary": "通用多语言 · 支持上下文提示",
+      "mode": "在线 · 需 OpenAI API Key",
+      "size": "不占本地空间",
+      "description": "使用 OpenAI 音频转写接口作为独立文字复核来源，适合已有 OpenAI API 的用户。",
+      "languages": [],
+      "logo_asset": "openai.png",
+      "api_preset": "openai",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "best_for": "",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "通用云端语音转写，适合多语言字幕识别。"
+      },
+      "technical": {
+        "purpose": "通过 OpenAI 音频转写接口提供在线复核。",
+        "principles": "使用 OpenAI audio/transcriptions 协议调用账户可用的转写模型。模型实现与版本由服务端管理，2ByteASR 只维护请求、结果映射和失败处理。",
+        "limits": "依赖境外服务、账户额度、隐私策略和当前模型可用性。",
+        "io": "上传音频块；返回在线转写文字。",
+        "url": "https://platform.openai.com/docs/guides/speech-to-text",
+        "official": {
+          "developer": "OpenAI",
+          "series": "Transcribe API（模型可配置）",
+          "params": "服务未公开",
+          "languages": [
+            "多语言"
+          ],
+          "architecture": "托管语音转写模型",
+          "dialects": "官方未单列",
+          "audio_type": "在线音频转写",
+          "license": "OpenAI 服务条款",
+          "runtime": "OpenAI API",
+          "repo": "官方未提供服务端模型仓库"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {
+        "short": "OpenAI",
+        "label": "OpenAI Transcribe",
+        "protocol": "openai_transcription",
+        "model": "gpt-transcribe",
+        "url": "https://api.openai.com/v1/audio/transcriptions"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 65,
+          "basis": "tier",
+          "label": "中文证据两极（4o 系）",
+          "reason": "GPT-4o-Transcribe 中文集：Fleurs-zh 2.44 优 / WS 15.30·32.27 差",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 34,
+          "basis": "direct_aa",
+          "label": "AA 实测",
+          "reason": "AA 实测 GPT Transcribe SF 40.8（含网络）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "mai_latest",
+      "name": "MAI 2.1｜待服务商验证",
+      "summary": "OpenRouter · 新版映射需验证",
+      "mode": "在线 · 需 OpenRouter Key",
+      "size": "不占本地空间",
+      "description": "MAI 2.1 的当前 OpenRouter 模型 ID 尚未获得服务商确认。旧 microsoft/mai-transcribe-2 不会冒充新版；请在配置中填写服务商确认的新版 ID。实际通道是否提供词时间戳、说话人和原样转写须逐项验证。",
+      "languages": [
+        "多语言"
+      ],
+      "logo_asset": null,
+      "api_preset": "openrouter_word",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "summary": "OpenRouter · 新版映射需验证",
+        "limitations": ""
+      },
+      "technical": {},
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {
+        "short": "OpenRouter",
+        "label": "OpenRouter MAI 2.1（模型映射待验证）",
+        "protocol": "openrouter_verbose_json",
+        "model": "",
+        "url": "https://openrouter.ai/api/v1/audio/transcriptions"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": null,
+        "speed": null,
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "custom_asr_api",
+      "name": "OpenAI 兼容 ASR",
+      "summary": "自定义模型、地址与密钥",
+      "mode": "在线或自托管 · OpenAI 音频协议",
+      "size": "取决于服务商",
+      "description": "可连接实现 /v1/audio/transcriptions 的第三方或自托管服务；模型名、URL 与 Key 均可配置。",
+      "languages": [
+        "多语言"
+      ],
+      "logo_asset": null,
+      "api_preset": "custom",
+      "install_keys": [],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "api"
+        ],
+        [
+          "review",
+          "api"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review",
+        "api"
+      ],
+      "online": true,
+      "copy": {
+        "best_for": "",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "连接自备语音转写服务，能力取决于配置型号。"
+      },
+      "technical": {
+        "purpose": "连接用户自备的 OpenAI 兼容音频转写服务。",
+        "principles": "按 OpenAI audio/transcriptions 兼容协议提交音频、模型名和鉴权信息；该入口没有固定模型，因此无法声明统一架构或 Benchmark。",
+        "limits": "兼容性、准确率、隐私、费用和稳定性均由目标服务决定；需要用户自行核对。",
+        "io": "上传音频块；读取兼容服务返回的转写文字。",
+        "official": {
+          "developer": "用户配置",
+          "series": "OpenAI 兼容 ASR",
+          "params": "取决于模型",
+          "languages": [
+            "取决于模型"
+          ],
+          "architecture": "取决于模型",
+          "dialects": "取决于模型",
+          "audio_type": "取决于服务",
+          "license": "取决于服务",
+          "runtime": "OpenAI 兼容 audio/transcriptions API",
+          "repo": "无统一官方仓库"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {
+        "short": "兼容 ASR",
+        "label": "自定义 OpenAI 兼容 ASR",
+        "protocol": "openai_transcription",
+        "model": "",
+        "url": "https://example.invalid/v1/audio/transcriptions"
+      },
+      "recommended": false,
+      "reference": {
+        "accuracy": null,
+        "speed": null,
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "sensevoice",
+      "name": "SenseVoice Small",
+      "summary": "中文/粤语/英语/日语/韩语 · CPU 也可运行",
+      "mode": "本地 · ModelScope / FunASR",
+      "size": "约 0.9 GB",
+      "description": "非自回归多语言模型，支持情感与音频事件识别；现在可作为本地文字复核证据。作为独立主力时暂不提供 MOSS 的多人区分。",
+      "languages": [
+        "中文",
+        "粤语",
+        "English",
+        "日本語",
+        "한국어"
+      ],
+      "logo_asset": "modelscope.png",
+      "api_preset": null,
+      "install_keys": [
+        "sensevoice"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "sensevoice"
+        ],
+        [
+          "review",
+          "sensevoice"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "低配置设备上的常见语言转写",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [
+          "CPU 可用"
+        ],
+        "summary": "轻量多语言转写，低配置设备也能使用。"
+      },
+      "technical": {
+        "purpose": "轻量多语言语音识别与文字复核。",
+        "principles": "SenseVoiceSmall 采用非自回归端到端框架，一次前向同时输出转写、语种、情感和音频事件标签；长音频通过 FunASR 的独立 VAD 分段处理。",
+        "limits": "当前不提供 MOSS 的多人说话人骨架；更适合做独立文字证据。",
+        "io": "输入音频；输出多语言文字结果及可选事件/情感信息。",
+        "url": "https://github.com/FunAudioLLM/SenseVoice",
+        "hf": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+        "paper": "https://arxiv.org/abs/2407.04051",
+        "official": {
+          "developer": "FunAudioLLM (Alibaba)",
+          "series": "SenseVoiceSmall",
+          "params": "约 234M（与 Whisper-Small 同级）",
+          "languages": [
+            "中文",
+            "粤语",
+            "English",
+            "日本語",
+            "한국어"
+          ],
+          "architecture": "非自回归端到端音频理解模型",
+          "dialects": "粤语；其它中文方言未由该 checkpoint 单列",
+          "audio_type": "语音 + 情感/事件标签",
+          "license": "代码 MIT；权重为 FunASR 模型协议",
+          "runtime": "FunASR / ONNX / libtorch / llama.cpp",
+          "repo": "https://github.com/FunAudioLLM/SenseVoice"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 75,
+          "basis": "tier",
+          "label": "技术报告同表对照",
+          "reason": "AISHELL-1 2.96% / WS 7.44·7.84%，同表全面优于 Whisper-Large-v3",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 60,
+          "basis": "tier",
+          "label": "官方速度图示+论文延迟",
+          "reason": "官方称 >15x Whisper-Large；论文 10s 音频 70ms（RTF≈0.007）",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "paraformer",
+      "name": "Paraformer Large",
+      "summary": "中文长音频 · 支持热词",
+      "mode": "本地 · ModelScope / Hugging Face",
+      "size": "约 1.0 GB",
+      "description": "FunASR 中文非自回归模型，可组合 VAD、标点和热词；现在可替换 FireRed 提供中文时间戳。独立主力转写仍在适配。",
+      "languages": [
+        "中文"
+      ],
+      "logo_asset": "modelscope.png",
+      "api_preset": null,
+      "install_keys": [
+        "paraformer"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "TIMESTAMP"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "paraformer"
+        ],
+        [
+          "timeline",
+          "paraformer"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "timeline"
+      ],
+      "groups": [
+        "primary",
+        "timeline"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "中文快速转写和热词识别",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "中文快速转写，并支持时间轴。"
+      },
+      "technical": {
+        "purpose": "中文长音频识别与轻量时间轴后端。",
+        "principles": "Paraformer 是非自回归端到端 ASR：编码器提取声学表示，预测器估计目标长度并生成声学向量，解码器并行输出文字；FunASR 再组合 VAD、标点和热词形成长音频 pipeline。",
+        "limits": "当前 2ByteASR 将它用于时间轴角色；主力多人转写仍以 MOSS 为准。",
+        "io": "输入音频与可选热词；输出中文文字和后端提供的时间信息。",
+        "url": "https://github.com/modelscope/FunASR",
+        "modelscope": "https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary",
+        "paper": "https://arxiv.org/abs/2206.08317",
+        "official": {
+          "developer": "FunASR / ModelScope",
+          "series": "Paraformer Large",
+          "params": "约 220M",
+          "languages": [
+            "中文"
+          ],
+          "architecture": "Paraformer 非自回归端到端 ASR",
+          "dialects": "官方模型卡未单列方言覆盖",
+          "audio_type": "16 kHz 中文语音；长音频由 VAD pipeline 分段",
+          "license": "模型页所列 Apache-2.0",
+          "runtime": "FunASR / ModelScope / ONNX Runtime",
+          "repo": "https://github.com/modelscope/FunASR"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 70,
+          "basis": "tier",
+          "label": "官方卡跨集区间",
+          "reason": "AISHELL-1 1.95% / WS meeting 6.97%，跨集表现差异大",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 50,
+          "basis": "tier",
+          "label": "官方 RTF+120x 声明",
+          "reason": "RTF 0.0251（V100·batch1）；HF 卡称 GPU 120x 实时",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "whisper",
+      "name": "Whisper large-v3-turbo",
+      "summary": "多语言 · 通用内容",
+      "mode": "本地",
+      "size": "约 1.6 GB",
+      "description": "通用多语言模型，现在可替换 Qwen 提供独立文字复核证据；作为主力转写时暂不提供 MOSS 的多人说话人骨架。",
+      "languages": [
+        "多语言"
+      ],
+      "logo_asset": "openai.png",
+      "api_preset": null,
+      "install_keys": [
+        "whisper_turbo"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "TIMESTAMP",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "whisper_turbo"
+        ],
+        [
+          "timeline",
+          "whisper_turbo"
+        ],
+        [
+          "review",
+          "whisper_turbo"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "timeline",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "timeline",
+        "review"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "多语言通用转写，适合多种语言的视频字幕。"
+      },
+      "technical": {
+        "purpose": "通用多语言语音转写与复核。",
+        "principles": "Whisper 是编码器-解码器 Transformer：把音频转成 log-Mel 频谱，由多任务序列 token 同时表达语种、转写/翻译与时间戳。large-v3-turbo 缩短了解码器以换取更快推理。",
+        "limits": "不包含 MOSS 的说话人区分；不同硬件上的速度差异较大。",
+        "io": "输入音频；输出转写文字和片段级时间信息。",
+        "url": "https://github.com/openai/whisper",
+        "hf": "https://huggingface.co/openai/whisper-large-v3-turbo",
+        "paper": "https://arxiv.org/abs/2212.04356",
+        "official": {
+          "developer": "OpenAI",
+          "series": "Whisper large-v3-turbo",
+          "params": "809M",
+          "languages": [
+            "多语言（99 种语言训练覆盖）"
+          ],
+          "architecture": "Encoder-decoder Transformer",
+          "dialects": "官方未提供独立方言清单",
+          "audio_type": "通用语音；30 秒窗口与长音频滑窗",
+          "license": "MIT",
+          "runtime": "PyTorch / Transformers / faster-whisper",
+          "repo": "https://github.com/openai/whisper"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 60,
+          "basis": "tier",
+          "label": "large-v3 同表外推",
+          "reason": "无 turbo 专属中文数据；large-v3 经 Qwen 表换算约 62，turbo 略降",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 69,
+          "basis": "direct",
+          "label": "OpenASR RTFx",
+          "reason": "RTFx 200.19（OpenASR 榜单统一环境）",
+          "approx": false,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    },
+    {
+      "key": "qwen_aligner",
+      "name": "Qwen3-ForcedAligner 0.6B",
+      "summary": "11 种语言 · 字/词级强制对齐",
+      "mode": "本地 · NVIDIA CUDA",
+      "size": "约 1.8 GB",
+      "description": "Qwen 官方强制对齐模型，可根据 MOSS 已有文字生成字级或词级时间戳；可直接替换 FireRed 作为多语种时间轴后端。",
+      "languages": [
+        "多语言",
+        "11种"
+      ],
+      "logo_asset": "qwen.png",
+      "api_preset": null,
+      "install_keys": [
+        "qwen_aligner"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ALIGNMENT"
+      ],
+      "adapter_bindings": [
+        [
+          "timeline",
+          "qwen_aligner"
+        ]
+      ],
+      "roles": [
+        "timeline"
+      ],
+      "groups": [
+        "timeline"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "ASR 转写与纠错后的最终时间轴精修",
+        "limitations": "不能独立转写，也不负责识别或纠正字幕内容",
+        "workflow_note": "先由 ASR 得到文字，再根据音频定位字词。",
+        "advantages": [],
+        "summary": "已有字幕的高精度字词时间轴对齐。"
+      },
+      "technical": {
+        "purpose": "依据已有文字生成字/词级时间边界。",
+        "principles": "Qwen3-ForcedAligner 是非自回归强制对齐模型，同时读取音频和给定文本，直接预测每个字符或单词的时间位置；它不是从零开始的语音转写模型。",
+        "limits": "必须先有可靠文本；错字、漏字、多人重叠和强噪声会直接影响对齐，且本地运行需要 CUDA。",
+        "io": "输入音频 + 已有文字；输出字符/单词的起止时间。",
+        "url": "https://github.com/QwenLM/Qwen3-ASR",
+        "hf": "https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B",
+        "paper": "https://arxiv.org/abs/2601.21337",
+        "official": {
+          "developer": "Qwen Team / Alibaba",
+          "series": "Qwen3-ForcedAligner",
+          "params": "0.6B",
+          "languages": [
+            "11 种语言"
+          ],
+          "architecture": "非自回归 forced alignment",
+          "dialects": "随支持语言对齐；官方未单列方言 Benchmark",
+          "audio_type": "语音 + 已知转写文本",
+          "license": "Apache-2.0",
+          "runtime": "qwen-asr / Transformers",
+          "repo": "https://github.com/QwenLM/Qwen3-ASR"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 100,
+          "basis": "direct",
+          "label": "Qwen 官方同表",
+          "reason": "AAS 中文 33.1ms，同表最佳（NFA 109.8 / MFA 161.1）",
+          "approx": false,
+          "scene": "align"
+        },
+        "speed": null,
+        "caption": "对齐精度"
+      }
+    },
+    {
+      "key": "funasr_nano",
+      "name": "Fun-ASR Nano 2512",
+      "summary": "多语言与中文方言 · LLM 驱动",
+      "mode": "本地 · ModelScope / Hugging Face",
+      "size": "约 2.4 GB",
+      "description": "FunAudioLLM 的多语言识别模型，覆盖中文方言与多语种；现在可作为独立文字复核证据，主力多人骨架仍在适配。",
+      "languages": [
+        "多语言",
+        "中文方言"
+      ],
+      "logo_asset": "modelscope.png",
+      "api_preset": null,
+      "install_keys": [
+        "funasr_nano"
+      ],
+      "runtime_available": true,
+      "asr_capabilities": [
+        "ASR_TEXT",
+        "LANGUAGE_ID"
+      ],
+      "adapter_bindings": [
+        [
+          "primary",
+          "funasr_nano"
+        ],
+        [
+          "review",
+          "funasr_nano"
+        ]
+      ],
+      "roles": [
+        "primary",
+        "review"
+      ],
+      "groups": [
+        "primary",
+        "review"
+      ],
+      "online": false,
+      "copy": {
+        "best_for": "",
+        "limitations": "",
+        "workflow_note": "",
+        "advantages": [],
+        "summary": "中文方言与多语言转写，可提供独立文字复核证据。"
+      },
+      "technical": {
+        "purpose": "中文方言与多语种的本地文字复核。",
+        "principles": "Fun-ASR-Nano 采用音频编码器连接语言模型的端到端路线，直接生成转写文本，并通过可配置上下文增强专名与热词；2ByteASR 仅消费其独立文字证据。",
+        "limits": "0.8B 本地模型仍需要独立运行环境和显存；作为复核后端不提供 MOSS 的说话人区分。",
+        "io": "输入音频与可选上下文；输出多语言/方言转写文字。",
+        "url": "https://github.com/FunAudioLLM/Fun-ASR",
+        "hf": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512",
+        "official": {
+          "developer": "FunAudioLLM (Alibaba)",
+          "series": "Fun-ASR-Nano-2512",
+          "params": "0.8B",
+          "languages": [
+            "多语言",
+            "中文方言"
+          ],
+          "architecture": "音频编码器 + LLM 的端到端 ASR",
+          "dialects": "覆盖多种中文方言；以官方模型卡清单为准",
+          "audio_type": "语音、长音频分块",
+          "license": "以官方模型卡协议为准",
+          "runtime": "FunASR / Transformers",
+          "repo": "https://github.com/FunAudioLLM/Fun-ASR"
+        }
+      },
+      "verification": "目录已接入；本网页未进行后端实测",
+      "config": {},
+      "recommended": false,
+      "reference": {
+        "accuracy": {
+          "score": 78,
+          "basis": "calibrated",
+          "label": "跨表校准（Qwen 官方表）",
+          "reason": "WenetSpeech net 6.35%（Qwen 表复测）经 Qwen3-ASR 锚换算",
+          "approx": true,
+          "scene": "zh"
+        },
+        "speed": {
+          "score": 35,
+          "basis": "tier",
+          "label": "档位估算",
+          "reason": "0.8B 端到端；官方称低延迟实时转写，无公开 RTF",
+          "approx": true,
+          "scene": "zh"
+        },
+        "caption": "转写准确度"
+      }
+    }
+  ],
+  "plans": [
+    {
+      "key": "quality",
+      "label": "质量优先（推荐）",
+      "description": "主稿 + 字级时间轴 + 独立复核，适合多人和长视频",
+      "primary": "moss",
+      "timeline": "local",
+      "review": "local",
+      "estimated_vram_gb": 10.8
+    },
+    {
+      "key": "speed",
+      "label": "速度优先",
+      "description": "轻量主稿，尽快得到可编辑字幕",
+      "primary": "sensevoice",
+      "timeline": "off",
+      "review": "off",
+      "estimated_vram_gb": 1.2
+    },
+    {
+      "key": "low_memory",
+      "label": "省显存",
+      "description": "CPU 友好或在线处理，适合低配置设备",
+      "primary": "sensevoice",
+      "timeline": "off",
+      "review": "off",
+      "estimated_vram_gb": 1.2
+    },
+    {
+      "key": "transcribe_only",
+      "label": "仅转写",
+      "description": "只生成文字稿，不额外建立字幕时间轴",
+      "primary": "moss",
+      "timeline": "off",
+      "review": "off",
+      "estimated_vram_gb": 1.7
+    },
+    {
+      "key": "api",
+      "label": "API 转写",
+      "description": "在线 API 接管主力转写与时间轴（块边界）；免下载，需 API Key",
+      "primary": "api",
+      "timeline": "off",
+      "review": "api",
+      "estimated_vram_gb": 0.0
+    },
+    {
+      "key": "custom",
+      "label": "自定义",
+      "description": "保留当前底层模型组合",
+      "primary": "",
+      "timeline": "",
+      "review": "",
+      "estimated_vram_gb": 0.0
+    }
+  ],
+  "themes": {
+    "grape": {
+      "key": "grape",
+      "label": "Deep Grape / Burgundy",
+      "app_background": "#19151c",
+      "surface": "#252028",
+      "surface_elevated": "#2f2935",
+      "panel": "#1e1a22",
+      "input_surface": "#1b171e",
+      "selected": "#3a3241",
+      "timeline": "#17131a",
+      "media": "#0e0c10",
+      "border": "#342d3a",
+      "border_strong": "#4a4152",
+      "text": "#f4eee9",
+      "text_secondary": "#d0c6cd",
+      "text_muted": "#a69ba6",
+      "accent": "#b34470",
+      "accent_hover": "#c1517d",
+      "accent_pressed": "#9b3a61",
+      "accent_soft": "#3a2231",
+      "success": "#69cf9b",
+      "warning": "#e9b65b",
+      "warning_soft": "#3a2f1c",
+      "danger": "#f3866b",
+      "danger_soft": "#3d2425",
+      "shell": "#141117",
+      "shell_border": "#2a2430",
+      "focus": "#86b4f7",
+      "disabled": "#716779",
+      "name": "深葡萄紫 / 酒红",
+      "roles": {
+        "primary": "#a48ad9",
+        "timeline": "#d6957c",
+        "review": "#c48cb4"
+      },
+      "zones": {
+        "studio": "#cc7f9e",
+        "ai": "#b585c4",
+        "content": "#8aa5b8"
+      },
+      "accent_text": "#ec8db0"
+    },
+    "warm": {
+      "key": "warm",
+      "label": "Warm Cream / Green",
+      "app_background": "#faf7f1",
+      "surface": "#fffefa",
+      "surface_elevated": "#ffffff",
+      "panel": "#f7f3eb",
+      "input_surface": "#f3eee5",
+      "selected": "#e6efe2",
+      "timeline": "#f5f0e7",
+      "media": "#30332f",
+      "border": "#e1d7c8",
+      "border_strong": "#d2c3ae",
+      "text": "#292a27",
+      "text_secondary": "#494943",
+      "text_muted": "#65645d",
+      "accent": "#4f8557",
+      "accent_hover": "#43754b",
+      "accent_pressed": "#396641",
+      "accent_soft": "#f1f6ee",
+      "success": "#4f8557",
+      "warning": "#bd8535",
+      "warning_soft": "#f7edd9",
+      "danger": "#b86555",
+      "danger_soft": "#f7e8e3",
+      "shell": "#fffefa",
+      "shell_border": "#e1d7c8",
+      "focus": "#9fbd9f",
+      "disabled": "#99958d",
+      "name": "暖奶油 / 绿色",
+      "roles": {
+        "primary": "#4a6fc2",
+        "timeline": "#b44d7a",
+        "review": "#a8841c"
+      },
+      "zones": {
+        "studio": "#b25a80",
+        "ai": "#9a5aa6",
+        "content": "#557e8e"
+      },
+      "accent_text": "#4f8557"
+    },
+    "plum": {
+      "key": "plum",
+      "label": "Warm Night / Cream",
+      "app_background": "#262420",
+      "surface": "#302c26",
+      "surface_elevated": "#3a352d",
+      "panel": "#2b2722",
+      "input_surface": "#201d19",
+      "selected": "#3b4634",
+      "timeline": "#242220",
+      "media": "#161411",
+      "border": "#46413a",
+      "border_strong": "#5b5548",
+      "text": "#f1ebdc",
+      "text_secondary": "#d7cfba",
+      "text_muted": "#a59d89",
+      "accent": "#8fb98c",
+      "accent_hover": "#a0c99d",
+      "accent_pressed": "#7ba67a",
+      "accent_soft": "#37402e",
+      "success": "#8fb98c",
+      "warning": "#c9a25e",
+      "warning_soft": "#3f3828",
+      "danger": "#c98573",
+      "danger_soft": "#45322c",
+      "shell": "#211f1b",
+      "shell_border": "#46413a",
+      "focus": "#9db892",
+      "disabled": "#857e6e",
+      "name": "暖夜炭 / 奶油绿",
+      "roles": {
+        "primary": "#bc8fb0",
+        "timeline": "#86b3b4",
+        "review": "#d0a07c"
+      },
+      "zones": {
+        "studio": "#cc7f9e",
+        "ai": "#b585c4",
+        "content": "#8aa5b8"
+      },
+      "accent_text": "#a9d1a6"
+    },
+    "lavender": {
+      "key": "lavender",
+      "label": "Lavender Workspace",
+      "app_background": "#29263a",
+      "surface": "#49445f",
+      "surface_elevated": "#5a5474",
+      "panel": "#353149",
+      "input_surface": "#514b6a",
+      "selected": "#716b91",
+      "timeline": "#302d43",
+      "media": "#171725",
+      "border": "#817aa4",
+      "border_strong": "#9b93bf",
+      "text": "#f9f7ff",
+      "text_secondary": "#e4e0f0",
+      "text_muted": "#d0cbe2",
+      "accent": "#c19bea",
+      "accent_hover": "#d0b2f4",
+      "accent_pressed": "#a97fda",
+      "accent_soft": "#625a80",
+      "success": "#96d0b3",
+      "warning": "#efc47d",
+      "warning_soft": "#6a5e65",
+      "danger": "#ee8a86",
+      "danger_soft": "#6a5267",
+      "shell": "#29263a",
+      "shell_border": "#817aa4",
+      "focus": "#9b93bf",
+      "disabled": "#8d88a6",
+      "name": "薰衣草工作区",
+      "roles": {
+        "primary": "#93bbe4",
+        "timeline": "#e3a68c",
+        "review": "#d9c78f"
+      },
+      "zones": {
+        "studio": "#cc7f9e",
+        "ai": "#b585c4",
+        "content": "#8aa5b8"
+      },
+      "accent_text": "#dcc3f7"
+    },
+    "slate": {
+      "key": "slate",
+      "label": "Slate / Editorial",
+      "app_background": "#20272b",
+      "surface": "#303b41",
+      "surface_elevated": "#3c4a51",
+      "panel": "#273238",
+      "input_surface": "#37454c",
+      "selected": "#4c626c",
+      "timeline": "#202a2f",
+      "media": "#10171a",
+      "border": "#5d747d",
+      "border_strong": "#76909a",
+      "text": "#f2f5f4",
+      "text_secondary": "#ccd7d9",
+      "text_muted": "#b8c6c8",
+      "accent": "#e39a73",
+      "accent_hover": "#f0ae8c",
+      "accent_pressed": "#c77c58",
+      "accent_soft": "#485b62",
+      "success": "#8bc6a3",
+      "warning": "#e5c37b",
+      "warning_soft": "#54564d",
+      "danger": "#ed8a7e",
+      "danger_soft": "#564b4d",
+      "shell": "#20272b",
+      "shell_border": "#5d747d",
+      "focus": "#76909a",
+      "disabled": "#7d929b",
+      "name": "岩灰 / 编辑风格",
+      "roles": {
+        "primary": "#86bfb7",
+        "timeline": "#d3a2b9",
+        "review": "#b5a7da"
+      },
+      "zones": {
+        "studio": "#cc7f9e",
+        "ai": "#b585c4",
+        "content": "#8aa5b8"
+      },
+      "accent_text": "#f2b896"
+    }
+  },
+  "reference_note": "2ByteASR 参考指数：1–100 相对选型参考，不是识别正确率。版本 ref-v2-2026-09-18",
+  "defaults": {
+    "switches": {
+      "enable_qwen_asr_reference": true,
+      "enable_firered_boundary_refinement": true,
+      "show_speaker_labels_in_srt": false,
+      "output_review_track": false,
+      "output_jianying_txt": false,
+      "output_speaker_tracks": false,
+      "dialogue_coverage_mode": "all_dialogue",
+      "enable_ai_polish": true,
+      "use_ai_grouping": true,
+      "unified_glm_processing": true,
+      "prefer_arabic_numbers": true
+    },
+    "performance": {
+      "parallel_cloud_batches": true,
+      "cloud_batch_workers": 4,
+      "parallel_cpu_vad": true,
+      "moss_parallel_workers": 1,
+      "moss_parallel_min_vram_gb": 14,
+      "qwen_asr_batch_size": 8,
+      "parallel_gpu_asr": true,
+      "parallel_gpu_asr_min_vram_gb": 14
+    },
+    "ui": {
+      "language": "zh",
+      "reduce_motion": false
+    }
+  },
+  "api_presets": {
+    "spark_asr_v2": {
+      "short": "讯飞 Spark V2",
+      "label": "讯飞 Spark-ASR-2.0（原生 WSS）",
+      "protocol": "spark_wss",
+      "model": "spark_asr_v2",
+      "url": "wss://iat.cn-huabei-1.xf-yun.com/v1"
+    },
+    "qwen31_filetrans": {
+      "short": "Qwen 3.1 Filetrans",
+      "label": "Qwen Audio 3.1｜长音频转写",
+      "protocol": "dashscope_filetrans",
+      "model": "qwen-audio-3.1-asr-flash-filetrans",
+      "url": "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+    },
+    "groq": {
+      "short": "Groq",
+      "label": "Groq Whisper",
+      "protocol": "openai_transcription",
+      "model": "whisper-large-v3-turbo",
+      "url": "https://api.groq.com/openai/v1/audio/transcriptions"
+    },
+    "openai": {
+      "short": "OpenAI",
+      "label": "OpenAI Transcribe",
+      "protocol": "openai_transcription",
+      "model": "gpt-transcribe",
+      "url": "https://api.openai.com/v1/audio/transcriptions"
+    },
+    "custom": {
+      "short": "兼容 ASR",
+      "label": "自定义 OpenAI 兼容 ASR",
+      "protocol": "openai_transcription",
+      "model": "",
+      "url": "https://example.invalid/v1/audio/transcriptions"
+    },
+    "openrouter_word": {
+      "short": "OpenRouter",
+      "label": "OpenRouter MAI 2.1（模型映射待验证）",
+      "protocol": "openrouter_verbose_json",
+      "model": "",
+      "url": "https://openrouter.ai/api/v1/audio/transcriptions"
+    },
+    "azure": {
+      "short": "Azure",
+      "label": "Azure MAI 2.1（部署映射待验证）",
+      "protocol": "azure_transcription",
+      "model": "",
+      "url": "https://example.invalid/v1/audio/transcriptions"
+    }
+  },
+  "rules": {
+    "shared_api_provider": true,
+    "optional_roles": [
+      "timeline",
+      "review",
+      "speaker"
+    ],
+    "aligner_needs_text": true,
+    "speaker_default": "single"
+  }
+}

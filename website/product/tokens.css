@@ -1,0 +1,401 @@
+/* 2ByteASR product page — design tokens and page primitives.
+   Colours come from the desktop grape theme and its role colour card
+   (twobyteasr/ui_theme.py). No decorative gradients, gradient text or glows:
+   surfaces are flat, depth comes from tone steps, rules and type. */
+@font-face {
+  font-family: "2B Sans";
+  src: url("./fonts/2b-sans-400.woff2") format("woff2");
+  font-weight: 100 449;
+  font-display: swap;
+}
+@font-face {
+  font-family: "2B Sans";
+  src: url("./fonts/2b-sans-500.woff2") format("woff2");
+  font-weight: 450 699;
+  font-display: swap;
+}
+@font-face {
+  font-family: "2B Sans";
+  src: url("./fonts/2b-sans-900.woff2") format("woff2");
+  font-weight: 700 1000;
+  font-display: swap;
+}
+/* The Japanese page sets Japanese in the reader's system Japanese font (no
+   redistributable Japanese face ships with the app; the SC subset would draw
+   kanji in Chinese forms). Only Latin letters, digits and quotes come from
+   the page font, through this unicode-range alias of the same files. */
+@font-face {
+  font-family: "2B Latin";
+  src: url("./fonts/2b-sans-400.woff2") format("woff2");
+  font-weight: 100 449;
+  font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2013, U+2018-201D, U+2212;
+}
+@font-face {
+  font-family: "2B Latin";
+  src: url("./fonts/2b-sans-500.woff2") format("woff2");
+  font-weight: 450 699;
+  font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2013, U+2018-201D, U+2212;
+}
+@font-face {
+  font-family: "2B Latin";
+  src: url("./fonts/2b-sans-900.woff2") format("woff2");
+  font-weight: 700 1000;
+  font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2013, U+2018-201D, U+2212;
+}
+
+:root {
+  color-scheme: dark;
+  /* page tones */
+  --ink-0: #121015;
+  --ink-1: #16121a;
+  --surf-1: #1d1921;
+  --surf-2: #252029;
+  --surf-3: #2f2935;
+  --line: #29232e;
+  --line-2: #3b3442;
+  /* text */
+  --tx: #f4eee9;
+  --tx-2: #cec4cb;
+  --tx-3: #a0949e;
+  --tx-4: #776c77;
+  /* brand: berry belongs to primary actions and selection only */
+  --berry: #b34470;
+  --berry-hi: #c1517d;
+  --berry-tx: #ec8db0;
+  --on-berry: #fff6f9;
+  /* chapter inks: the desktop role card + zone colours */
+  --violet: #a48ad9;
+  --apricot: #d6957c;
+  --mauve: #c48cb4;
+  --sea: #8aa5b8;
+  /* status, never decoration */
+  --ok: #69cf9b;
+  --warn: #e9b65b;
+  --bad: #f3866b;
+  --info: #86b4f7;
+
+  --font-zh: "2B Sans", "Source Han Sans SC", "Noto Sans SC", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-ja: "2B Latin", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Yu Gothic UI", "Yu Gothic", Meiryo, "Noto Sans JP", "Noto Sans CJK JP",
+    sans-serif;
+  --font: var(--font-zh);
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SF Mono", ui-monospace,
+    monospace;
+  --gutter: clamp(20px, 4.5vw, 88px);
+  --max: 1520px;
+  --wide: 1520px;
+  --chapter: clamp(96px, 11vw, 168px);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ch: var(--violet);
+}
+
+/* English uses the same faces as Chinese (their Latin is Source Sans);
+   pwid gives quotes and dashes their proportional Latin widths. */
+/* Set on every English element: the font shorthand (body, .app) resets it. */
+:root:lang(en) :lang(en) {
+  font-variant-east-asian: proportional-width;
+}
+:root:lang(ja) {
+  --font: var(--font-ja);
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SF Mono",
+    "Hiragino Sans", "Yu Gothic UI", Meiryo, monospace;
+}
+/* Chinese sample content (subtitles, glossary terms) on every page. */
+[lang|="zh"] {
+  --font: var(--font-zh);
+  font-family: var(--font-zh);
+  font-variant-east-asian: normal;
+}
+:lang(ja) {
+  line-break: strict;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 84px;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  background: var(--ink-0);
+  color: var(--tx);
+  font: 400 16px/1.7 var(--font);
+  -webkit-font-smoothing: antialiased;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+/* Static paper grain, the one texture the brand keeps. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+#root {
+  position: relative;
+  z-index: 1;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+a {
+  color: inherit;
+}
+img,
+svg {
+  display: block;
+}
+:focus-visible {
+  outline: 2px solid var(--berry-tx);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.icon {
+  flex: none;
+}
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 100;
+  background: var(--tx);
+  color: var(--ink-0);
+  padding: 8px 14px;
+  border-radius: 8px;
+}
+.skip:focus {
+  top: 12px;
+}
+
+/* ── layout ───────────────────────────────────────────── */
+.wrap {
+  max-width: calc(var(--max) + var(--gutter) * 2);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+.wrap-wide {
+  max-width: calc(var(--wide) + var(--gutter) * 2);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* ── buttons (site level) ─────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 20px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--tx);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.18s,
+    border-color 0.18s,
+    color 0.18s;
+}
+.btn:hover {
+  background: var(--surf-2);
+  border-color: #4b4253;
+}
+.btn.primary {
+  background: var(--berry);
+  border-color: var(--berry);
+  color: var(--on-berry);
+}
+.btn.primary:hover {
+  background: var(--berry-hi);
+  border-color: var(--berry-hi);
+}
+.btn.small {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  border-radius: 9px;
+}
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--tx-2);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-2);
+  padding-bottom: 1px;
+}
+.text-link:hover {
+  color: var(--tx);
+  border-color: var(--tx-3);
+}
+
+/* ── sections ───────────────────────────────────────── */
+.sec {
+  position: relative;
+  padding: clamp(96px, 10vw, 168px) 0 clamp(104px, 11vw, 184px);
+  border-top: 1px solid var(--line);
+}
+.sec.tone {
+  background: var(--ink-1);
+}
+.sec-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
+  gap: clamp(32px, 5vw, 96px);
+  align-items: end;
+  margin-bottom: clamp(40px, 4.5vw, 72px);
+}
+.sec-head.solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+.sec-head.solo .sec-lede {
+  max-width: 40em;
+}
+.sec-title {
+  margin: 0 0 22px;
+  font-weight: 900;
+  font-size: clamp(34px, 3.9vw, 64px);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  font-feature-settings: "palt";
+  text-wrap: balance;
+}
+/* Japanese headings: palt already tightens kana; extra negative tracking
+   would make punctuation collide. */
+:lang(ja) .sec-title {
+  letter-spacing: 0;
+}
+.sec-title em,
+.hero h1 em {
+  font-style: normal;
+  color: var(--ch);
+}
+.sec-lede {
+  margin: 0;
+  max-width: 34em;
+  color: var(--tx-3);
+  font-size: clamp(17px, 1.3vw, 20px);
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+.sec-lede strong,
+.hero-lede strong {
+  color: var(--tx);
+  font-weight: 500;
+}
+/* System Japanese fonts have no 500; Semibold keeps the emphasis visible. */
+:lang(ja) .sec-lede strong,
+:lang(ja) .hero-lede strong {
+  font-weight: 600;
+}
+.sec-points {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sec-points li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 2px 14px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+.sec-points li:last-child {
+  border-bottom: 1px solid var(--line);
+}
+.sec-points .icon {
+  grid-row: span 2;
+  color: var(--ch);
+  margin-top: 3px;
+}
+.sec-points b {
+  font-weight: 900;
+  font-size: 17px;
+  color: var(--tx);
+}
+.sec-points span {
+  color: var(--tx-3);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+.sec-body {
+  min-width: 0;
+}
+.note {
+  margin: 16px 0 0;
+  color: var(--tx-4);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* ── reveal (chapter-local entry) ─────────────────────── */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.42s var(--ease),
+    transform 0.42s var(--ease);
+  transition-delay: calc(var(--i, 0) * 60ms);
+}
+[data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+.reduced [data-reveal] {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+.reduced *,
+.reduced *::before,
+.reduced *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+
+@media (max-width: 1000px) {
+  .sec-head {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
