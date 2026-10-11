@@ -68,9 +68,9 @@
 
 ## ダウンロードとクイックスタート
 
-インストーラーは [GitHub Releases](https://github.com/NOTBAD314/2ByteASR/releases) で Windows x64 と macOS Apple Silicon（実験版）向けに公開予定です。0.5.0 プレリリースはまだ公開していないため、現時点では[ソースから実行](#ソースから実行)できます。
+**現在の正式版は 0.6.5 で、今回は Windows x64 のみです。** 最新版は [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest) から入手できます。初回インストールに必要なのは [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe)（約 962 MB、SHA-256 は Release の `SHA256SUMS.txt`）だけです。初めてローカル認識を行うときは、モデルワークショップで選んだ実行環境とモデルを別途ダウンロードします。0.6.0 以前からはアンインストールせずに上書きインストールしてください。0.6.5 以降はアプリ内の「更新を確認」で変更部分だけをダウンロードし、互換性のあるモデルと環境はそのまま使います。インストーラーには Windows のコード署名がないため、「不明な発行元」と表示されることがあります。
 
-1. **インストールして起動。** Windows は Setup を実行。Mac は DMG を開き、`2ByteASR.app` を `Applications` にドラッグして起動します。
+1. **インストールして起動。** Setup を実行してから起動します。
 2. **認識の準備。** モデルワークショップでローカルモデルを準備するか、利用するオンラインサービスを設定します。
 3. **素材を読み込み、文字起こし。** 素材、コンテンツ設定、用語集を選び、認識テキスト、文字のタイミング、話者の結果を確認します。
 4. **字幕スタジオを開く。** 校正、分割・結合、字幕と映像の調整を行い、字幕ファイル、原稿、字幕を焼き込んだ動画を書き出します。
@@ -93,7 +93,7 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-このリポジトリは 0.5.0 の独立したソース範囲で、完全なインストーラーに対応するソース一式ではありません。ここからの完全なビルドも未検証です。[ソースの範囲とビルド条件](SOURCE_ONLY_SCOPE.md)をご確認ください。
+`main` は 0.6.5 以降のアプリのソースです。インストーラーとバイト単位で一致するビルド元はタグ `v0.6.5` で、完全なビルド入力は Release の `2ByteASR-Source-0.6.5.zip` にあります。自作コードは GPL-3.0-only で、Remotion/GSAP 向けの追加許可があります。[PROJECT_LICENSE.md](PROJECT_LICENSE.md) を参照してください。
 
 ## モデル一覧
 

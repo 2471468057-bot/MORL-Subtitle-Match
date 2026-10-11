@@ -68,9 +68,9 @@ Subtitle Studio on the left, the home screen on the right. More screenshots are 
 
 ## Download and quick start
 
-Installers will be published on [GitHub Releases](https://github.com/NOTBAD314/2ByteASR/releases) for Windows x64 and macOS Apple Silicon (experimental). The 0.5.0 pre-release is not public yet; meanwhile you can [run from source](#run-from-source).
+**The current release is 0.6.5, for Windows x64 only.** Get the newest version from the [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest). A first install needs only [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe) (about 962 MB; SHA-256 in the release's `SHA256SUMS.txt`). The first local recognition still downloads the runtime environment and models you choose in the Model workshop. Install 0.6.5 over 0.6.0 or earlier without uninstalling first; from 0.6.5 on, "Check for updates" downloads only the changed parts and keeps compatible models and environments. The installer is not Windows code-signed, so Windows may show an "unknown publisher" prompt.
 
-1. **Install and launch.** On Windows, run the Setup installer. On a Mac, open the DMG, drag `2ByteASR.app` into `Applications`, then launch it.
+1. **Install and launch.** Run the Setup installer, then launch the app.
 2. **Prepare recognition.** Set up local models in the Model workshop, or configure your own online service.
 3. **Import and transcribe.** Choose your media, content settings, and glossary, then check the text, character timing, and speaker results.
 4. **Open Subtitle Studio.** Proofread, split or merge lines, adjust subtitles and video, then export subtitles, a transcript, or a video with subtitles burned in.
@@ -93,7 +93,7 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-This repository is the standalone 0.5.0 source scope. It is not the complete Corresponding Source of the full installer, and a complete build from it has not been verified; see the [source scope and build requirements](SOURCE_ONLY_SCOPE.md).
+`main` holds the application source from 0.6.5 on. The tag `v0.6.5` is the build source that matches the installer byte for byte; the complete build inputs are in the release's `2ByteASR-Source-0.6.5.zip`. Project-owned code is GPL-3.0-only with an additional permission for Remotion/GSAP; see [PROJECT_LICENSE.md](PROJECT_LICENSE.md).
 
 ## Model catalog
 

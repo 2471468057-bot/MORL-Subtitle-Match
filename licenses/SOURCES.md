@@ -92,3 +92,15 @@ Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**�
 当前生产高级字幕仍保留；直接/传递npm包、真实API、compositor/Rust/媒体DLL、Chromium、自动npm安装/备用CLI、两个独立onedir及配对B内部材料已分别核对。现有HTML档案可独立求值，正常Studio宿主仍调用Remotion；最小纯CDP验证不会偷偷替换全部AI功能。原封存Setup/候选/A/B/C声明与自有GPL-3.0-only、0.2.6-test.3分界保持。
 
 [组件、实际材料及发布门](REMOTION_DEPENDENCY_AUDIT.md)。新统一候选保留既有实现并继续标公开发布阻塞；纯源码C不代替内部B及原生对应材料。
+
+## 2026-10-11：0.6.5 对应源码指引（GPLv3 §6(d)）
+
+0.6.5 的 Release 附件提供下列基础源码。只放在第三方服务器上的部分写明位置；确实没有的材料写明“未提供”，不推定已满足。
+
+| 随附程序 | 本项目附件里已有 | 第三方服务器上的对应材料 | 未提供 |
+| --- | --- | --- | --- |
+| `tools/ffmpeg/bin/ffmpeg.exe`、`ffprobe.exe`（gyan.dev 9.0 essentials，GCC 16.1.0/MSYS2） | `2ByteASR-0.5.0-ThirdParty-Sources.zip` 的 `Fixed-Upstream-Archives/ffmpeg-9.0.tar.xz`；库版本见 `ffmpeg -version` 和 [二进制登记](materials/runtime/0.6.5-binary-register.json) | https://www.gyan.dev/ffmpeg/builds/ | gyan 的确切构建脚本与补丁 |
+| `tools/mpv/`（mpv-winbuild-cmake） | 同一附件的 `mpv-7b8915bc1.tar.gz`、`ffmpeg-1d7b14f61.tar.gz` | https://github.com/shinchiro/mpv-winbuild-cmake （构建系统及其对 libplacebo 等的补丁） | 确切构建提交与 libplacebo `-dirty` 改动 |
+| `renderer/node_modules/@remotion/compositor-win32-x64-msvc/`（Remotion 4.0.513，FFmpeg n7.1） | `source-materials/remotion-4.0.513/` 的 `ffmpeg-7.1.tar.xz`、`x265-419182243-source.tar.gz`、GPL 版 rust-ffmpeg-splitter 构建脚本；`source-materials/pyav-17.1.0/x264-source.tar.bz2`（b35605a）；0.5.0 附件里的 `fdk-aac-free-2.0.0.tar.gz`、opus、lame、dav1d、vpx | 实际构建提交的完整脚本：https://github.com/remotion-dev/rust-ffmpeg-splitter/tree/39ddfbb2283857327c5f31635059c399eaab7b4c | x264/x265 预编译库的确切构建参数 |
+| PyAV 17.1.0 随附的 FFmpeg 动态库 | Source 与第三方附件里的对应源码包 | 构建配方：https://github.com/PyAV-Org/pyav-ffmpeg/tree/b84838a003b1626152ef530750d5c3e0022c3db9 | MSYS2 运行库的确切包列表 |
+| Chromium Headless Shell 149.0.7790.0 | 随附 `LICENSE.headless_shell` | https://chromium.googlesource.com/chromium/src/+/refs/tags/149.0.7790.0 | 需源码子组件的逐项映射 |

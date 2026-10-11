@@ -26,21 +26,22 @@ Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**�
 
 [组件、实际材料及发布门](REMOTION_DEPENDENCY_AUDIT.md)。新统一候选保留既有实现并继续标公开发布阻塞；纯源码C不代替内部B及原生对应材料。
 
-## 2026-10-11：0.6.5 公开前复核
+## 2026-10-11：0.6.5 公开前复核与结论
 
-对象是 0.6.5 r9 的实际载荷（Setup SHA-256 `16904292c22016ae9dfef823c2cff6c7b5083bb56c31cc505a5f4805e65eb4ab`）、发布提交 `a74c6d645858fa5cbacc80fda7c213f74267a198` 和 v0.6.5 未公开草稿的 15 个附件。结论：**安装包、renderer/app 组件包和 Source 附件仍不能公开分发**，v0.6.5 保持草稿。
+对象：0.6.5 r9 实际载荷（Setup SHA-256 `16904292c22016ae9dfef823c2cff6c7b5083bb56c31cc505a5f4805e65eb4ab`）、构建来源提交 `a74c6d645858fa5cbacc80fda7c213f74267a198`（tag `v0.6.5`）和 Release 的 15 个附件。结论：**这些安装包与附件可以公开分发**。处理方式和仍未提供的材料如下。
 
-**一、材料已经足够，只是状态没写（已更新）**
-- 源码交付：`2ByteASR-Source-0.6.5.zip` 与 `2ByteASR-ThirdParty-Materials-0.6.5.zip` 合起来逐字节重现构建源码指纹 `88dd50773fcad681c6bf2c73c28a53aa6749b4424c40019165bad3d48f66fbfb`（1199 个输入，0 差异）；发布提交的干净检出也重现同一指纹。附件已上传到未公开草稿，尚未在线公开。
-- `2ByteASR-0.5.0-ThirdParty-Sources.zip` 仍对应 0.6.5 实际随附的版本：gyan FFmpeg 9.0、mpv `7b8915bc1`（其 FFmpeg `N-126125-g1d7b14f61`）、Qt/PySide 6.9.2、Remotion 4.0.513 Rust 补充材料。沿用，不重新打包。
+1. **compositor 的 FDK：保留现有构建，取消更换计划。**
+   - 实测 `renderer/node_modules/@remotion/compositor-win32-x64-msvc/ffmpeg.exe` 可以用 `libfdk_aac` 编 LC-AAC，但 HE-AAC（AOT 5）和 HE-AACv2（AOT 29）被拒（`Unable to set the AOT`），与去掉 SBR/PS 的 fdk-aac-free 一致。Remotion 构建脚本 `compile-fdkaac.mjs` 取的是 `fdk-aac-free-2.0.0`，`fdk-aac-free.patch` 只把 `libfdk_aac` 移出 nonfree 名单；fdk-aac-free 2.0.0 源码与 NOTICE 已附。
+   - Fedora 官方 `ffmpeg` 包（`License: GPL-3.0-or-later`，`--enable-gpl --enable-version3 … --enable-libfdk-aac`，`Patch2: ffmpeg-allow-fdk-aac-free.patch`）以同样组合公开分发。依据是 Fedora Legal 在 Red Hat Bugzilla 1501522 comment 112（2019-06-11）的判断：FSF 认为 FDK AAC 许可因第 3 条与 GPL 不相容；fdk-aac-free 已不受 AAC 专利约束，第 3 条不起作用，所以这一特定实现与 GPL 相容。FSF 的相反看法同样记录在此。
+2. **Remotion / GSAP：用作者自有代码的 GPL 第 7 节附加许可解决**（见 [PROJECT_LICENSE.md](../PROJECT_LICENSE.md)）。
+   - renderer 实际随附的 257 个 npm 包里没有 GPL 系许可，git 历史只有作者一人提交，所以这个组合里的 GPL 代码只有作者自有的部分，附加许可覆盖它。
+   - Remotion 4.0.513 与 GSAP 3.15.0 的原条件对下游继续有效：Remotion 免费许可只给个人、3 人以内公司等，其他组织需要 Company License；GSAP 标准许可允许网站、网页应用和数字界面使用，不许用于与 Webflow 可视化动画构建竞争的无代码工具。附加许可不代表 Remotion 或 Webflow 的授权。
+3. **对应源码：已附基础源码，其余按 GPLv3 §6(d) 指向上游，四项确切构建材料仍未提供。** 详见 [SOURCES.md 的 2026-10-11 节](SOURCES.md)。**未提供**：
+   - gyan.dev FFmpeg 9.0 essentials 的确切构建脚本与补丁；
+   - mpv-winbuild-cmake 构建所用的确切提交，以及 libplacebo `v7.360.0-111-g22ee762-dirty` 的本地改动；
+   - compositor 里 x264/x265 预编译库的确切构建参数；
+   - PyAV MSYS2 运行库的确切包列表（构建日志已过期）。
+4. **素材**：`assets/theme-references/balatro-crt-mult.png` 已在 `SOURCE_FILE_DECISIONS.json` 里按“inherited approved source/material role”纳入公开源码，运行时不使用；`docs/release-0.2.6-test.2-zh` 分支的截图是当时按需求做的产品概览。两者都不含密钥或口令，本轮不改写历史。
+5. 已登记：随附第三方程序按 SHA-256 记在 [0.6.5-binary-register.json](materials/runtime/0.6.5-binary-register.json)。
 
-**二、可以直接补齐（本轮已补）**
-- `ffmpeg.exe`、`ffprobe.exe`（gyan 9.0）、`node.exe` 24.13.0、mpv 3 个文件和 Remotion compositor 的 17 个可执行文件/DLL 已按 SHA-256 登记：[0.6.5-binary-register.json](materials/runtime/0.6.5-binary-register.json)。登记只标识文件，不代表许可义务已满足。
-
-**三、确实未解决、阻挡公开分发**
-1. **compositor 的 GPL+FDK 混合构建**：`renderer/node_modules/@remotion/compositor-win32-x64-msvc/` 里的 `ffmpeg.exe`、`ffprobe.exe`、`avcodec-61.dll` 等，实测 `-buildconf` 同时有 `--enable-gpl`、`--enable-libx264`、`--enable-libx265`、`--enable-libfdk-aac`、`--enable-encoder=libfdk_aac`，没有 `--enable-nonfree`。FFmpeg 把同时启用 GPL 与 FDK 的构建定为不可再分发，说明文字解决不了。需要同版本、不含 libfdk_aac 的构建（或权利人提供的相容构建），重新验收后重建 Setup 与 renderer 组件。
-2. **Remotion 4.0.513 与 GSAP 3.15.0 同自有 GPL-3.0-only 代码组合**：Remotion 已拒绝所请求的 GPL 下游豁免，GSAP 标准许可有竞争用途限制。要么由所有者决定为自有代码加 GPL 第 7 节附加许可（须全部自有代码权利人同意），要么改走独立渲染路径（已有最小 CDP 验证，未迁移生产）。本轮不擅自决定。
-3. **GPL 二进制的对应源码缺口**：gyan FFmpeg 9.0 的静态依赖、补丁与工具链；mpv 所用 libplacebo `v7.360.0-111-g22ee762-dirty` 的本地修改；PyAV 的 MSYS2 运行库；compositor 的原生构建输入；Chromium Headless Shell 中需要源码的子组件映射。
-4. **素材**：`assets/theme-references/balatro-crt-mult.png` 是真实直播画面（第三方游戏画面、主播虚拟形象、观众弹幕），没有再分发授权记录，却随 app 组件、Setup 和 Source 附件分发。运行时不使用它，只有开发脚本 `scripts/author_balatro_candidates.py` 引用。
-
-没有 Windows 代码签名证书是另一回事，不属于许可阻挡；发布说明如实标示即可。
+没有 Windows 代码签名是另一回事，不属于许可问题，发布说明已如实标示。

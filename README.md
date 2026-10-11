@@ -68,9 +68,9 @@
 
 ## 下载与快速开始
 
-安装包将发布在 [GitHub Releases](https://github.com/NOTBAD314/2ByteASR/releases)：Windows x64 与 macOS Apple Silicon（实验版）。0.5.0 预发布目前尚未公开，可以先[从源码运行](#从源码运行)。
+**当前正式版 0.6.5，本轮只提供 Windows x64。** 下载最新版请到 [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest)。第一次安装只需下载 [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe)（约 962 MB，SHA-256 见 Release 中的 `SHA256SUMS.txt`）；第一次本地识别还要在模型工坊下载所选的运行环境和模型。0.6.0 及更早版本直接覆盖安装，不要先卸载；0.6.5 起用程序内“检查更新”，只下载变化的部分，沿用相容的模型与环境。安装包没有 Windows 代码签名，可能出现“未知发布者”提示。
 
-1. **安装并启动。** Windows 运行 Setup 安装包；Mac 打开 DMG，将 `2ByteASR.app` 拖入 `Applications` 后启动。
+1. **安装并启动。** 运行 Setup 安装包后启动。
 2. **准备识别方案。** 在模型工坊准备本地模型，或配置自己的在线服务。
 3. **导入并识别。** 选择素材、内容与词库，检查转写、字词时间和说话人结果。
 4. **进入字幕工作台。** 校对、拆分或合并，调整字幕与画面，再导出字幕、文稿或压制成片。
@@ -93,7 +93,7 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-本仓库是 0.5.0 的独立源码范围，不是完整安装包的全部对应源码，也未验证可直接完整打包，详见[源码范围与构建条件](SOURCE_ONLY_SCOPE.md)。
+`main` 是 0.6.5 起的程序源码；与安装包逐字节对应的构建来源是 tag `v0.6.5`，完整构建输入在 Release 的 `2ByteASR-Source-0.6.5.zip`。自有代码为 GPL-3.0-only，另有针对 Remotion/GSAP 的附加许可，见 [PROJECT_LICENSE.md](PROJECT_LICENSE.md)。
 
 ## 模型目录
 
