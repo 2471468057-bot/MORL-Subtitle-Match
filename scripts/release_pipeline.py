@@ -285,8 +285,7 @@ def cmd_sources(args) -> None:
     stage = Path(freeze["stage"])
     extract = build / "source-extract-check"
     _run([sys.executable, "-B", ROOT / "scripts" / "package_source_attachments.py", "--stage", stage,
-          "--release", assets, "--extract", extract, "--review-commit", args.review_commit,
-          "--exclude-prefix", *args.exclude_prefix])
+          "--release", assets, "--extract", extract, "--review-commit", args.review_commit])
     shutil.rmtree(extract, ignore_errors=True)
     for extra in args.extra or ():
         source = Path(extra)
@@ -505,8 +504,6 @@ def main() -> None:
     p.add_argument("--assets", required=True)
     p.add_argument("--review-commit", required=True)
     p.add_argument("--extra", nargs="*", help="Fixed third-party source archives to ship unchanged")
-    p.add_argument("--exclude-prefix", nargs="*", default=["website/", "tests/"],
-                   help="Non-build attachments left out of the public source package")
     p.set_defaults(func=cmd_sources)
     p = sub.add_parser("sums")
     p.add_argument("--assets", required=True)
