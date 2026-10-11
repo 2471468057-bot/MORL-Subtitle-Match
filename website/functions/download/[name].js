@@ -42,3 +42,7 @@ export async function onRequestGet({ params, env, request }) {
     headers: { location: await downloadUrl(asset, env), "cache-control": "no-store" },
   });
 }
+
+// Download managers often ask with HEAD first; without this the request would
+// fall through to the static site and get the home page.
+export const onRequestHead = onRequestGet;

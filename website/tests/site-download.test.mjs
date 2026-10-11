@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { downloadUrl, latestRelease, summary } from "../server/latest-release.js";
-import { onRequestGet as download } from "../functions/download/[name].js";
+import { onRequestGet as download, onRequestHead } from "../functions/download/[name].js";
 import { onRequestGet as releaseApi } from "../functions/api/release.js";
 
 const REPO = "NOTBAD314/2ByteASR";
@@ -112,6 +112,7 @@ test("/download/windows redirects to the newest installer", async () => {
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), `https://github.com/${REPO}/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe`);
   assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.equal(onRequestHead, download); // HEAD is answered the same way
 });
 
 test("/download/windows explains itself in the visitor's language before the first release", async () => {
