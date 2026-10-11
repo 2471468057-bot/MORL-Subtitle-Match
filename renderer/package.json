@@ -3,7 +3,8 @@
   "version": "0.6.5",
   "private": true,
   "scripts": {
-    "render": "remotion render src/index.ts SubtitleOverlay"
+    "preflight": "node populate-fonts.mjs",
+    "render": "node populate-fonts.mjs && remotion render src/index.ts SubtitleOverlay"
   },
   "dependencies": {
     "@remotion/bundler": "^4.0.0",

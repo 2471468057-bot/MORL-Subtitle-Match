@@ -1,0 +1,4 @@
+# Fonts are populated from ../../assets/fonts/ via populate-fonts.mjs
+*.otf
+*.ttf
+*.woff2
