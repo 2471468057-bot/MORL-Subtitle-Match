@@ -65,6 +65,7 @@ class PreflightResult:
 
 _LOCK = threading.RLock()
 _CACHE = {}  # role -> (environments_hash, PreflightResult)
+_READY_PROBES = {}  # caller key -> ready child-process probe result
 
 
 def project_root():
@@ -409,13 +410,20 @@ def preflight(role):
 
 
 def preflight_roles(roles):
-    """Run preflight for several roles and aggregate the first failure."""
-    failures = []
-    for role in roles:
-        result = preflight(role)
-        if not result.ok:
-            failures.append(result)
-    return failures
+    """Run preflight for several roles and aggregate the first failure.
+
+    Each uncached deep probe starts the role's own interpreter and imports
+    torch (MAIN ~3 s, MOSS ~5 s warm). They are independent processes, so
+    probe them concurrently; failures keep the requested role order.
+    """
+    roles = list(roles)
+    if len(roles) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(roles), thread_name_prefix="env-preflight") as pool:
+            results = list(pool.map(preflight, roles))
+    else:
+        results = [preflight(role) for role in roles]
+    return [result for result in results if not result.ok]
 
 
 def human_message(result):
@@ -453,3 +461,52 @@ def ensure_environment_ready(runtime_settings, *, roles=None):
 def reset_preflight_cache():
     with _LOCK:
         _CACHE.clear()
+        _READY_PROBES.clear()
+
+
+def _stat_identity(path):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def runtime_identity(interpreter):
+    """Identity of an interpreter file and of its site-packages folders.
+
+    Installing, upgrading or removing a package adds or removes entries in
+    site-packages, which changes that folder's modification time.
+    """
+    import glob
+
+    interpreter = os.path.abspath(str(interpreter or ""))
+    folder = os.path.dirname(interpreter)
+    packages = set()
+    for pattern in (("..", "Lib", "site-packages"), ("Lib", "site-packages"),
+                    ("..", "lib", "python*", "site-packages")):
+        packages.update(glob.glob(os.path.join(folder, *pattern)))
+    return (interpreter, _stat_identity(interpreter),
+            tuple((os.path.normpath(path), _stat_identity(path)) for path in sorted(packages)))
+
+
+def reuse_ready_probe(key, probe, is_ready):
+    """Run a child-process readiness probe once per app session per ``key``.
+
+    Each such probe starts the model interpreter and imports torch (2-6 s).
+    Only ready results are kept, so a failure is probed again next time and a
+    repair takes effect at once; callers put interpreter/model/source file
+    identities into ``key``, and environment repair or a model download clears
+    everything through ``reset_preflight_cache``. Returns ``(result, reused)``.
+    """
+    import copy
+
+    with _LOCK:
+        cached = _READY_PROBES.get(key)
+    if cached is not None:
+        return copy.deepcopy(cached), True
+    result = probe()
+    if is_ready(result):
+        with _LOCK:
+            _READY_PROBES[key] = copy.deepcopy(result)
+    return result, False

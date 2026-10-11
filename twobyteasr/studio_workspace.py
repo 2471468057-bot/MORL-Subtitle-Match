@@ -67,6 +67,9 @@ class ResponsiveCueTableView(QTableView):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._selection_paint_token = 0
+        # Two-line reading view by default (2026-10-09, M16); the classic
+        # five-column table stays available.
+        self.reading = False
 
     def expect_selected_rows_paint(self, token: int) -> None:
         self._selection_paint_token = int(token)
@@ -82,6 +85,13 @@ class ResponsiveCueTableView(QTableView):
     def apply_responsive_layout(self) -> None:
         if self.model() is None or self.model().columnCount() < 5:
             return
+        if self.reading:
+            for column in (0, 1, 2, 4):
+                self.setColumnHidden(column, True)
+            self.setColumnHidden(3, False)
+            return
+        for column in (0, 1, 2, 3):
+            self.setColumnHidden(column, False)
         compact = self.viewport().width() < 370
         self.setColumnHidden(4, compact)
         widths = (32, 88, 52) if compact else (36, 88, 66)
@@ -152,10 +162,11 @@ class StudioWorkspaceBuilder:
         back = page._tool_button("fa5s.arrow-left", "返回上一层", page._request_back)
         page.studio_back_button = back
         bar.addWidget(back)
-        page.filename = QLabel("兔白字幕")
+        from .elided_label import ElidedLabel
+        page.filename = ElidedLabel("兔白字幕", minimum=120)
         page.filename.setObjectName("studioFilename")
-        page.filename.setMinimumWidth(170)
-        page.filename.setMaximumWidth(240)
+        page.filename.setMinimumWidth(120)
+        page.filename.setMaximumWidth(420)
         bar.addWidget(page.filename)
         page.filename.installEventFilter(page)
         from .studio_widgets import StudioStatusLabel
@@ -246,7 +257,7 @@ class StudioWorkspaceBuilder:
         find_replace.setObjectName("studioButton")
         find_replace.setStyleSheet("min-width: 86px; padding: 0 4px;")
         find_replace.setIcon(_icon("fa5s.exchange-alt", GREEN))
-        bind_text(find_replace, '查找并替换字幕文字 (Ctrl+H)', property='toolTip')
+        bind_text(find_replace, '查找并替换字幕文字 (Ctrl+F / Ctrl+H)', property='toolTip')
         find_replace.clicked.connect(page._open_find_replace)
         bar.addWidget(find_replace)
         bar.addWidget(page._toolbar_divider())
@@ -296,6 +307,10 @@ class StudioWorkspaceBuilder:
         find_replace_shortcut = QShortcut(QKeySequence("Ctrl+H"), page)
         find_replace_shortcut.activated.connect(page._open_find_replace)
         page._find_replace_shortcut = find_replace_shortcut
+        # Ctrl+F is the usual "find"; it opens the same find/replace tools.
+        find_shortcut = QShortcut(QKeySequence("Ctrl+F"), page)
+        find_shortcut.activated.connect(page._open_find_replace)
+        page._find_shortcut = find_shortcut
         bar.addWidget(page._toolbar_divider())
         export = QPushButton("导出字幕")
         page.studio_export_button = export
@@ -800,20 +815,50 @@ class StudioWorkspaceBuilder:
             lambda:page.timeline.playhead_ms, lambda ms:page._seek(ms/1000.0),
             page.undo_stack, page)
         timeline_layout.addWidget(page.project_range_bar)
-        page.auto_stacking_toggle=QCheckBox('字幕自动避让')
+        # 2026-10-09 (M16, user): I and O already mark the range on the
+        # ruler in green; the in/out row, clear-range, auto-avoid, save-frame
+        # and cover controls leave this extra row. The range is named and
+        # cleared from the timeline context menu, auto-avoid lives in the
+        # timeline options menu, frame/cover become icon buttons.
+        page.project_range_bar.hide()
+        page.auto_stacking_toggle=QCheckBox('新字幕自动避让')
+        page.auto_stacking_toggle.setObjectName('timelineToggleChip')
         page.auto_stacking_toggle.setChecked(True)
-        bind_text(page.auto_stacking_toggle, '保持说话时间不变，把发生空间遮挡的字幕稳定上移；手动固定位置优先', property='toolTip')
+        bind_text(page.auto_stacking_toggle, '仅为新生成字幕保存初始避让位置；人工排版后保持位置。右键可按明确范围重新排版，一次撤销。', property='toolTip')
         def toggle_stacking(checked):
             if page.project:
                 page.project.studio_state['auto_subtitle_stacking']=bool(checked)
                 page._changed()
         page.auto_stacking_toggle.toggled.connect(toggle_stacking)
         page.auto_stacking_toggle.setContextMenuPolicy(Qt.CustomContextMenu)
+        def fill_stacking_menu(menu):
+            from .theme_visual_bounds import start_studio_calibration
+            from .subtitle_layout_ui import open_layout_preview
+            def rearrange(scope):
+                if not page.project:return
+                from .studio_edit_sequence import source_cue_id_of
+                current_id = source_cue_id_of(str(page.selected_cue_id or ''))
+                current = next((c for c in page.project.cues if c.id == current_id), None)
+                if scope == 'all':ids=[c.id for c in page.project.cues]
+                elif scope == 'speaker':ids=[c.id for c in page.project.cues if current and c.speaker_id == current.speaker_id]
+                elif scope == 'selected':
+                    rows=page.cue_table.selectionModel().selectedRows()
+                    ids=[str(page.cue_model.data(page.cue_model.index(row.row(),0),Qt.UserRole)) for row in rows]
+                else:ids=[page.selected_cue_id] if page.selected_cue_id else []
+                open_layout_preview(page, ids)
+            for label,scope in [('当前字幕','current'),('已选字幕','selected'),('当前说话人字幕','speaker'),('全部字幕','all')]:
+                menu.addAction(f'预览重新排版{label}（可撤销）…',lambda _checked=False,s=scope:rearrange(s))
+            menu.addSeparator()
+            from .display_handoff_ui import bridge_short_gaps, open_handoff_preview
+            menu.addAction('预览说话人交接边界（可撤销）…', lambda: open_handoff_preview(page))
+            bridge = menu.addAction('衔接 0.5 秒以内的字幕间隙（防闪烁，可撤销）', lambda: bridge_short_gaps(page))
+            bridge.setToolTip(tr('上一条字幕的结束接到下一条的开始；下一条的开始时间不变'))
+            menu.addAction('测量重叠 HTML 主题装饰…', lambda: start_studio_calibration(page))
+
         def stacking_menu(point):
             from PySide6.QtWidgets import QMenu
-            from .theme_visual_bounds import start_studio_calibration
             menu = QMenu(page.auto_stacking_toggle)
-            menu.addAction('测量重叠 HTML 主题装饰…', lambda: start_studio_calibration(page))
+            fill_stacking_menu(menu)
             menu.exec(page.auto_stacking_toggle.mapToGlobal(point))
         page.auto_stacking_toggle.customContextMenuRequested.connect(stacking_menu)
         def refresh_stacking():
@@ -824,14 +869,12 @@ class StudioWorkspaceBuilder:
             control.setChecked(page.project.studio_state.get('auto_subtitle_stacking',True))
             control.blockSignals(False)
             warnings=project_stack_layout(page.project).warnings
-            bind_text(control, '字幕自动避让 ⚠' if warnings else '字幕自动避让')
-            bind_text(control, '\n'.join(warnings[:8]) if warnings else '发生遮挡的字幕稳定上移；手动固定位置优先。不会改动文字或时间。', property='toolTip')
+            bind_text(control, '新字幕自动避让 ⚠' if warnings else '新字幕自动避让')
+            bind_text(control, '\n'.join(warnings[:8]) if warnings else '仅影响新生成字幕的初始布局；保存的人工位置保持不变。右键可按范围重新排版，一次撤销。', property='toolTip')
         page.project_range_bar._timer.timeout.connect(refresh_stacking)
-        page.project_range_bar.layout().insertWidget(0,page.auto_stacking_toggle)
-        from .frame_export_ui import install_frame_button
-        install_frame_button(page,page.project_range_bar.layout())
-        from .cover_studio import install_cover_button
-        install_cover_button(page,page.project_range_bar.layout())
+        page.auto_stacking_toggle.setParent(page)
+        page.auto_stacking_toggle.hide()
+        page._fill_stacking_menu = fill_stacking_menu
         timeline_toolbar.setContentsMargins(12, 6, 10, 6)
         timeline_title = QLabel("时间轴")
         timeline_title.setObjectName("sectionTitle")
@@ -851,15 +894,28 @@ class StudioWorkspaceBuilder:
         page.add_subtitle_track_button = page._tool_button(
             'fa5s.closed-captioning', '新建字幕轨 · 按 T 在此轨添加字幕', lambda: add_subtitle_track(page))
         timeline_toolbar.addWidget(page.add_subtitle_track_button)
+        page.add_subtitle_button = page._tool_button(
+            'fa5s.plus', '添加字幕 (T) · 在播放头创建字幕块', page._add_subtitle_at_playhead)
+        page.add_subtitle_button.setText(tr('添加字幕'))
+        page.add_subtitle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        timeline_toolbar.addWidget(page.add_subtitle_button)
         page.selection_tool_button = page._tool_button("fa5s.mouse-pointer", "选择工具 (V)", lambda: page._set_timeline_tool("selection"))
-        page.razor_tool_button = page._tool_button("fa5s.cut", "剃刀工具 (C)——按住拖动选切分点，松开切开", lambda: page._set_timeline_tool("razor"))
+        page.track_forward_tool_button = page._tool_button("fa5s.arrow-right", "轨道向前选择 (A) · Shift 单轨", lambda: page._set_timeline_tool("track_forward"))
+        page.razor_tool_button = page._tool_button("fa5s.cut", "剃刀工具 (C)——移动鼠标预览切点与前后文字，点击切开；Esc 取消", lambda: page._set_timeline_tool("razor"))
         # 2026-09-03（用户需求重做）：合并工具点选字幕后按住向左/右拖动即定向
         # 合并；再点击另一条字幕则两点配对。不再拿播放头处的旧选中当合并对象。
         page.merge_tool_button = page._tool_button("fa5s.link", "合并工具 (B)——点选字幕后拖动方向合并", lambda: page._set_timeline_tool("merge"))
-        for button in (page.selection_tool_button, page.razor_tool_button, page.merge_tool_button):
+        for button in (page.selection_tool_button, page.track_forward_tool_button, page.razor_tool_button, page.merge_tool_button):
             button.setCheckable(True)
             timeline_toolbar.addWidget(button)
         page.selection_tool_button.setChecked(True)
+        from .studio_transition_ui import menu as transition_menu
+        transition_button=page._tool_button('fa5s.adjust','转场 · Ctrl+D 视频 / Ctrl+Shift+D 音频',lambda:None)
+        transition_button.setPopupMode(QToolButton.InstantPopup)
+        transition_button.setMenu(transition_menu(page))
+        timeline_toolbar.addWidget(transition_button)
+        page.clip_selection_count=QLabel('')
+        timeline_toolbar.addWidget(page.clip_selection_count)
         timeline_toolbar.addWidget(page._toolbar_divider())
         timeline_toolbar.addWidget(page._tool_button("fa5s.cut", "拆分当前字幕 (Ctrl+Shift+S)", page._split_current))
         timeline_toolbar.addWidget(page._tool_button("fa5s.link", "与下一条合并 (Ctrl+Shift+M)", page._merge_next))
@@ -878,8 +934,10 @@ class StudioWorkspaceBuilder:
         for button in (page.ai_optimize_button, page.reasr_button, page.cue_more_button):
             timeline_toolbar.addWidget(button)
         timeline_toolbar.addWidget(page._toolbar_divider())
-        timeline_toolbar.addWidget(page._tool_button("fa5s.step-backward", "上一帧 (Left)", lambda: page._frame_step(True)))
+        transport_start = page._tool_button("fa5s.step-backward", "上一帧 (Left)", lambda: page._frame_step(True))
+        timeline_toolbar.addWidget(transport_start)
         page.play_button = page._tool_button("fa5s.play", "播放或暂停 (Space)", page._toggle_playback)
+        page.play_button.setProperty("transportRole", "play")
         timeline_toolbar.addWidget(page.play_button)
         timeline_toolbar.addWidget(page._tool_button("fa5s.step-forward", "下一帧 (Right)", lambda: page._frame_step(False)))
         page.position_label = QLabel("00:00:00.000")
@@ -916,26 +974,26 @@ class StudioWorkspaceBuilder:
         bind_text(page.volume_slider, '播放音量', property='toolTip')
         page.volume_slider.valueChanged.connect(page._set_volume)
         timeline_toolbar.addWidget(page.volume_slider)
-        page.audio_diagnostic_button=QPushButton('声音诊断')
-        page.audio_diagnostic_button.setObjectName('studioButton')
+        page.audio_diagnostic_button=QPushButton('声音诊断', page)
+        page.audio_diagnostic_button.hide()
         bind_text(page.audio_diagnostic_button, '启动最多 120 秒本应用状态诊断；再次点击标记异常，不录音', property='toolTip')
         from .audio_diagnostic_marker import AudioDiagnosticMarker
         page.audio_diagnostic_marker=AudioDiagnosticMarker(page,page.audio_diagnostic_button)
-        timeline_toolbar.addWidget(page.audio_diagnostic_button)
         timeline_toolbar.addStretch(1)
         timeline_toolbar.addWidget(page._toolbar_divider())
-        timeline_toolbar.addWidget(page._tool_button("fa5s.search-minus", "缩小时间轴 (Ctrl+滚轮)", lambda: page._zoom_timeline(1.25)))
+        view_start = page._tool_button("fa5s.search-minus", "缩小时间轴 (Ctrl+滚轮)", lambda: page._zoom_timeline(1.25))
+        timeline_toolbar.addWidget(view_start)
         timeline_toolbar.addWidget(page._tool_button("fa5s.search-plus", "放大时间轴 (Ctrl+滚轮)", lambda: page._zoom_timeline(0.8)))
-        fit_button = QPushButton("适应窗口")
-        fit_button.setObjectName("studioButton")
-        bind_text(fit_button, '时间轴适应窗口', property='toolTip')
-        fit_button.clicked.connect(page._fit_timeline)
+        fit_button = page._tool_button("fa5s.compress-arrows-alt", "时间轴适应窗口", page._fit_timeline)
+        page.timeline_fit_button = fit_button
         timeline_toolbar.addWidget(fit_button)
         page.waveform_toggle = QCheckBox("显示波形")
+        page.waveform_toggle.setObjectName("timelineToggleChip")
         page.waveform_toggle.setChecked(True)
         bind_text(page.waveform_toggle, '显示或隐藏紧凑波形轨道', property='toolTip')
         timeline_toolbar.addWidget(page.waveform_toggle)
         page.filmstrip_toggle = QCheckBox('缩略图')
+        page.filmstrip_toggle.setObjectName("timelineToggleChip")
         page.filmstrip_toggle.setChecked(True)
         bind_text(page.filmstrip_toggle, '显示视频缩略图；按视口在后台生成，播放时暂停生成', property='toolTip')
         def toggle_filmstrip(checked):
@@ -947,26 +1005,50 @@ class StudioWorkspaceBuilder:
         page.filmstrip_toggle.toggled.connect(toggle_filmstrip)
         timeline_toolbar.addWidget(page.filmstrip_toggle)
         page.follow_playhead_toggle = QCheckBox("跟随播放头")
+        page.follow_playhead_toggle.setObjectName("timelineToggleChip")
         page.follow_playhead_toggle.setChecked(True)
         bind_text(page.follow_playhead_toggle, '开启时连续跟随；关闭时仅越界翻页，播放头左对齐。字幕选择保持不变。', property='toolTip')
         page.follow_playhead_toggle.toggled.connect(page._follow_toggle_changed)
         timeline_toolbar.addWidget(page.follow_playhead_toggle)
         page.snap_toggle = QCheckBox("吸附")
+        page.snap_toggle.setObjectName("timelineToggleChip")
         page.snap_toggle.setChecked(True)
         bind_text(page.snap_toggle, '拖动字幕时吸附到播放头、相邻边界和静音点（快捷键 S）', property='toolTip')
         page.snap_toggle.toggled.connect(page._toggle_timeline_snap)
         timeline_toolbar.addWidget(page.snap_toggle)
-        refine_button = QPushButton("AI 断句")
-        refine_button.setObjectName("studioButton")
-        bind_text(refine_button, 'LLM 优化断句与句内节奏：拆分长句、给独立语气词加空格（可撤销）', property='toolTip')
-        refine_menu = QMenu(refine_button)
-        act_selected = refine_menu.addAction("选中范围试跑")
-        act_all = refine_menu.addAction("全工程执行")
-        act_selected.triggered.connect(lambda: page.run_sentence_refine(whole_project=False))
-        act_all.triggered.connect(lambda: page.run_sentence_refine(whole_project=True))
-        refine_button.clicked.connect(lambda: refine_menu.exec(refine_button.mapToGlobal(refine_button.rect().bottomLeft())))
-        timeline_toolbar.addWidget(refine_button)
-        # Keep editing / transport / view as three stable groups. Single-cue
+        for toggle, icon_name in ((page.waveform_toggle, 'fa5s.wave-square'), (page.filmstrip_toggle, 'fa5s.film'),
+                                  (page.follow_playhead_toggle, 'fa5s.crosshairs'), (page.snap_toggle, 'fa5s.magnet')):
+            install_themed_icon(toggle, icon_name, 'secondary')
+            toggle.setIconSize(QSize(15, 15))
+        from .frame_export_ui import install_frame_button
+        install_frame_button(page, timeline_toolbar)
+        from .cover_studio import install_cover_button
+        install_cover_button(page, timeline_toolbar)
+        for button in (page.save_frame_button, page.make_cover_button):
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setIconSize(QSize(18, 18))
+        bind_text(page.make_cover_button, '制作封面：当前截图、新建封面或选择模板', property='toolTip')
+        page.timeline_options_button = page._tool_button('fa5s.sliders-h', '时间轴选项 · 新字幕自动避让与重新排版', lambda: None)
+        page.timeline_options_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        options_menu = create_studio_menu(page.timeline_options_button)
+
+        def update_options_menu():
+            options_menu.clear()
+            control = page.auto_stacking_toggle
+            action = options_menu.addAction(control.text())
+            action.setCheckable(True)
+            action.setChecked(control.isChecked())
+            action.setEnabled(page.project is not None)
+            action.setToolTip(control.toolTip())
+            action.toggled.connect(control.setChecked)
+            options_menu.addSeparator()
+            fill_stacking_menu(options_menu)
+
+        options_menu.aboutToShow.connect(update_options_menu)
+        options_menu.setToolTipsVisible(True)
+        page.timeline_options_button.setMenu(options_menu)
+        timeline_toolbar.addWidget(page.timeline_options_button)
+        # Keep the functional command groups stable. Single-cue
         # commands move into a menu without changing their callbacks.
         hidden_timeline=[]
         for i in range(timeline_toolbar.count()):
@@ -987,6 +1069,15 @@ class StudioWorkspaceBuilder:
                 action=cue_menu.addAction(source.icon(),source.toolTip())
                 action.setEnabled(source.isEnabled())
                 action.triggered.connect(lambda _checked=False, button=source:button.click())
+            cue_menu.addSeparator()
+            # AI 断句 moved here from its own bar button (2026-10-08).
+            cue_menu.addAction('AI 断句 · 选中范围试跑', lambda: page.run_sentence_refine(whole_project=False))
+            cue_menu.addAction('AI 断句 · 全工程执行', lambda: page.run_sentence_refine(whole_project=True))
+            retry = cue_menu.addAction('AI 断句 · 仅重试失败范围', lambda: page.run_sentence_refine(whole_project=False, retry_failed=True))
+            retry.setEnabled(bool(page.project and (page.project.studio_state.get('ai_sentence_refine') or {}).get('failed_cue_ids')))
+            cancel = cue_menu.addAction('取消本次 AI 断句', page.cancel_sentence_refine)
+            worker = getattr(page, '_refine_worker', None)
+            cancel.setEnabled(bool(worker is not None and worker.isRunning()))
             cue_menu.addSeparator();cue_menu.addAction('所有字幕操作…',page._show_cue_more_menu)
         cue_menu.aboutToShow.connect(update_cue_menu)
         page.cue_more_button.clicked.disconnect()
@@ -1006,18 +1097,26 @@ class StudioWorkspaceBuilder:
             widget = timeline_toolbar.itemAt(index).widget()
             if isinstance(widget, QPushButton):
                 widget.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                widget.setStyleSheet(widget.styleSheet() + ';padding-left:8px;padding-right:8px;')
             if isinstance(widget, QCheckBox):
                 widget.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         bind_text(page.waveform_toggle, '波形')
         bind_text(page.follow_playhead_toggle, '跟随')
+        from .studio_toolbar_layout import install_command_groups
+        install_command_groups(page,timeline_layout,timeline_toolbar,transport_start,view_start,
+                               toggles_start=page.waveform_toggle, output_start=page.save_frame_button)
         page.timeline = WaveformTimeline()
         page.timeline.interaction_changed.connect(
             page._resource_governor.set_dragging
         )
         page.timeline.cue_selected.connect(page._timeline_cue_clicked)
         page.timeline.subtitle_visibility_changed.connect(page._subtitle_visibility_changed)
+        page.timeline.subtitle_lock_changed.connect(page._schedule_autosave)
         page.timeline.selection_changed.connect(page._timeline_selection_changed)
+        page.timeline.group_move_committed.connect(page._move_selected_clip_group)
+        page.timeline.group_copy_committed.connect(page._copy_selected_clip_group)
+        page.timeline.selection_count_changed.connect(lambda n:bind_text(page.clip_selection_count,'已选 {count} 个片段',count=n) if n else page.clip_selection_count.clear())
+        from .studio_transition_ui import show_properties
+        page.timeline.transition_selected.connect(lambda key:show_properties(page,key))
         from .timeline_scrub import TimelineScrub
         page._timeline_scrub = TimelineScrub(page)
         page.timeline.seek_requested.connect(page._timeline_scrub.request)
@@ -1181,6 +1280,8 @@ class StudioWorkspaceBuilder:
         resume_info_layout = QVBoxLayout(page.resume_info)
         resume_info_layout.setContentsMargins(8, 8, 8, 8)
         resume_info_layout.setSpacing(12)
+        # Center the copy beside the cover instead of leaving a gap under it.
+        resume_info_layout.addStretch(1)
         page.resume_eyebrow = QLabel("最近编辑")
         page.resume_eyebrow.setObjectName("resumeProjectEyebrow")
         resume_info_layout.addWidget(page.resume_eyebrow)
@@ -1193,10 +1294,18 @@ class StudioWorkspaceBuilder:
         page.resume_meta.setObjectName("resumeProjectMeta")
         page.resume_meta.setWordWrap(True)
         resume_info_layout.addWidget(page.resume_meta)
+        # Real project state as a semantic pill; the source file stays plain text.
+        resume_status_row = QHBoxLayout()
+        resume_status_row.setSpacing(10)
+        page.resume_status_pill = QLabel("")
+        page.resume_status_pill.setObjectName("resumeProjectStatusPill")
+        page.resume_status_pill.hide()
+        resume_status_row.addWidget(page.resume_status_pill, 0, Qt.AlignmentFlag.AlignVCenter)
         page.resume_status = QLabel("等待开始")
         page.resume_status.setObjectName("resumeProjectStatus")
         page.resume_status.setWordWrap(True)
-        resume_info_layout.addWidget(page.resume_status)
+        resume_status_row.addWidget(page.resume_status, 1)
+        resume_info_layout.addLayout(resume_status_row)
         resume_actions = QHBoxLayout()
         resume_actions.setSpacing(8)
         page.resume_continue_button = QPushButton("继续编辑")
@@ -1403,7 +1512,16 @@ class StudioWorkspaceBuilder:
         layout.setSpacing(7)
         title = QLabel("字幕列表")
         title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.addWidget(title, 1)
+        page.cue_proofread_button = QPushButton("AI 校对")
+        page.cue_proofread_button.setObjectName("studioButton")
+        install_themed_icon(page.cue_proofread_button, "fa5s.spell-check", "secondary")
+        bind_text(page.cue_proofread_button, 'AI 校对')
+        bind_text(page.cue_proofread_button, '打开当前工程的 AI 词库校对，勾选建议后应用', property='toolTip')
+        page.cue_proofread_button.clicked.connect(page.glossary_proofread_requested.emit)
+        title_row.addWidget(page.cue_proofread_button)
+        layout.addLayout(title_row)
         # 四十二轮：后台识别状态芯片——识别启动后弹窗关闭，运行/完成/失败
         # 状态与取消按钮都落在这里，用户可以继续看视频编辑工程。
         page.recognition_chip = QFrame()
@@ -1460,6 +1578,10 @@ class StudioWorkspaceBuilder:
         filter_button = page._tool_button("fa5s.filter", "筛选当前字幕列表", page._show_filter_menu)
         page.cue_filter_button = filter_button
         search_row.addWidget(filter_button)
+        page.cue_view_button = page._tool_button("fa5s.table", "表格视图 · 关闭后按双行阅读显示（时间、说话人、状态在上，句子在下）",
+                                                  lambda: None)
+        page.cue_view_button.setCheckable(True)
+        search_row.addWidget(page.cue_view_button)
         layout.addLayout(search_row)
 
         page.cue_table = ResponsiveCueTableView()
@@ -1502,6 +1624,38 @@ class StudioWorkspaceBuilder:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             page.cue_table.setColumnWidth(column, width)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        from .studio_cue_table import CueReadingDelegate
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QStyledItemDelegate
+        page.cue_reading_delegate = CueReadingDelegate(page.cue_table)
+        page._cue_text_delegate = QStyledItemDelegate(page.cue_table)
+
+        def set_cue_list_view(mode: str, *, remember: bool = True) -> None:
+            reading = mode != "table"
+            table = page.cue_table
+            table.reading = reading
+            table.setItemDelegateForColumn(3, page.cue_reading_delegate if reading else page._cue_text_delegate)
+            table.horizontalHeader().setVisible(not reading)
+            table.setAlternatingRowColors(not reading)
+            table.setWordWrap(False)
+            table.verticalHeader().setDefaultSectionSize(
+                CueReadingDelegate.row_height(table.font()) if reading else 42)
+            table.setProperty("cueView", "reading" if reading else "table")
+            table.style().unpolish(table)
+            table.style().polish(table)
+            table.apply_responsive_layout()
+            button = page.cue_view_button
+            button.blockSignals(True)
+            button.setChecked(not reading)
+            button.blockSignals(False)
+            if remember:
+                QSettings("2ByteASR", "2ByteASR").setValue("studio/cue_list_view", "reading" if reading else "table")
+            table.viewport().update()
+
+        page._set_cue_list_view = set_cue_list_view
+        page.cue_view_button.toggled.connect(lambda checked: set_cue_list_view("table" if checked else "reading"))
+        set_cue_list_view(str(QSettings("2ByteASR", "2ByteASR").value("studio/cue_list_view", "reading") or "reading"),
+                          remember=False)
         page.cue_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -1606,6 +1760,8 @@ class StudioWorkspaceBuilder:
         page.video_transform_selection_label.setObjectName("videoSelectionSummary")
         page.video_transform_selection_label.setWordWrap(True)
         layout.addWidget(page.video_transform_selection_label)
+        from .studio_transition_ui import create_inspector
+        create_inspector(page,layout)
 
         motion_box = QGroupBox("运动")
         motion_box.setObjectName("videoInspectorSection")

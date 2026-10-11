@@ -7,6 +7,8 @@ import os
 import time
 import hashlib
 import uuid
+import sqlite3
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -245,8 +247,15 @@ class AdvancedPreviewCache:
         budget_bytes: int = DEFAULT_BUDGET_BYTES,
         renderer_service: RendererService | None = None,
     ):
-        default = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "2ByteASR" / "cache" / "advanced-preview"
-        self.root = Path(root or default).resolve()
+        from .storage_service import StorageService, safe_path
+        default_service = StorageService()
+        default = default_service.paths.cache_root / 'advanced-preview'
+        # Preserve lexical ancestry so a linked root never gains ownership.
+        self.root = Path(os.path.abspath(root or default))
+        managed = safe_path(self.root / '.scope-sentinel', default_service.roots)
+        self._globally_managed = managed
+        self._storage = StorageService(paths=default_service.paths, roots=(self.root,),
+            state_root=default_service.state_root if managed else self.root / '.storage')
         self.budget_bytes = max(16 * 1024 * 1024, int(budget_bytes))
         self.renderer_service = renderer_service or GLOBAL_RENDERER_SERVICE
 
@@ -258,7 +267,31 @@ class AdvancedPreviewCache:
         )
 
     def path_for(self, key: str) -> Path:
-        return self.root / f"{key}.png"
+        from .storage_service import safe_path
+        if not str(key) or Path(str(key)).name != str(key):
+            raise ValueError('Preview cache key must be a leaf identifier')
+        path = self.root / f"{key}.png"
+        if not safe_path(path, (self.root,)):
+            raise ValueError('Preview cache path contains a link or escapes its root')
+        self._register_complete(path)
+        return path
+
+    def _register_complete(self, path: Path) -> None:
+        if path.is_file() and path.stat().st_size > 0:
+            try:
+                self._storage.register(path, 'preview', producer='advanced_preview')
+            except (OSError, sqlite3.Error):
+                pass  # Unregistered data stays protected by storage policy.
+
+    @contextmanager
+    def _lease(self, path: Path):
+        # The target is protected before the renderer starts, including when
+        # it is still missing or only partially written. Cross-process leases
+        # use the same index as budget cleanup for this exact cache root.
+        from .storage_service import cache_lease
+        lease = cache_lease(path) if self._globally_managed else self._storage.lease(path)
+        with lease:
+            yield
 
     def snapshot_key(self, snapshot: VisualCueSnapshot, *, relative_ms: int = 300,
                      width: int | None = None, height: int | None = None,
@@ -287,59 +320,70 @@ class AdvancedPreviewCache:
         return int(generation) != int(current_generation)
 
     def enforce_budget(self) -> None:
-        if not self.root.is_dir():
+        from .storage_service import safe_path
+        if not safe_path(self.root / '.scope-sentinel', (self.root,)) or not self.root.is_dir():
             return
-        files = [p for p in self.root.glob("*.png") if p.is_file()]
-        total = sum(p.stat().st_size for p in files)
+        try:
+            scan = self._storage.scan(include_models=False)
+        except (OSError, sqlite3.Error):
+            return  # Maintenance cannot safely proceed without an index.
+        if not scan.complete:
+            return
+        owned = [item for item in scan.items if item.category == 'preview'
+            and item.producer == 'advanced_preview' and Path(item.path).parent == self.root
+            and Path(item.path).suffix == '.png' and item.last_used is not None]
+        total = sum(item.size for item in owned)
         if total <= self.budget_bytes:
             return
-        for path in sorted(files, key=lambda p: p.stat().st_atime):
+        for item in sorted((item for item in owned if item.cleanable), key=lambda item: item.last_used):
             if total <= self.budget_bytes:
                 break
             try:
-                size = path.stat().st_size
-                path.unlink()
-                total -= size
-            except OSError:
-                continue
+                result = self._storage.clean([item])
+            except (OSError, sqlite3.Error):
+                return
+            total -= result.logical_removed_bytes
 
     def render(self, recipe: Mapping[str, object], text: str, *, width: int = 640, height: int = 360,
                fps: float = 30.0, duration_seconds: float = 1.2, font: str = "Microsoft YaHei UI") -> tuple[str, Path, bool]:
         key = self.key(recipe, text, width=width, height=height, fps=fps, duration_seconds=duration_seconds, font=font)
         target = self.path_for(key)
-        if target.is_file() and target.stat().st_size > 0:
-            return key, target, True
-        backend = AdvancedRendererBackend()
-        backend.require_available()
-        self.root.mkdir(parents=True, exist_ok=True)
-        normalized = _normalized_recipe(recipe)
-        normalized["typography"]["fontFamily"] = font
-        props = {
-            "schemaVersion": 1, "width": width, "height": height, "fps": fps,
-            "durationInFrames": max(1, round(duration_seconds * fps)),
-            "cues": [{"id": "preview", "text": text, "startMs": 0,
-                      "endMs": round(duration_seconds * 1000), "styleId": "preview-style"}],
-            "recipes": {"preview-style": normalized},
-        }
-        job = RendererJob(
-            str(target), props, max(1, round(fps * 0.35)),
-            job_id=uuid.uuid4().hex,
-            job_kind="thumbnail",
-            cue_id="preview",
-            requested_at=time.time(),
-        )
-        result = self.renderer_service.render(
-            [job],
-            snapshot_identity=key,
-            render_type="still",
-            resolution=(width, height),
-            batch_group=f"legacy-preview:{key}",
-            timeout=120.0,
-        )
-        result.require_job(job)
-        if not target.is_file() or target.stat().st_size <= 0:
-            raise RuntimeError("Persistent renderer did not publish the preview frame")
-        return key, target, False
+        with self._lease(target):
+            if target.is_file() and target.stat().st_size > 0:
+                return key, target, True
+            backend = AdvancedRendererBackend()
+            backend.require_available()
+            self.root.mkdir(parents=True, exist_ok=True)
+            normalized = _normalized_recipe(recipe)
+            normalized["typography"]["fontFamily"] = font
+            props = {
+                "schemaVersion": 1, "width": width, "height": height, "fps": fps,
+                "durationInFrames": max(1, round(duration_seconds * fps)),
+                "cues": [{"id": "preview", "text": text, "startMs": 0,
+                          "endMs": round(duration_seconds * 1000), "styleId": "preview-style"}],
+                "recipes": {"preview-style": normalized},
+            }
+            job = RendererJob(
+                str(target), props, max(1, round(fps * 0.35)),
+                job_id=uuid.uuid4().hex,
+                job_kind="thumbnail",
+                cue_id="preview",
+                requested_at=time.time(),
+            )
+            result = self.renderer_service.render(
+                [job],
+                snapshot_identity=key,
+                render_type="still",
+                resolution=(width, height),
+                batch_group=f"legacy-preview:{key}",
+                timeout=120.0,
+            )
+            result.require_job(job)
+            if not target.is_file() or target.stat().st_size <= 0:
+                raise RuntimeError("Persistent renderer did not publish the preview frame")
+            self.path_for(key)
+            self.enforce_budget()
+            return key, target, False
 
     @staticmethod
     def _snapshot_props(
@@ -385,45 +429,43 @@ class AdvancedPreviewCache:
         )
         key = identity.request_key
         target = self.path_for(key)
-        if target.is_file() and target.stat().st_size > 0 and not force:
-            try:
-                os.utime(target, None)
-            except OSError:
-                pass
-            return key, target, True
-        backend = AdvancedRendererBackend()
-        backend.require_available()
-        self.root.mkdir(parents=True, exist_ok=True)
-        props, duration_in_frames = self._snapshot_props(snapshot, width=width, height=height)
-        preview_frame = min(
-            duration_in_frames - 1,
-            max(0, round(max(0, int(relative_ms)) * snapshot.fps / 1000.0)),
-        )
-        job = RendererJob(
-            str(target), props, preview_frame,
-            job_id=identity.job_id,
-            job_kind=identity.job_kind,
-            cue_id=identity.cue_id,
-            project_id=identity.project_id,
-            appearance_generation=identity.appearance_generation,
-            snapshot_hash=identity.snapshot_hash,
-            graph_hash=identity.graph_hash,
-            requested_at=identity.requested_at,
-        )
-        result = self.renderer_service.render(
-            [job],
-            generation=generation,
-            snapshot_identity=key,
-            render_type="still",
-            resolution=(width, height),
-            batch_group=batch_group or f"cue-fidelity:{snapshot.cue_id}",
-            timeout=120.0,
-        )
-        result.require_job(job)
-        if not target.is_file() or target.stat().st_size <= 0:
-            raise RuntimeError("Persistent renderer did not publish the cue frame")
-        self.enforce_budget()
-        return key, target, False
+        with self._lease(target):
+            if target.is_file() and target.stat().st_size > 0 and not force:
+                return key, target, True
+            backend = AdvancedRendererBackend()
+            backend.require_available()
+            self.root.mkdir(parents=True, exist_ok=True)
+            props, duration_in_frames = self._snapshot_props(snapshot, width=width, height=height)
+            preview_frame = min(
+                duration_in_frames - 1,
+                max(0, round(max(0, int(relative_ms)) * snapshot.fps / 1000.0)),
+            )
+            job = RendererJob(
+                str(target), props, preview_frame,
+                job_id=identity.job_id,
+                job_kind=identity.job_kind,
+                cue_id=identity.cue_id,
+                project_id=identity.project_id,
+                appearance_generation=identity.appearance_generation,
+                snapshot_hash=identity.snapshot_hash,
+                graph_hash=identity.graph_hash,
+                requested_at=identity.requested_at,
+            )
+            result = self.renderer_service.render(
+                [job],
+                generation=generation,
+                snapshot_identity=key,
+                render_type="still",
+                resolution=(width, height),
+                batch_group=batch_group or f"cue-fidelity:{snapshot.cue_id}",
+                timeout=120.0,
+            )
+            result.require_job(job)
+            if not target.is_file() or target.stat().st_size <= 0:
+                raise RuntimeError("Persistent renderer did not publish the cue frame")
+            self._register_complete(target)
+            self.enforce_budget()
+            return key, target, False
 
     def render_snapshot_batch(
         self,
@@ -436,67 +478,65 @@ class AdvancedPreviewCache:
         job_kind: str = "card_preview",
     ) -> list[tuple[str, Path, bool]]:
         """Render all cache misses through one warm browser request."""
-        if not requests:
-            return []
-        backend = AdvancedRendererBackend()
-        backend.require_available()
-        self.root.mkdir(parents=True, exist_ok=True)
-        results: list[tuple[str, Path, bool] | None] = [None] * len(requests)
-        jobs: list[RendererJob] = []
-        job_indexes: list[int] = []
-        keys: list[str] = []
-        resolution = (0, 0)
-        for index, (snapshot, relative_ms, width, height) in enumerate(requests):
-            width, height = max(1, int(width)), max(1, int(height))
-            resolution = (width, height)
-            identity = self.identity(
-                snapshot, relative_ms=relative_ms, width=width, height=height,
-                job_kind=job_kind,
-            )
-            key = identity.request_key
-            target = self.path_for(key)
-            if target.is_file() and target.stat().st_size > 0 and not force:
-                try:
-                    os.utime(target, None)
-                except OSError:
-                    pass
-                results[index] = (key, target, True)
-                continue
-            props, duration_in_frames = self._snapshot_props(snapshot, width=width, height=height)
-            preview_frame = min(
-                duration_in_frames - 1,
-                max(0, round(max(0, int(relative_ms)) * snapshot.fps / 1000.0)),
-            )
-            jobs.append(RendererJob(
-                str(target), props, preview_frame,
-                job_id=identity.job_id,
-                job_kind=identity.job_kind,
-                cue_id=identity.cue_id,
-                project_id=identity.project_id,
-                appearance_generation=identity.appearance_generation,
-                snapshot_hash=identity.snapshot_hash,
-                graph_hash=identity.graph_hash,
-                requested_at=identity.requested_at,
-            ))
-            job_indexes.append(index)
-            keys.append(key)
-        if jobs:
-            renderer_result = self.renderer_service.render(
-                jobs,
-                generation=generation,
-                snapshot_identity=_hash_key(*(keys or [batch_group])),
-                render_type=render_type,
-                resolution=resolution,
-                batch_group=batch_group,
-                timeout=120.0,
-            )
-            for job in jobs:
-                renderer_result.require_job(job)
-            for result_index, request_index in enumerate(job_indexes):
-                key = keys[result_index]
+        with ExitStack() as leases:
+            if not requests:
+                return []
+            backend = AdvancedRendererBackend()
+            backend.require_available()
+            self.root.mkdir(parents=True, exist_ok=True)
+            results: list[tuple[str, Path, bool] | None] = [None] * len(requests)
+            jobs: list[RendererJob] = []
+            job_indexes: list[int] = []
+            keys: list[str] = []
+            resolution = (0, 0)
+            for index, (snapshot, relative_ms, width, height) in enumerate(requests):
+                width, height = max(1, int(width)), max(1, int(height))
+                resolution = (width, height)
+                identity = self.identity(
+                    snapshot, relative_ms=relative_ms, width=width, height=height,
+                    job_kind=job_kind,
+                )
+                key = identity.request_key
                 target = self.path_for(key)
-                if not target.is_file() or target.stat().st_size <= 0:
-                    raise RuntimeError(f"Persistent renderer did not publish batch item {result_index}")
-                results[request_index] = (key, target, False)
-        self.enforce_budget()
-        return [item for item in results if item is not None]
+                leases.enter_context(self._lease(target))
+                if target.is_file() and target.stat().st_size > 0 and not force:
+                    results[index] = (key, target, True)
+                    continue
+                props, duration_in_frames = self._snapshot_props(snapshot, width=width, height=height)
+                preview_frame = min(
+                    duration_in_frames - 1,
+                    max(0, round(max(0, int(relative_ms)) * snapshot.fps / 1000.0)),
+                )
+                jobs.append(RendererJob(
+                    str(target), props, preview_frame,
+                    job_id=identity.job_id,
+                    job_kind=identity.job_kind,
+                    cue_id=identity.cue_id,
+                    project_id=identity.project_id,
+                    appearance_generation=identity.appearance_generation,
+                    snapshot_hash=identity.snapshot_hash,
+                    graph_hash=identity.graph_hash,
+                    requested_at=identity.requested_at,
+                ))
+                job_indexes.append(index)
+                keys.append(key)
+            if jobs:
+                renderer_result = self.renderer_service.render(
+                    jobs,
+                    generation=generation,
+                    snapshot_identity=_hash_key(*(keys or [batch_group])),
+                    render_type=render_type,
+                    resolution=resolution,
+                    batch_group=batch_group,
+                    timeout=120.0,
+                )
+                for job in jobs:
+                    renderer_result.require_job(job)
+                for result_index, request_index in enumerate(job_indexes):
+                    key = keys[result_index]
+                    target = self.path_for(key)
+                    if not target.is_file() or target.stat().st_size <= 0:
+                        raise RuntimeError(f"Persistent renderer did not publish batch item {result_index}")
+                    results[request_index] = (key, target, False)
+            self.enforce_budget()
+            return [item for item in results if item is not None]

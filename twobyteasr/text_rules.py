@@ -49,14 +49,18 @@ __all__ = [
 ]
 
 def clean_subtitle_text(text):
-    """保留问号、叹号和省略号，去掉不适合剪映短字幕的普通句读。"""
+    """保留问号、叹号、数字分隔符和省略号，去掉普通句读。"""
     forbidden = """《》〈〉【】[]（）(){}“”‘’\"`·・•、，。；：:;,—~～"""
     text = str(text).replace("\r", " ").replace("\n", " ")
     # Deleting a comma between spoken numbers concatenated independent events
     # before the Chinese parser (二十，二十 -> 二十二十 -> 40).
     text = re.sub(r'(?<=[零〇一二两三四五六七八九十百千万亿0-9])[，,、](?=[零〇一二两三四五六七八九十百千万亿0-9])', '\ue000', text)
+    # A ratio separator belongs to the numerical expression. Removing it
+    # before number formatting turns 二:三 into the ambiguous event 二三.
+    text = re.sub(r'(?<=[零〇一二两三四五六七八九十百千万亿0-9])[:：](?=[零〇一二两三四五六七八九十百千万亿0-9])', '\ue001', text)
     text = text.translate(str.maketrans("", "", forbidden))
     text = text.replace('\ue000', '，')
+    text = text.replace('\ue001', ':')
     text = text.replace("……", "...").replace("…", "...")
     text = re.sub(r"\.{4,}", "...", text)
     text = re.sub(r"(?<![A-Za-z0-9.])\.(?!\.)", "", text)
@@ -154,15 +158,14 @@ NUMBER_CONTEXT_SUFFIXES = set(
 )
 
 
-# 最终显示主动数字化抽卡数量、金额和带“百/千/万/亿”的明确三位数以上数值。
-# 普通口语中的“一点、一个黄、三连”，以及“万物、万色”等词仍保持中文。
+# Compatibility constants; the shared conservative policy owns formatting.
 OUTPUT_ARABIC_NUMBER_SUFFIXES = frozenset(("命", "抽", "元", "块"))
 
 
 OUTPUT_ARABIC_STANDALONE_VALUES = frozenset(("648",))
 
 
-OUTPUT_ARABIC_LARGE_NUMBER_MIN_VALUE = 100
+OUTPUT_ARABIC_LARGE_NUMBER_MIN_VALUE = 10
 
 
 # 校对阶段重点保护容易被同音字破坏的游戏数量；“一段话”等普通结构不锁死。
@@ -376,19 +379,13 @@ def chinese_numeral_value(token):
 
 
 def format_arabic_quantity(value_text, source_token=""):
-    """Format plain large values while preserving spoken Chinese 万/亿 phrases."""
+    """Compatibility helper using the conservative ordinary-integer threshold."""
     try:
         value = int(str(value_text))
     except (TypeError, ValueError):
         return str(value_text)
-    token = str(source_token or "")
-    if "万" in token or "亿" in token:
-        return token
-    if "亿" in token and value % 100000000 == 0 and value >= 100000000:
-        return f"{value // 100000000}亿"
-    if ("万" in token or value >= 10000) and value % 10000 == 0 and value >= 10000:
-        # 三百万 -> 300万；六十七万 -> 67万；五千万 -> 5000万
-        return f"{value // 10000}万"
+    if 0 <= value < OUTPUT_ARABIC_LARGE_NUMBER_MIN_VALUE and source_token:
+        return str(source_token)
     return str(value)
 
 
@@ -444,112 +441,14 @@ def _arabic_integer_to_chinese(value):
 
 
 def normalize_numeric_style(text):
-    """Use Arabic digits for UI stats, but never emit hybrids such as ``1万``."""
-    result = str(text or "")
-    numeral = r"[零〇一二两三四五六七八九十百千万亿]+"
-
-    def stat_replace(match):
-        value = chinese_numeral_value(match.group("number"))
-        return match.group("prefix") + (value if value is not None else match.group("number"))
-
-    result = re.sub(
-        rf"(?P<prefix>威力(?:增加|加)|伤害(?:增加|加)|生命值(?:增加|加)|能量(?:增加|加))"
-        rf"(?P<number>{numeral})",
-        stat_replace,
-        result,
-    )
-    result = re.sub(
-        rf"(?P<prefix>回复|恢复)(?P<number>{numeral})(?=生命值|[%％])",
-        stat_replace,
-        result,
-    )
-
-    def magnitude_replace(match):
-        multiplier = 10000 if match.group("unit") == "万" else 100000000
-        return _arabic_integer_to_chinese(int(match.group("number")) * multiplier)
-
-    return re.sub(
-        r"(?<![\d.])(?P<number>\d+)(?P<unit>万|亿)(?![\d.])",
-        magnitude_replace,
-        result,
-    )
+    """Compatibility entry; never apply the retired aggressive UI-stat rules."""
+    return normalize_chinese_numbers(text)
 
 
-def normalize_chinese_numbers(text):
-    """
-    把明确的抽卡数量、金额和三位数以上数值改为阿拉伯数字。
-
-    已由 ASR 输出的阿拉伯数字不会经过本函数；中文的普通数量和固定词保持原样，
-    例如“三连、一个黄、一个一个、一点、万物、万色”。
-    “万/亿”数量保留自然中文写法，避免出现 1万、300万这种中阿混写。
-    """
-    pattern = re.compile(r"[零〇一二两三四五六七八九十百千万亿]+")
-
-    def split_repeated_large_units(token):
-        """把连续报出的金额拆开，禁止把相邻数词当成一道加法题。"""
-        for unit in ("万", "亿"):
-            if token.count(unit) < 2:
-                continue
-            parts = []
-            start = 0
-            for index, char in enumerate(token):
-                if char != unit:
-                    continue
-                parts.append(token[start : index + 1])
-                start = index + 1
-            if start < len(token):
-                parts.append(token[start:])
-            result = []
-            for part in parts:
-                result.extend(split_repeated_large_units(part))
-            return [part for part in result if part]
-        return [token]
-
-    def normalize_token(token, after):
-        # 万物/万色/万一 等非数量不转
-        if token in {"万", "亿"}:
-            return token
-        if (
-            token.startswith("万")
-            and len(token) > 1
-            and token[1] not in CHINESE_NUMBER_DIGITS
-            and token[1] not in CHINESE_NUMBER_UNITS
-        ):
-            return token
-        value = chinese_numeral_value(token)
-        if value is None:
-            return token
-        if after in OUTPUT_ARABIC_NUMBER_SUFFIXES:
-            return (
-                format_arabic_quantity(value, token)
-                if ("万" in token or "亿" in token)
-                else value
-            )
-        if value in OUTPUT_ARABIC_STANDALONE_VALUES:
-            return value
-        if (
-            token[0] in CHINESE_NUMBER_DIGITS
-            and any(char in CHINESE_NUMBER_UNITS for char in token)
-            and int(value) >= OUTPUT_ARABIC_LARGE_NUMBER_MIN_VALUE
-        ):
-            return format_arabic_quantity(value, token)
-        return token
-
-    def replace(match):
-        token = match.group(0)
-        before = text[match.start() - 1 : match.start()]
-        after = text[match.end() : match.end() + 1]
-        if before == "几" or after == "几":
-            return token
-        parts = split_repeated_large_units(token)
-        if len(parts) == 1:
-            return normalize_token(token, after)
-        return "".join(
-            normalize_token(part, after if index == len(parts) - 1 else "")
-            for index, part in enumerate(parts)
-        )
-
-    return pattern.sub(replace, text)
+def normalize_chinese_numbers(text, *, protected_terms=()):
+    """Use the same small-integer, exception and approximate policy as production."""
+    from .number_fidelity import format_numbers
+    return format_numbers(text, protected_terms=protected_terms)[0]
 
 
 def numeral_token_keys(text):
@@ -693,17 +592,8 @@ def collapse_excessive_adjacent_repetitions(text):
 
 
 def normalize_output_text(text):
-    """执行成片规则，并格式化明确的抽卡、金额及三位数以上数值。"""
+    """执行文字清理；数字拼写只交给共用且可关闭的显式阶段。"""
     text = simplify_chinese(clean_subtitle_text(text)).replace("呃", "")
-    # 直播口语里的紧凑“十九八”不是十八，而是倒计时“十、九、八”。
-    # 只接受这个完整、单调递减的三拍模式，避免把普通中文数量泛化改写。
-    text = re.sub(
-        r"(?<![零〇一二两三四五六七八九十百千万亿\d])"
-        r"十[、，,\s]*九[、，,\s]*八"
-        r"(?![零〇一二两三四五六七八九十百千万亿\d])",
-        "10 9 8",
-        text,
-    )
     # “上舰”是直播会员语境中的固定动作。仅修正带倒计时的完整短语，
     # 不对普通“剑/线”做全局同音替换。
     text = text.replace("十秒内不上剑", "十秒内不上舰")

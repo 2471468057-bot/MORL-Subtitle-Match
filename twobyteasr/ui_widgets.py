@@ -60,11 +60,13 @@ _CATEGORY_LABELS = {
     "common": "常用词",
     "block": "方块",
     "other": "其他",
+    "player_id": "选手 ID",
+    "person": "人物",
 }
 
 _VISIBLE_CATEGORIES = {
     "角色", "Boss", "物品", "方块", "阵营", "地点",
-    "模型", "人物", "事件", "其他",
+    "模型", "人物", "选手 ID", "技能", "事件", "其他",
 }
 
 
@@ -96,6 +98,20 @@ class SwitchControl(QAbstractButton):
         self._animation.valueChanged.connect(self._set_progress)
         self.toggled.connect(self._animate_to_state)
         self.setAccessibleName(text)
+
+    def setChecked(self, checked: bool):
+        # Configuration restore frequently blocks signals. Visual state must
+        # therefore follow the checked API itself, not only the toggled signal.
+        super().setChecked(bool(checked))
+        self._sync_visual_state()
+
+    def _sync_visual_state(self):
+        self._animation.stop()
+        self._set_progress(1.0 if self.isChecked() else 0.0)
+
+    def showEvent(self, event):
+        self._sync_visual_state()
+        super().showEvent(event)
 
     def sizeHint(self):
         width = 62 + self.fontMetrics().horizontalAdvance(self.text())
@@ -160,7 +176,10 @@ class SwitchControl(QAbstractButton):
         else:
             fill, edge, thumb = off_fill, off_edge, off_thumb
         if not self.isEnabled():
-            fill, edge, thumb = QColor(theme.panel), QColor(theme.border), QColor(theme.disabled)
+            # Disabled is an interaction state, not a change in user choice.
+            fill.setAlpha(150)
+            edge.setAlpha(150)
+            thumb.setAlpha(150)
         painter.setPen(QPen(edge, 1.4))
         painter.setBrush(fill)
         painter.drawRoundedRect(track, 12, 12)

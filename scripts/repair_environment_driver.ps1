@@ -1,7 +1,7 @@
 ﻿# ASCII-only driver. Invoked with -File from Python.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][ValidateSet("main","moss","firered_llm","nemotron")][string]$Role,
+    [Parameter(Mandatory=$true)][ValidateSet("main","moss","firered_llm")][string]$Role,
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][string]$StagingPath
 )

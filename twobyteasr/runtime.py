@@ -20,6 +20,8 @@ class RuntimeContext:
     game_name: str = ""
     enable_domain_terms: bool = False
     enabled_glossary_ids: list[str] = field(default_factory=list)
+    # Immutable content, stable IDs and revisions, owned by this queue.
+    glossary_snapshot: Any | None = None
     discovered_terms: set[str] = field(default_factory=set)
     output_review_track: bool = False
     output_jianying_txt: bool = False
@@ -40,6 +42,13 @@ class RuntimeContext:
     asr_manifest_key: str = ""
     speaker_recovery: dict[str, Any] = field(default_factory=dict)
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    media_path: str = ""
+    media_index: int = 1
+    media_identity: dict[str, Any] = field(default_factory=dict)
+    media_identities: dict[Any, dict[str, Any]] = field(default_factory=dict, repr=False)
+    media_identity_lock: Any = field(default_factory=threading.RLock, repr=False)
+    committed_result_ref: dict[str, Any] = field(default_factory=dict)
+    identity_task_active: bool = False
     provider_snapshot: Any | None = None
     provider_snapshots: dict[str, Any] = field(default_factory=dict)
     # Task-private audio-ASR credential snapshot; never persisted to projects.
@@ -47,6 +56,8 @@ class RuntimeContext:
     asr_settings_snapshot: dict[str, Any] = field(default_factory=dict,repr=False)
     terminology_status: dict[str, Any] = field(default_factory=dict)
     polishing_summary: dict[str, Any] = field(default_factory=dict)
+    # Local glossaries never imply permission to perform optional web searches.
+    enable_term_search: bool = False
 
     def reset_for_media(self) -> None:
         """Clear output/report state while retaining queue-wide discovered terms."""
@@ -56,9 +67,11 @@ class RuntimeContext:
         self.speaker_recovery.clear()
         self.terminology_status.clear()
         self.polishing_summary.clear()
+        self.committed_result_ref.clear()
 
 
 _CONTEXT_LOCK = threading.RLock()
+_OPERATION_LOCK = threading.RLock()
 _ACTIVE_CONTEXT = RuntimeContext()
 
 
@@ -73,6 +86,7 @@ def runtime_context_from_legacy(legacy: Any) -> RuntimeContext:
     return RuntimeContext(
         game_name=str(getattr(legacy, "RUNTIME_GAME_NAME", "") or ""),
         enable_domain_terms=bool(getattr(legacy, "RUNTIME_ENABLE_DOMAIN_TERMS", False)),
+        enable_term_search=bool(getattr(legacy, "RUNTIME_ENABLE_TERM_SEARCH", False)),
         enabled_glossary_ids=list(
             getattr(legacy, "RUNTIME_ENABLED_GLOSSARY_IDS", ()) or ()
         ),
@@ -106,6 +120,7 @@ def sync_legacy_runtime(legacy: Any, context: RuntimeContext) -> None:
     """Mirror the active context for callers that still use the old attributes."""
     legacy.RUNTIME_GAME_NAME = context.game_name
     legacy.RUNTIME_ENABLE_DOMAIN_TERMS = context.enable_domain_terms
+    legacy.RUNTIME_ENABLE_TERM_SEARCH = context.enable_term_search
     legacy.RUNTIME_ENABLED_GLOSSARY_IDS = list(context.enabled_glossary_ids)
     legacy.RUNTIME_DISCOVERED_TERMS = context.discovered_terms
     legacy.RUNTIME_OUTPUT_REVIEW_TRACK = context.output_review_track
@@ -131,6 +146,8 @@ def activate_runtime_context(
 ) -> Iterator[RuntimeContext]:
     """Activate a queue context and restore the previous one on every exit path."""
     global _ACTIVE_CONTEXT
+    if not _OPERATION_LOCK.acquire(blocking=False):
+        raise RuntimeError("已有识别或校对任务运行中，请待其结束后重试。")
     with _CONTEXT_LOCK:
         previous = _ACTIVE_CONTEXT
         _ACTIVE_CONTEXT = context
@@ -143,6 +160,7 @@ def activate_runtime_context(
             _ACTIVE_CONTEXT = previous
             if legacy is not None:
                 sync_legacy_runtime(legacy, previous)
+        _OPERATION_LOCK.release()
 
 
 __all__ = [

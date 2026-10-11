@@ -74,6 +74,11 @@ class FrameCaptureController(QObject):
 def install_frame_button(page,layout):
     controller=FrameCaptureController(page);page.frame_capture=controller
     button=QToolButton();bind_text(button, '保存当前帧');bind_text(button, '保存工程画布原分辨率图片（Ctrl+Alt+F）', property='toolTip')
+    button.setObjectName('rangeAction')
+    from .themed_icons import install_themed_icon
+    install_themed_icon(button, 'fa5s.camera', 'secondary')
+    from PySide6.QtCore import Qt
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.setPopupMode(QToolButton.MenuButtonPopup);button.clicked.connect(controller.save)
     menu=QMenu(button)
     subtitles=menu.addAction('包含软件字幕');subtitles.setCheckable(True)

@@ -1,0 +1,461 @@
+{
+  "schema_version": 1,
+  "components": {
+    "vibevoice_1_5b": {
+      "repository": "microsoft/VibeVoice-ASR-Streaming-1.5B",
+      "revision": "4262d23d8a539a6530cf64fbd0b1751ef9a30853",
+      "path": "models/VibeVoice-ASR-Streaming-1.5B",
+      "required_files": [
+        "README.md",
+        "added_tokens.json",
+        "config.json",
+        "merges.txt",
+        "model-00001-of-00003.safetensors",
+        "model-00002-of-00003.safetensors",
+        "model-00003-of-00003.safetensors",
+        "model.safetensors.index.json",
+        "preprocessor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "sha256": {
+        "README.md": "5e4050aec9e328c5e6ef21973ee6c97660bfcd587da9610a585e028ae97f24c1",
+        "added_tokens.json": "d5401f76119bc71e1844d8e909826f8cb3d68e152a058fe228cc37f74603ca84",
+        "config.json": "2b46a311855872193b218bc8d4de499e3252cd3c3c06662128d16e3f9e8bc72f",
+        "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+        "model-00001-of-00003.safetensors": "788e6206a158c614e1e6777ab843baf64ca8a3f555e3cb72c26d5d79b925d4b9",
+        "model-00002-of-00003.safetensors": "4d58b3ce47ac6b0ac5d3b142d54e56f10e02a928cf016b493e9e6a3f91beb75d",
+        "model-00003-of-00003.safetensors": "884b560dcd3024436d8827d32c7e211c545751c099df4ee75101c1ee2196f427",
+        "model.safetensors.index.json": "beac94f964e3358f8c66e7dcdbc700e5518e5cf2a7b7697a0c156ff7bcf89038",
+        "preprocessor_config.json": "59ee0cc74687fc2ab8f5f9c2fc3b61cdf66078ebd4f34a61e1fcfc1a644ac31a",
+        "special_tokens_map.json": "7093fea72a118fb4016ee85c13cc2f94ecd659d4600c6ce16cdcd3a2c1d96e68",
+        "tokenizer.json": "d198a051741ee47805797b744e6524c259b08a59b58d1ec159cfd7f1da5f2df7",
+        "tokenizer_config.json": "e80c7714aaff125403ba7c18a4c06da9b18eb81cb6ee4bee711143fa15d94fd6",
+        "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      },
+      "expected_bytes": 5644395930,
+      "runtime_environment": "vibevoice",
+      "license": "MIT",
+      "integrity_provenance": {
+        "metadata_url": "https://huggingface.co/api/models/microsoft/VibeVoice-ASR-Streaming-1.5B/tree/4262d23d8a539a6530cf64fbd0b1751ef9a30853?recursive=true",
+        "files": {
+          "README.md": {
+            "size": 2238,
+            "sha256": "5e4050aec9e328c5e6ef21973ee6c97660bfcd587da9610a585e028ae97f24c1",
+            "upstream_git_oid": "cca7adb708825e87904693b8e96418007a8b52c5",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "added_tokens.json": {
+            "size": 714,
+            "sha256": "d5401f76119bc71e1844d8e909826f8cb3d68e152a058fe228cc37f74603ca84",
+            "upstream_git_oid": "2cd3deebbeb6658efbee920aa097ba793aba4f0f",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "config.json": {
+            "size": 2941,
+            "sha256": "2b46a311855872193b218bc8d4de499e3252cd3c3c06662128d16e3f9e8bc72f",
+            "upstream_git_oid": "8731a7148bd4dc88762d1582aea515e71e96b8bb",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "merges.txt": {
+            "size": 1671853,
+            "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+            "upstream_git_oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "model-00001-of-00003.safetensors": {
+            "size": 2498354152,
+            "sha256": "788e6206a158c614e1e6777ab843baf64ca8a3f555e3cb72c26d5d79b925d4b9",
+            "upstream_git_oid": "10e99e7675e56d248402ce258871fb7da6633baf",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00002-of-00003.safetensors": {
+            "size": 2486576066,
+            "sha256": "4d58b3ce47ac6b0ac5d3b142d54e56f10e02a928cf016b493e9e6a3f91beb75d",
+            "upstream_git_oid": "4197d92e5fd80447956bb0531e0f38153cd6541d",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00003-of-00003.safetensors": {
+            "size": 643458072,
+            "sha256": "884b560dcd3024436d8827d32c7e211c545751c099df4ee75101c1ee2196f427",
+            "upstream_git_oid": "c53c027dc079d12f4ce8400e72630b577656732b",
+            "method": "upstream LFS SHA256"
+          },
+          "model.safetensors.index.json": {
+            "size": 120114,
+            "sha256": "beac94f964e3358f8c66e7dcdbc700e5518e5cf2a7b7697a0c156ff7bcf89038",
+            "upstream_git_oid": "6627aabc0ad713cea5d3348f08b0c8e6467b26cc",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "preprocessor_config.json": {
+            "size": 191,
+            "sha256": "59ee0cc74687fc2ab8f5f9c2fc3b61cdf66078ebd4f34a61e1fcfc1a644ac31a",
+            "upstream_git_oid": "e79309dd9d5770e72d38e348e0d567d2a4e70458",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "special_tokens_map.json": {
+            "size": 769,
+            "sha256": "7093fea72a118fb4016ee85c13cc2f94ecd659d4600c6ce16cdcd3a2c1d96e68",
+            "upstream_git_oid": "61b7ee281dbe33169d3eabdd693e78e06fe22e0d",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "tokenizer.json": {
+            "size": 11422657,
+            "sha256": "d198a051741ee47805797b744e6524c259b08a59b58d1ec159cfd7f1da5f2df7",
+            "upstream_git_oid": "f266edeba488f8a60afeeef5cf2864ca5d22c7c4",
+            "method": "upstream LFS SHA256"
+          },
+          "tokenizer_config.json": {
+            "size": 9330,
+            "sha256": "e80c7714aaff125403ba7c18a4c06da9b18eb81cb6ee4bee711143fa15d94fd6",
+            "upstream_git_oid": "c9a2fbb0b7be1a76b37c42fe4d4a246768521d1b",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "vocab.json": {
+            "size": 2776833,
+            "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+            "upstream_git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          }
+        }
+      },
+      "author": "microsoft",
+      "platform_status": {
+        "windows": "not verified",
+        "macos": "not verified"
+      },
+      "purpose": "primary streaming transcription",
+      "code_license": "MIT",
+      "weights_license": "MIT"
+    },
+    "vibevoice_7b": {
+      "repository": "microsoft/VibeVoice-ASR-Streaming-7B",
+      "revision": "60d858b518b4e19d404af3737f848fc185b30177",
+      "path": "models/VibeVoice-ASR-Streaming-7B",
+      "required_files": [
+        "README.md",
+        "added_tokens.json",
+        "config.json",
+        "merges.txt",
+        "model-00001-of-00008.safetensors",
+        "model-00002-of-00008.safetensors",
+        "model-00003-of-00008.safetensors",
+        "model-00004-of-00008.safetensors",
+        "model-00005-of-00008.safetensors",
+        "model-00006-of-00008.safetensors",
+        "model-00007-of-00008.safetensors",
+        "model-00008-of-00008.safetensors",
+        "model.safetensors.index.json",
+        "preprocessor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "sha256": {
+        "README.md": "f50b2d8c861a80cad359d6a622c4f84771ee6fd9b31c58aaf7cb6a1f1888dbbc",
+        "added_tokens.json": "d0a4c6e0954c94843fae3c966a7d0b52c7b8c0787fba5731733e6ab602245b88",
+        "config.json": "804c6e78705f629e0e3484ce130967d43f8d5e1a728e5c1322bdd697e8704c7d",
+        "merges.txt": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "model-00001-of-00008.safetensors": "3685d210ad49c49521e71a0cc5418ea94b20761c801dc8fc95938c4ec1ab27b3",
+        "model-00002-of-00008.safetensors": "d0252f5e9bdf7e65bb0ae051c49148fd5d77e531057556eb955fc6dc72f4f0bc",
+        "model-00003-of-00008.safetensors": "eeeb0c24e4a3746f16512c0d4aef84732bf8bb4dc5452782e4db356eb5fc7ce7",
+        "model-00004-of-00008.safetensors": "02fec24aaf3e59cbc653b55d94665d6393543f2550364c2c8bc9e75e2a2ca3c0",
+        "model-00005-of-00008.safetensors": "a78637bdc2b44f28601f7ee12503e28f5e9faedde35ff5bcdc2e7356c9a6458e",
+        "model-00006-of-00008.safetensors": "5bc9dfef14c62989192ab39356da45a9ccc9f0ef82f7f7127e48c17b5bd5a2f8",
+        "model-00007-of-00008.safetensors": "bb6da42b3547124eb67645fc6fb92523e93310a107872643f7df6dd75f85b4d7",
+        "model-00008-of-00008.safetensors": "b1499fbe8bc0454eeafc1177db144679940f2456eae188299214c629d4d618b4",
+        "model.safetensors.index.json": "29df2f8e046f5bd8a6d765a700fd767a9c505fa46fe9fd6d50f476c3bdcae638",
+        "preprocessor_config.json": "99bf76b83a21385d2a8f5226edd9ec598f63e1ff7a50384dc8cf6b7753b9f9c4",
+        "special_tokens_map.json": "cf263f1a86f252cae2cef55ca02f001fecefc92646016f0ed2f7349238b8504d",
+        "tokenizer.json": "38e847ed54238171badeeaeaf8760632c949336d3d54207d2d34483c56bc7d57",
+        "tokenizer_config.json": "badef858f0481ccaea85cf86879737f1397c61d0385cdc9b785b657407606e02",
+        "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      },
+      "expected_bytes": 17359817208,
+      "runtime_environment": "vibevoice",
+      "license": "MIT",
+      "integrity_provenance": {
+        "metadata_url": "https://huggingface.co/api/models/microsoft/VibeVoice-ASR-Streaming-7B/tree/60d858b518b4e19d404af3737f848fc185b30177?recursive=true",
+        "files": {
+          "README.md": {
+            "size": 2236,
+            "sha256": "f50b2d8c861a80cad359d6a622c4f84771ee6fd9b31c58aaf7cb6a1f1888dbbc",
+            "upstream_git_oid": "156826f900da6c1a15a6c515fcec1c0bc00d1504",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "added_tokens.json": {
+            "size": 713,
+            "sha256": "d0a4c6e0954c94843fae3c966a7d0b52c7b8c0787fba5731733e6ab602245b88",
+            "upstream_git_oid": "5d8043c9d7b660ff931d52e432d03f0da9342fd8",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "config.json": {
+            "size": 3709,
+            "sha256": "804c6e78705f629e0e3484ce130967d43f8d5e1a728e5c1322bdd697e8704c7d",
+            "upstream_git_oid": "5ad207e145440ea25f40c6f58d4e515e0870d305",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "merges.txt": {
+            "size": 1671839,
+            "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+            "upstream_git_oid": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "model-00001-of-00008.safetensors": {
+            "size": 2488346304,
+            "sha256": "3685d210ad49c49521e71a0cc5418ea94b20761c801dc8fc95938c4ec1ab27b3",
+            "upstream_git_oid": "87228ce08a7053b7ff47d3650a1aa38c037119f1",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00002-of-00008.safetensors": {
+            "size": 2389316008,
+            "sha256": "d0252f5e9bdf7e65bb0ae051c49148fd5d77e531057556eb955fc6dc72f4f0bc",
+            "upstream_git_oid": "3fc6d385560e5e744e9943f30225d1bb82e93026",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00003-of-00008.safetensors": {
+            "size": 2466376400,
+            "sha256": "eeeb0c24e4a3746f16512c0d4aef84732bf8bb4dc5452782e4db356eb5fc7ce7",
+            "upstream_git_oid": "3446c588f94f1d4aba9021594cc5293acfe50b24",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00004-of-00008.safetensors": {
+            "size": 2466376432,
+            "sha256": "02fec24aaf3e59cbc653b55d94665d6393543f2550364c2c8bc9e75e2a2ca3c0",
+            "upstream_git_oid": "6c57ec5e7f52317828bc4a30dcf4bfa9d22f23ae",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00005-of-00008.safetensors": {
+            "size": 2499431160,
+            "sha256": "a78637bdc2b44f28601f7ee12503e28f5e9faedde35ff5bcdc2e7356c9a6458e",
+            "upstream_git_oid": "1344fde7969f00197982942b3aa70e96f1be4b49",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00006-of-00008.safetensors": {
+            "size": 2483469960,
+            "sha256": "5bc9dfef14c62989192ab39356da45a9ccc9f0ef82f7f7127e48c17b5bd5a2f8",
+            "upstream_git_oid": "dfbc72ec91551b305a66076f051bd809f9f5fc3e",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00007-of-00008.safetensors": {
+            "size": 1464887514,
+            "sha256": "bb6da42b3547124eb67645fc6fb92523e93310a107872643f7df6dd75f85b4d7",
+            "upstream_git_oid": "a41573354ef9aae7cd357bafdfa54f5eae143150",
+            "method": "upstream LFS SHA256"
+          },
+          "model-00008-of-00008.safetensors": {
+            "size": 1089994880,
+            "sha256": "b1499fbe8bc0454eeafc1177db144679940f2456eae188299214c629d4d618b4",
+            "upstream_git_oid": "4de17b0c83e4da63eaf12db5d24679b9d61d6e79",
+            "method": "upstream LFS SHA256"
+          },
+          "model.safetensors.index.json": {
+            "size": 120115,
+            "sha256": "29df2f8e046f5bd8a6d765a700fd767a9c505fa46fe9fd6d50f476c3bdcae638",
+            "upstream_git_oid": "a44d30819a075268c0d0f893e923263d5fd33187",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "preprocessor_config.json": {
+            "size": 192,
+            "sha256": "99bf76b83a21385d2a8f5226edd9ec598f63e1ff7a50384dc8cf6b7753b9f9c4",
+            "upstream_git_oid": "7840e091152f763d133141f3b5d924b0bddaf6d3",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "special_tokens_map.json": {
+            "size": 1177,
+            "sha256": "cf263f1a86f252cae2cef55ca02f001fecefc92646016f0ed2f7349238b8504d",
+            "upstream_git_oid": "5f8c3ce6154b4c3bd285e3b165c72908a1b085ab",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "tokenizer.json": {
+            "size": 7032406,
+            "sha256": "38e847ed54238171badeeaeaf8760632c949336d3d54207d2d34483c56bc7d57",
+            "upstream_git_oid": "682d41e7575c55f8535f6ca57f8c7ab315e898d1",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "tokenizer_config.json": {
+            "size": 9330,
+            "sha256": "badef858f0481ccaea85cf86879737f1397c61d0385cdc9b785b657407606e02",
+            "upstream_git_oid": "e8724ae5a8c8342389f60c2620e92fb83e0bb70c",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "vocab.json": {
+            "size": 2776833,
+            "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+            "upstream_git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          }
+        }
+      },
+      "author": "microsoft",
+      "platform_status": {
+        "windows": "not verified",
+        "macos": "not verified"
+      },
+      "purpose": "primary streaming transcription",
+      "code_license": "MIT",
+      "weights_license": "MIT"
+    },
+    "diarizen": {
+      "repository": "BUT-FIT/diarizen-wavlm-large-s80-md-v2",
+      "revision": "027b3e221b9d81dce2be794084f1dbd3ba2da403",
+      "path": "models/diarizen-wavlm-large-s80-md-v2",
+      "required_files": [
+        "README.md",
+        "config.json",
+        "config.toml",
+        "plda/LICENSE",
+        "plda/README.md",
+        "plda/plda.npz",
+        "plda/xvec_transform.npz",
+        "pytorch_model.bin"
+      ],
+      "sha256": {
+        "README.md": "5942849bf7805b054da7894939091d678e0d11651455e5b736cd31405f574d44",
+        "config.json": "633e7186b0040f09a929161607dce933fb956e738b78b31dcb18fdb159f219d9",
+        "config.toml": "6eb3dab9c3892efc4a271ef5f88b5453e6e96789961084a15e88ca352de98503",
+        "plda/LICENSE": "8ba6f549e4e75f193576ab72b1ecea62d4f9ac557d7cdb4bf968efafcad77931",
+        "plda/README.md": "3ceeb39198b64078ac090ab386cfdcf2c16039f8be93e67cd70582f474b59407",
+        "plda/plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
+        "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
+        "pytorch_model.bin": "689a10f0cbde6345b4bf9b1670cf3196488634b34e5b07bea0fe40d508e1196b"
+      },
+      "expected_bytes": 278345340,
+      "runtime_environment": "diarizen",
+      "license": "CC-BY-NC-4.0",
+      "integrity_provenance": {
+        "metadata_url": "https://huggingface.co/api/models/BUT-FIT/diarizen-wavlm-large-s80-md-v2/tree/027b3e221b9d81dce2be794084f1dbd3ba2da403?recursive=true",
+        "files": {
+          "README.md": {
+            "size": 3823,
+            "sha256": "5942849bf7805b054da7894939091d678e0d11651455e5b736cd31405f574d44",
+            "upstream_git_oid": "bb3c28c1773bcd89803f85b72291f9dcf3e806db",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "config.json": {
+            "size": 37,
+            "sha256": "633e7186b0040f09a929161607dce933fb956e738b78b31dcb18fdb159f219d9",
+            "upstream_git_oid": "0c57fb33f9cc7ef33c5202c4ea4834c656a80049",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "config.toml": {
+            "size": 657,
+            "sha256": "6eb3dab9c3892efc4a271ef5f88b5453e6e96789961084a15e88ca352de98503",
+            "upstream_git_oid": "9e79d12b0c3a6959536b1843b817525d1fc66109",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "plda/LICENSE": {
+            "size": 551,
+            "sha256": "8ba6f549e4e75f193576ab72b1ecea62d4f9ac557d7cdb4bf968efafcad77931",
+            "upstream_git_oid": "cbcc373b4d34954bbf8e271b4c8509713a790269",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "plda/README.md": {
+            "size": 518,
+            "sha256": "3ceeb39198b64078ac090ab386cfdcf2c16039f8be93e67cd70582f474b59407",
+            "upstream_git_oid": "0c8a40a91f207c391e81ab9dd63a56080ff42463",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "plda/plda.npz": {
+            "size": 133852,
+            "sha256": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
+            "upstream_git_oid": "e61936ef2108eccdff801c440d5e3f6c6995aba4",
+            "method": "upstream LFS SHA256"
+          },
+          "plda/xvec_transform.npz": {
+            "size": 134376,
+            "sha256": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
+            "upstream_git_oid": "b8079f30a35a68fe7d996bd7abc2170338ba6767",
+            "method": "upstream LFS SHA256"
+          },
+          "pytorch_model.bin": {
+            "size": 278071526,
+            "sha256": "689a10f0cbde6345b4bf9b1670cf3196488634b34e5b07bea0fe40d508e1196b",
+            "upstream_git_oid": "1435eff3ff42280f897f0c94d2620ff8232dd081",
+            "method": "upstream LFS SHA256"
+          }
+        }
+      },
+      "dependencies": [
+        "diarizen_embedding"
+      ],
+      "author": "BUT-FIT",
+      "platform_status": {
+        "windows": "not verified",
+        "macos": "not verified"
+      },
+      "purpose": "speaker diarization",
+      "code_license": "MIT",
+      "weights_license": "CC-BY-NC-4.0"
+    },
+    "diarizen_embedding": {
+      "repository": "pyannote/wespeaker-voxceleb-resnet34-LM",
+      "revision": "837717ddb9ff5507820346191109dc79c958d614",
+      "path": "models/wespeaker-voxceleb-resnet34-LM",
+      "required_files": [
+        "README.md",
+        "config.yaml",
+        "pytorch_model.bin"
+      ],
+      "sha256": {
+        "README.md": "ffc47d6f225a9341771a8304c0b8a354f706184956737661cb2c695e310551e3",
+        "config.yaml": "6ff718cff3c5d7a4493537ab7f4780cad7e3d32453f59099b4076aefa07a9974",
+        "pytorch_model.bin": "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56"
+      },
+      "expected_bytes": 26648958,
+      "runtime_environment": "diarizen",
+      "license": "CC-BY-4.0",
+      "integrity_provenance": {
+        "metadata_url": "https://huggingface.co/api/models/pyannote/wespeaker-voxceleb-resnet34-LM/tree/837717ddb9ff5507820346191109dc79c958d614?recursive=true",
+        "files": {
+          "README.md": {
+            "size": 3319,
+            "sha256": "ffc47d6f225a9341771a8304c0b8a354f706184956737661cb2c695e310551e3",
+            "upstream_git_oid": "6b8a7afcd16051587687a13e556a8b0ee587f5ad",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "config.yaml": {
+            "size": 221,
+            "sha256": "6ff718cff3c5d7a4493537ab7f4780cad7e3d32453f59099b4076aefa07a9974",
+            "upstream_git_oid": "f6508f3ba9be494115516d34cab74943714b9460",
+            "method": "computed SHA256 after verifying Git blob SHA1"
+          },
+          "pytorch_model.bin": {
+            "size": 26645418,
+            "sha256": "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56",
+            "upstream_git_oid": "8ac248f7e8333ec1d22c55c5e2af4ac8d15596e3",
+            "method": "upstream LFS SHA256"
+          }
+        }
+      },
+      "author": "pyannote",
+      "platform_status": {
+        "windows": "not verified",
+        "macos": "not verified"
+      },
+      "purpose": "speaker embedding",
+      "code_license": "MIT",
+      "weights_license": "CC-BY-4.0"
+    }
+  },
+  "sources": {
+    "vibevoice": {
+      "repository": "https://github.com/microsoft/VibeVoice.git",
+      "revision": "1541f590c7099820f10ea012f48d2399282df69f",
+      "path": "third_party/VibeVoice",
+      "license": "MIT",
+      "archive_sha256": "ff14d9af6fe3db93cbefa49c41047b0b091fdfcdfbad8c5646654d8f30dca1b2"
+    },
+    "diarizen": {
+      "repository": "https://github.com/BUTSpeechFIT/DiariZen.git",
+      "revision": "844f5555b0a98acd0931511fc641a8c5b8ba92c7",
+      "path": "third_party/DiariZen",
+      "license": "MIT",
+      "archive_sha256": "0b700a75558abf77d3b5ff03144346baa51d6d8dbc137084d1e0500bf5de8b76"
+    }
+  },
+  "modifications": []
+}

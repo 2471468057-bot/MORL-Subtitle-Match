@@ -168,7 +168,7 @@ class StudioMediaAvailability(QObject):
         bind_text(page.save_state, '素材已重新链接 · 可撤销')
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, *, update_timeline=True):
         project = self.page.project
         missing = [a for a in project.media_pool if a.offline] if project else []
         self.banner.setVisible(bool(missing))
@@ -185,7 +185,8 @@ class StudioMediaAvailability(QObject):
             bind_text(self.label, '{value0} 个素材脱机 · {detail}', value0=len(missing), detail=detail)
             states = getattr(project, '_media_availability', {})
             bind_text(self.label, '\n'.join((f"{a.display_name}：{states.get(a.canonical_source, {}).get('reason', '媒体不可用')}\n{a.canonical_source}" for a in missing)), property='toolTip')
-        self.page.timeline.update()
+        if update_timeline:
+            self.page.timeline.update()
 
     def show_gap(self, timeline_ms):
         page = self.page
@@ -252,9 +253,14 @@ class StudioMediaAvailability(QObject):
         if page.project is not project or tuple(a.canonical_source for a in project.media_pool) != paths:
             return
         changed = apply_availability(project, results)
-        self.refresh()
         if not changed:
+            # The periodic check found nothing new. Repainting the whole
+            # timeline every 3 s rebuilt its static raster for no change;
+            # only the banner's playhead-dependent wording may need a refresh.
+            if self.banner.isVisible():
+                self.refresh(update_timeline=False)
             return
+        self.refresh()
         page.media_pool_panel.refresh()
         page._audio_contract_signature = None
         page._active_video_preview_key = ''

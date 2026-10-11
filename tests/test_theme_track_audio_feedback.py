@@ -11,6 +11,8 @@ from PySide6.QtGui import QUndoStack, QColor
 from twobyteasr.audio_engine import build_audio_decode_command, build_audio_mix_command
 from twobyteasr.studio_project import SubtitleProject, StudioMedia, save_project, load_project
 from twobyteasr.studio_track_gain import track_gain_db, gain_command, gain_amplitude
+from twobyteasr.studio_media_pool import set_video_track_state
+from twobyteasr.studio_edit_sequence import sequence_of
 from twobyteasr.processes import run_hidden_subprocess
 
 FFMPEG = Path(__file__).resolve().parents[1]/"tools/ffmpeg/bin/ffmpeg.exe"
@@ -39,6 +41,8 @@ def decode(command):
 def test_linked_track_gain_undo_and_save_roundtrip(app, tone, tmp_path):
     project = SubtitleProject(media=StudioMedia(path=str(tone[0]), duration_ms=1000, width=160, height=90))
     project.validate()
+    set_video_track_state(project,'V1',locked=False)
+    sequence_of(project).video_track_locked=False
     group = project.av_track_groups[0]
     undo = QUndoStack()
     undo.push(gain_command(project, group.video_track_id, -9.5))
@@ -78,6 +82,8 @@ def test_gain_export_renders_the_same_amplitude(tone, tmp_path, rate):
     from twobyteasr.video_export import capture_video_graph
     project = SubtitleProject(media=StudioMedia(path=str(tone[0]), duration_ms=1000, width=160, height=90))
     project.validate()
+    set_video_track_state(project,'V1',locked=False)
+    sequence_of(project).video_track_locked=False
     project.video_tracks[0].clips[0].playback_rate = rate
     gain_command(project, project.video_tracks[0].id, -12.).redo()
     graph = capture_video_graph(project)

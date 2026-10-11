@@ -29,6 +29,36 @@ WINDOW_SAMPLES = 256
 LOD_FACTOR = 4
 MAX_LOD_LEVELS = 8
 
+_RETIRED_LEASES = queue.SimpleQueue()
+_LEASE_REAPER_LOCK = threading.Lock()
+_LEASE_REAPER = None
+
+
+def _retire_storage_leases(leases):
+    """Keep cache protection until a single worker releases retired readers.
+
+    Progressive waveform replacement drops the old reader on the GUI thread.
+    SQLite lease cleanup (one transaction per LOD) must not stall that thread.
+    A crashed/exiting process is already handled by the lease PID identity.
+    """
+    global _LEASE_REAPER
+    import sys
+    if not leases or sys.is_finalizing():
+        return
+    def reap():
+        while True:
+            for lease in _RETIRED_LEASES.get():
+                try:
+                    lease.__exit__(None, None, None)
+                except Exception:
+                    pass
+    with _LEASE_REAPER_LOCK:
+        if _LEASE_REAPER is None:
+            worker = threading.Thread(target=reap, name='waveform-lease-release', daemon=True)
+            worker.start()
+            _LEASE_REAPER = worker
+    _RETIRED_LEASES.put(leases)
+
 
 class WaveformGenerationError(RuntimeError):
     pass
@@ -133,6 +163,12 @@ def _write_metadata(path: Path, metadata: WaveformMetadata) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_name, path)
+        from .storage_service import register_cache
+        protection='波形正在生成' if metadata.incomplete else ''
+        register_cache(path, 'waveform', producer='waveform_cache', source=metadata.source_path, protected_reason=protection)
+        for level in metadata.levels:
+            if (path.parent / level.file).is_file():
+                register_cache(path.parent / level.file, 'waveform', producer='waveform_cache', source=metadata.source_path, protected_reason=protection)
     finally:
         try:
             os.unlink(temporary_name)
@@ -1007,6 +1043,18 @@ class WaveformCache:
         self._maps = {}
         self._tiles = OrderedDict()
         self.stats = {'hits':0, 'misses':0, 'points':0}
+        from .storage_service import cache_lease, register_cache
+        self._storage_leases=[]
+        for path in [self.root/'metadata.json', *(self.root/level.file for level in self.metadata.levels)]:
+            if path.is_file():
+                register_cache(path,'waveform',producer='waveform_cache',source=self.metadata.source_path,
+                               protected_reason='波形正在生成' if self.metadata.incomplete else '')
+                lease=cache_lease(path);lease.__enter__();self._storage_leases.append(lease)
+
+    def __del__(self):
+        leases = getattr(self, '_storage_leases', ())
+        self._storage_leases = []
+        _retire_storage_leases(leases)
 
     def choose_level(self, start_ms: int, end_ms: int, pixel_width: int) -> WaveformLevel:
         span_ms = max(1, int(end_ms) - int(start_ms))

@@ -200,8 +200,8 @@ def _run_update(zip_path, root, log_dir):
     )
 
 
-def test_update_legal_package_applies(tmp_path):
-    """apply_update.ps1（改用 helper 后）合法包仍正常应用。"""
+def test_retired_update_rejects_even_legal_package_without_mutation(tmp_path):
+    """Legacy ZIP hot replacement is no longer a supported upgrade path."""
     app = tmp_path / "app"
     app.mkdir()
     zip_path = tmp_path / "update.zip"
@@ -211,8 +211,11 @@ def test_update_legal_package_applies(tmp_path):
         {"a/b.txt": "content"},
     )
     result = _run_update(zip_path, app, tmp_path / "logs")
-    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
-    assert (app / "a" / "b.txt").read_text(encoding="utf-8") == "content"
+    assert result.returncode != 0
+    assert result.stderr.strip()
+    assert list(app.iterdir()) == []
+    assert zip_path.is_file()
+    assert not (tmp_path / "logs").exists()
 
 
 def test_update_traversal_package_is_rejected(tmp_path):
@@ -243,19 +246,16 @@ def test_update_traversal_package_is_rejected(tmp_path):
     assert result.stderr.strip(), "非交互失败必须通过 stderr 报告错误"
     assert sentinel.is_file(), "越界 files 不得写入 outside"
     assert not (outside / "evil.txt").exists()
-    assert (log_dir / "update.log").is_file(), "日志必须写入注入的临时目录"
-    assert "越界路径" in (log_dir / "update.log").read_text(encoding="utf-8", errors="replace")
+    assert not log_dir.exists(), "退役入口应在任何写入前拒绝"
+    assert zip_path.is_file()
 
 
-def test_update_production_path_keeps_interactive_error_ui():
-    """生产交互路径保留 MessageBox 错误 UI，且日志默认写入 LocalAppData。"""
+def test_retired_update_fails_before_any_legacy_write_or_gui():
+    """Direct invocations cannot reactivate arbitrary HOTFIX operations."""
     source = Path(__file__).resolve().parents[1] / "scripts" / "apply_update.ps1"
     text = source.read_text(encoding="utf-8-sig")
     assert "[switch]$NonInteractive" in text
     assert "[string]$LogPath" in text
-    # 非交互分支必须把 MessageBox 包在条件里，而不是删除生产路径。
-    assert "[System.Windows.Forms.MessageBox]::Show" in text
-    assert 'if (-not $NonInteractive)' in text
-    assert "Write-Error $message" in text
-    # 生产默认日志目录仍是 LocalAppData（测试注入 -LogPath 时覆盖）。
-    assert 'GetFolderPath("LocalApplicationData")' in text
+    rejection = text.index('throw "旧 ZIP 热替换更新已停用')
+    for operation in ('New-Item ', 'Copy-Item ', 'Remove-Item ', '[System.Windows.Forms.MessageBox]::Show'):
+        assert rejection < text.index(operation)

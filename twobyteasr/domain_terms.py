@@ -1,6 +1,7 @@
 """Game/domain terminology discovery, source verification, and mapping application."""
 
 import ipaddress
+import hashlib
 import json
 import socket
 import time
@@ -30,7 +31,11 @@ def _title_matched_profile(media_title):
     title_identity = runtime_game_identity(media_title)
     if not title_identity:
         return "", {}
-    for name, profile in load_game_profiles().items():
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    profiles = ({library.name: json.loads(library.profile_json)
+        for library in snapshot.libraries if library.profile_json}
+        if snapshot is not None else load_game_profiles())
+    for name, profile in profiles.items():
         if not isinstance(profile, dict):
             continue
         triggers = profile.get("title_triggers", ())
@@ -43,6 +48,10 @@ def _title_matched_profile(media_title):
 
 def apply_title_profile_aliases(segments, media_title):
     """Apply user-verified aliases scoped by an unambiguous media-title trigger."""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        from .terminology import apply_to_segments
+        return apply_to_segments(segments, snapshot)
     profile_name, profile = _title_matched_profile(media_title)
     if not profile:
         return segments
@@ -93,8 +102,13 @@ def repair_with_user_glossary_terms(segments, glossary, media_title=""):
     length and effectively the same pronunciation, plus title, reference, or
     repeated-transcript support.  A one-off merely similar word is never changed.
     """
+    if getattr(get_runtime_context(), "glossary_snapshot", None) is not None:
+        # Confirmed literal mappings are applied by the shared resolver. Fuzzy
+        # terms remain readonly candidates in the subsequent review payload.
+        return segments
     targets = sorted(
-        {content_only(term) for term in glossary if 2 <= len(content_only(term)) <= 12},
+        {content_only(term) for term in glossary if 2 <= len(content_only(term)) <= 12
+         and not re.search(r"[A-Za-z0-9]", str(term))},
         key=len,
         reverse=True,
     )
@@ -356,9 +370,16 @@ def collect_stable_moss_term_candidates(segments, glossary=(), limit=80):
     return payload[:limit]
 
 
-def collect_global_term_disputes(segments, stable_term_candidates, limit=140):
+def collect_global_term_disputes(segments, stable_term_candidates, limit=140, *, unresolved_only=False):
     """汇总全文专名冲突及低置信正文，供一次联网词汇表决使用。"""
-    stable_terms = [item["term"] for item in stable_term_candidates]
+    stable_terms = [item["term"] for item in stable_term_candidates
+        if not unresolved_only or (item.get('verification_priority') != 'low'
+            and item['term'] not in MOSS_TERM_STABILITY_STOPWORDS)]
+    snapshot = getattr(get_runtime_context(), 'glossary_snapshot', None)
+    resolver = None
+    if unresolved_only and snapshot is not None:
+        from .terminology import TermResolver
+        resolver = TermResolver(snapshot)
     priority_disputes = []
     broad_audit_rows = []
     for segment in segments:
@@ -375,6 +396,11 @@ def collect_global_term_disputes(segments, stable_term_candidates, limit=140):
             if value and content_only(value) != content_only(primary) and value not in alternatives:
                 alternatives.append(value)
         domain_hits = [term for term in stable_terms if term in content_only(primary)]
+        if resolver is not None:
+            local_resolution = resolver.resolve(primary)
+            resolved = {value for hit in (*local_resolution.hits, *local_resolution.skipped)
+                for value in (getattr(hit, 'source', ''), getattr(hit, 'canonical', ''))}
+            domain_hits = [term for term in domain_hits if term not in resolved]
         difference_hints = []
         for alternate in alternatives:
             difference_hints.extend(build_asr_difference_hints(primary, alternate))
@@ -395,7 +421,8 @@ def collect_global_term_disputes(segments, stable_term_candidates, limit=140):
             )
             <= 0.55
         ]
-        low_confidence = float(getattr(segment, "confidence", 1.0) or 0.0) < 0.72
+        confidence = getattr(segment, 'confidence', None)
+        low_confidence = isinstance(confidence, (float, int)) and not isinstance(confidence, bool) and 0 <= confidence < .72
         overlapping = bool(segment.overlapping_speaker_conflict)
         score = (
             len(domain_hits) * 50
@@ -412,6 +439,7 @@ def collect_global_term_disputes(segments, stable_term_candidates, limit=140):
             "difference_hints": phonetic_hints[:8],
             "repeated_term_hits": domain_hits,
             "low_confidence": low_confidence,
+            "confidence_state": 'observed' if isinstance(confidence, (float, int)) and not isinstance(confidence, bool) and 0 <= confidence <= 1 else 'unknown',
             "overlapping_speaker_conflict": overlapping,
             "audit_reason": (
                 "asr_or_term_conflict"
@@ -421,6 +449,16 @@ def collect_global_term_disputes(segments, stable_term_candidates, limit=140):
                 else "broad_proper_noun_audit"
             ),
         }
+        if unresolved_only:
+            entity_hints = [hint for hint in phonetic_hints if
+                any(term in str(hint) for term in domain_hits) or
+                any(re.search(r'[A-Za-z][A-Za-z0-9]{1,}', str(hint.get(key, ''))) or
+                    str(hint.get(key, ''))[-1:] in GLOBAL_DOMAIN_TERM_SUFFIXES
+                    for key in ('primary', 'alternate'))]
+            if not domain_hits and not entity_hints:
+                continue
+            row['difference_hints'] = entity_hints[:8]
+            row['unresolved_terms'] = domain_hits
         ranked = (-score, segment.segment_id, row)
         if score > 0:
             priority_disputes.append(ranked)
@@ -476,7 +514,7 @@ def _public_peer(response):
     return True
 
 
-def _bounded_response_text(response, limit=1_500_000):
+def _bounded_response_text(response, limit=1_500_000, *, deadline=None, cancel_check=None):
     content_length = response.headers.get("Content-Length") if getattr(response, "headers", None) else None
     if content_length:
         try:
@@ -486,6 +524,8 @@ def _bounded_response_text(response, limit=1_500_000):
             raise ValueError("invalid or excessive Content-Length") from exc
     body = bytearray()
     for chunk in response.iter_content(chunk_size=64 * 1024, decode_unicode=False):
+        if (deadline is not None and time.monotonic() >= deadline) or (cancel_check and cancel_check()):
+            raise TimeoutError('source verification budget expired')
         if not chunk:
             continue
         body.extend(chunk)
@@ -495,13 +535,47 @@ def _bounded_response_text(response, limit=1_500_000):
     return bytes(body).decode(encoding, errors="replace")
 
 
-def verify_term_source_urls(target, urls, requests_module):
+def verify_term_source_urls(target, urls, requests_module, *, budget=None, cancel_check=None, _bounded=False):
     """新联网词必须在至少一个公开 HTTPS 来源正文中真实出现。"""
     verified = []
+    if budget is not None and not _bounded:
+        # DNS and third-party socket libraries cannot always be interrupted.
+        # Wait only within the task deadline; a late worker can never publish
+        # evidence or modify the glossary. Report pending cleanup explicitly.
+        import threading
+        from .ai_providers import AIProviderError
+        ready = threading.Event()
+        values, errors = [], []
+        def verify():
+            try:
+                values.extend(verify_term_source_urls(target, urls, requests_module,
+                    budget=budget, cancel_check=cancel_check, _bounded=True))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                ready.set()
+        thread = threading.Thread(target=verify, name='term-source-verification', daemon=True)
+        thread.start()
+        while not ready.wait(min(.05, max(.001, budget.remaining_seconds()))):
+            if (cancel_check and cancel_check()) or budget.expired:
+                error = AIProviderError('来源核验未在任务总预算内完成。',
+                    category='cancelled' if cancel_check and cancel_check() else 'total_timeout')
+                error.cleanup_pending = thread.is_alive()
+                raise error
+        if errors:
+            raise errors[0]
+        if budget.expired or cancel_check and cancel_check():
+            error = AIProviderError('来源核验未在任务总预算内完成。',
+                category='cancelled' if cancel_check and cancel_check() else 'total_timeout')
+            error.cleanup_pending = thread.is_alive()
+            raise error
+        return values
     target = content_only(target)
     if not target:
         return verified
     for raw_url in list(urls or ())[:5]:
+        if budget is not None and budget.expired or cancel_check and cancel_check():
+            break
         url = str(raw_url).strip()
         if not _public_https_url(url):
             continue
@@ -509,11 +583,14 @@ def verify_term_source_urls(target, urls, requests_module):
         try:
             current_url = url
             for redirect_count in range(4):
+                remaining = budget.remaining_seconds() if budget is not None else None
+                if remaining is not None and remaining <= 0 or cancel_check and cancel_check():
+                    raise TimeoutError('source verification budget expired')
                 if not _public_https_url(current_url):
                     raise ValueError("unsafe source URL")
                 response = requests_module.get(
                     current_url,
-                    timeout=(6, 12),
+                    timeout=(min(6, remaining), min(12, remaining)) if remaining is not None else (6, 12),
                     headers={"User-Agent": "Mozilla/5.0 2ByteASR-TermVerifier/1.0"},
                     allow_redirects=False,
                     stream=True,
@@ -530,9 +607,14 @@ def verify_term_source_urls(target, urls, requests_module):
                     current_url = urllib.parse.urljoin(current_url, location)
                     continue
                 response.raise_for_status()
-                body = _bounded_response_text(response)
+                body = _bounded_response_text(response, deadline=budget.deadline_monotonic if budget else None, cancel_check=cancel_check)
+                if budget is not None and budget.expired or cancel_check and cancel_check():
+                    raise TimeoutError('source verification budget expired')
                 if target in content_only(body):
                     verified.append(current_url)
+                    record_run_event('term_source_url_verified', url=current_url, http_status=response.status_code,
+                        decoded_body_sha256=hashlib.sha256(body.encode('utf-8')).hexdigest(),
+                        target=target, target_present=True, acoustic_verified=False)
                 break
         except Exception:
             continue
@@ -545,11 +627,117 @@ def verify_term_source_urls(target, urls, requests_module):
 
 
 class TermVerificationResult(list):
-    def __init__(self, values=(), *, status='failed', checked_ids=(), failures=None):
+    def __init__(self, values=(), *, status='failed', checked_ids=(), failures=None, evidence=(), cleanup_pending=False):
         super().__init__(values)
-        self.status=status
-        self.checked_ids=set(checked_ids)
-        self.failures=dict(failures or {})
+        self.status = status
+        self.checked_ids = set(checked_ids)
+        self.failures = dict(failures or {})
+        # Only adapter-produced completed search-tool receipts enter this field.
+        self.evidence = list(evidence)
+        self.cleanup_pending = bool(cleanup_pending)
+
+
+def term_search_capability(snapshot=None):
+    """Check the actual executor before creating a client/request/start event."""
+    from .asr_provider_snapshot import task_provider_snapshot
+    snapshot = snapshot or task_provider_snapshot('polish')
+    endpoint = snapshot.endpoint()
+    available = (snapshot.kind == 'cli' and snapshot.transport in {'grok_cli', 'antigravity_cli'}) or (
+        snapshot.kind == 'http' and endpoint.get('provider') == 'bailian')
+    status = 'ready' if available else 'unsupported'
+    reason = '' if available else '当前文字服务没有可验证的联网检索执行器；本地词库和文字校对仍可使用。'
+    if available and snapshot.kind == 'http' and not (endpoint.get('model') and endpoint.get('url') and endpoint.get('api_key')):
+        available, status, reason = False, 'not_configured', '联网检索服务尚未配置完整。'
+    return {'available': available, 'status': status, 'reason': reason,
+            'provider': snapshot.provider, 'model': snapshot.model, 'transport': snapshot.transport}
+
+
+def _search_result_urls(evidence):
+    return [url for row in evidence or () if isinstance(row, dict)
+            for url in (row.get('urls') if isinstance(row.get('urls'), list) else ())
+            if isinstance(url, str) and url.startswith('https://')]
+
+
+def _has_search_evidence(evidence):
+    # Completed tools prove execution; returned sources separately prove
+    # usable evidence. Model prose/URLs/verified=true cannot replace either.
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    search = {'web_search', 'search_web', 'dashscope_web_search'}
+    return any(isinstance(row, dict) and row.get('tool') in search for row in evidence) and all(
+        isinstance(row, dict) and row.get('tool') in search | {'https_source_fetch'} and
+        (bool(_search_result_urls([row])) or type(row.get('step_index')) is int) for row in evidence)
+
+
+def _publish_term_summary(result, *, scope_ids=(), distinct_terms=0, batches=0,
+                          capability=None, reason='', requested=True, cached=False, conflict_count=0):
+    owner = get_runtime_context()
+    scope = set(scope_ids)
+    capability = capability or {'available': False}
+    checked = result.checked_ids & scope
+    owner.terminology_status = dict(status=result.status, requested=requested,
+        candidate_count=len(scope), distinct_terms=distinct_terms, conflict_count=conflict_count,
+        verified_count=len(checked), unverified_count=len(scope - checked),
+        scope_ids=sorted(scope), verified_ids=sorted(checked), unverified_ids=sorted(scope - checked),
+        failure_categories=dict(Counter(result.failures.values())), batches=batches,
+        capability_available=bool(capability.get('available')),
+        retryable=bool(capability.get('available') and result.failures),
+        reason=reason or capability.get('reason', ''), cached=cached,
+        search_evidence=result.evidence, acoustic_verified=False,
+        evidence_verified=bool(checked and _has_search_evidence(result.evidence) and _search_result_urls(result.evidence)),
+        receipt_count=len(result.evidence),
+        source_count=len(set(_search_result_urls(result.evidence))),
+        scope_unit='processing_record', local_glossary_available=bool(owner.enable_domain_terms))
+    owner.terminology_status['cleanup_pending'] = result.cleanup_pending
+    if hasattr(result, 'total_budget_seconds'):
+        owner.terminology_status.update(total_budget_seconds=result.total_budget_seconds,
+                                       elapsed_seconds=result.elapsed_seconds)
+    if owner.polishing_summary:
+        owner.polishing_summary['terminology'] = dict(owner.terminology_status)
+    record_run_event('domain_term_verification_summary', **owner.terminology_status)
+
+
+def run_optional_term_verification(segments, media_title, cache_context=None):
+    """Optional post-polish search; a text-cache hit does not bypass its choice."""
+    owner = get_runtime_context()
+    if not owner.enable_term_search:
+        _publish_term_summary(TermVerificationResult(status='disabled'), requested=False,
+                              reason='disabled')
+        return segments
+    started_monotonic = time.monotonic()
+    from .provider_input_budget import RetryBudget
+    budget = RetryBudget(API_RETRIES-1, total_seconds=OPTIONAL_TERM_SEARCH_SECONDS, cleanup_reserve_seconds=3)
+    glossary = load_glossary()
+    if owner.enable_domain_terms:
+        glossary = list(dict.fromkeys([*glossary, *learned_canonical_terms()]))
+    result = discover_global_domain_term_mappings(segments, load_content_context(media_title),
+        glossary, load_verified_game_terms(), collect_stable_moss_term_candidates(segments, glossary),
+        cache_context=cache_context, unresolved_only=True,
+        _retry_budget=budget, _started_monotonic=started_monotonic)
+    return apply_global_domain_term_mappings(segments, result)
+
+
+def retry_pending_term_verification(segments, media_title, previous_summary, cache_context=None):
+    """Search only the outstanding original records; never run ASR/text or save."""
+    previous = dict(previous_summary or {})
+    checked = set(previous.get('verified_ids') or ())
+    explicit_pending = previous.get('unverified_ids')
+    pending = set(explicit_pending) if isinstance(explicit_pending, list) else {
+        segment.segment_id for segment in segments} - checked
+    rows = [segment for segment in segments if segment.segment_id in pending]
+    if not rows:
+        return TermVerificationResult(status='not_run')
+    owner = get_runtime_context()
+    started_monotonic = time.monotonic()
+    from .provider_input_budget import RetryBudget
+    budget = RetryBudget(API_RETRIES-1, total_seconds=OPTIONAL_TERM_SEARCH_SECONDS, cleanup_reserve_seconds=3)
+    glossary = load_glossary()
+    if owner.enable_domain_terms:
+        glossary = list(dict.fromkeys([*glossary, *learned_canonical_terms()]))
+    return discover_global_domain_term_mappings(rows, load_content_context(media_title),
+        glossary, load_verified_game_terms(), collect_stable_moss_term_candidates(rows, glossary),
+        cache_context=cache_context, persist=False,
+        _retry_budget=budget, _started_monotonic=started_monotonic)
 
 
 def normalize_term_candidates(candidates, segments):
@@ -587,64 +775,139 @@ def normalize_term_candidates(candidates, segments):
         not x['asr_disagreement'],-x['moss_segment_count'],-len(x['term']),x['term']))
 
 
-def discover_global_domain_term_mappings(segments,project_context,glossary,verified_terms,stable_term_candidates):
+OPTIONAL_TERM_SEARCH_SECONDS = 45.0
+
+
+def discover_global_domain_term_mappings(segments, project_context, glossary, verified_terms,
+                                        stable_term_candidates, *, cache_context=None, persist=True,
+                                        unresolved_only=False, total_budget_seconds=OPTIONAL_TERM_SEARCH_SECONDS,
+                                        _retry_budget=None, _started_monotonic=None):
     from .provider_input_budget import pack_items
-    owner=get_runtime_context()
-    candidates=normalize_term_candidates(stable_term_candidates,segments)
-    disputes=collect_global_term_disputes(segments,candidates,limit=max(140,len(segments)))
+    from .asr_provider_snapshot import task_provider_snapshot
+    from .cache import stable_digest, atomic_write_json
+    from pathlib import Path
+    owner = get_runtime_context()
+    started_monotonic = _started_monotonic if _started_monotonic is not None else time.monotonic()
+    from .provider_input_budget import RetryBudget
+    retry_budget = _retry_budget if _retry_budget is not None else RetryBudget(API_RETRIES-1, total_seconds=total_budget_seconds, cleanup_reserve_seconds=3)
+    def require_current():
+        if get_runtime_context() is not owner or bool(getattr(owner.cancellation_token, 'is_cancelled', False)):
+            from .service import CancelledError
+            raise CancelledError('术语核验任务已取消。')
+    require_current()
+    candidates = normalize_term_candidates(stable_term_candidates, segments)
+    disputes = collect_global_term_disputes(segments, candidates, limit=max(140, len(segments)), unresolved_only=unresolved_only)
+    scope_ids = {row['id'] for row in disputes}
     if not disputes:
-        owner.terminology_status={'status':'not_run','candidate_count':0,'verified_count':0,'reason':'no_candidates'}
-        record_run_event('domain_term_verification_summary',**owner.terminology_status)
-        return TermVerificationResult(status='not_run')
+        result = TermVerificationResult(status='not_run')
+        _publish_term_summary(result, reason='no_candidates')
+        return result
+    snapshot = task_provider_snapshot('polish')
+    capability = term_search_capability(snapshot)
+    if not capability['available']:
+        result = TermVerificationResult(status=capability['status'])
+        # One configuration fact retains the complete unexecuted scope. It is
+        # neither a failed model request nor one failure per subtitle record.
+        _publish_term_summary(result, scope_ids=scope_ids, distinct_terms=len(candidates),
+                              capability=capability)
+        record_run_event('domain_term_search_skipped', reason=capability['status'],
+                         scope_ids=sorted(scope_ids), candidate_count=len(scope_ids))
+        return result
+    identity = {'version': 2, 'scope_policy': 'unresolved_entities' if unresolved_only else 'explicit_scope', 'provider': snapshot.cache_identity(), 'project_context': project_context,
+        'glossary': glossary, 'verified_terms': verified_terms, 'candidates': candidates,
+        'disputes': disputes, 'media': cache_context.get('identity') if cache_context else None}
+    key = stable_digest(identity)
+    cache_path = Path(cache_context['cache_dir']) / 'term_verification' / (key + '.json') if cache_context else None
+    combined = TermVerificationResult()
+    cached = False
+    if cache_path:
+        try:
+            payload = json.loads(cache_path.read_text(encoding='utf-8'))
+            checked = payload.get('checked_ids')
+            evidence = payload.get('search_evidence')
+            if (payload.get('version') == 2 and payload.get('identity') == key and
+                    isinstance(checked, list) and checked and all(type(x) is int for x in checked) and
+                    len(set(checked)) == len(checked) and set(checked) <= scope_ids and
+                    _has_search_evidence(evidence) and _search_result_urls(evidence) and
+                    isinstance(payload.get('mappings'), list)):
+                combined.extend(payload['mappings'])
+                combined.checked_ids.update(checked)
+                combined.evidence.extend(evidence)
+                cached = True
+                record_run_event('cache_hit', stage='term_verification', path=str(cache_path))
+        except (OSError, ValueError, TypeError):
+            pass
+    pending = [row for row in disputes if row['id'] not in combined.checked_ids]
     def messages(rows):
-        return _discover_term_batch(segments,project_context,glossary,verified_terms,candidates,
-                                    _disputes=rows,_messages_only=True)
-    batches,rejected=pack_items(disputes,messages,operation='domain_terms',max_tokens=4096)
-    combined=TermVerificationResult()
-    combined.failures.update({row['id']:'request_too_large' for row,_ in rejected})
-    retry_budget=[max(0,API_RETRIES-1)]
-    for index,rows in enumerate(batches,1):
-        part=_discover_term_batch(segments,project_context,glossary,verified_terms,candidates,
-            _disputes=rows,_batch_id=index,_retry_budget=retry_budget)
+        return _discover_term_batch(segments, project_context, glossary, verified_terms, candidates,
+                                    _disputes=rows, _messages_only=True)
+    batches, rejected = pack_items(pending, messages, operation='domain_terms', max_tokens=4096)
+    combined.failures.update({row['id']: 'request_too_large' for row, _ in rejected})
+    record_run_event('optional_stage_started', stage='domain_terms', job_id=owner.job_id,
+        started_monotonic=started_monotonic, budget_seconds=total_budget_seconds,
+        scope_ids=sorted(scope_ids), candidate_records=len(scope_ids), distinct_terms=len(candidates))
+    for index, rows in enumerate(batches, 1):
+        require_current()
+        part = _discover_term_batch(segments, project_context, glossary, verified_terms, candidates,
+            _disputes=rows, _batch_id=index, _retry_budget=retry_budget)
         combined.extend(part)
         combined.checked_ids.update(part.checked_ids)
         combined.failures.update(part.failures)
-    targets={}
+        combined.evidence.extend(part.evidence)
+        combined.cleanup_pending |= part.cleanup_pending
+    targets = {}
     for item in combined:
-        targets.setdefault(item['from'],set()).add(item['to'])
-    conflicts={source for source,values in targets.items() if len(values)>1}
-    # Do not allow A->B->C chains either: order must not change the spelling.
+        targets.setdefault(item['from'], set()).add(item['to'])
+    conflicts = {source for source, values in targets.items() if len(values) > 1}
     conflicts.update(item['from'] for item in combined if item['to'] in targets and item['to'] != item['from'])
-    accepted={}
+    accepted = {}
     for item in combined:
         if item['from'] in conflicts:
             continue
-        key=(item['from'],item['to'])
-        if key not in accepted:
-            accepted[key]=dict(item)
+        pair = (item['from'], item['to'])
+        if pair not in accepted:
+            accepted[pair] = dict(item)
         else:
-            old=accepted[key]
-            old['source_ids']=sorted(set(old['source_ids'])|set(item['source_ids']))
-            old['sources']=list(dict.fromkeys([*old['sources'],*item['sources']]))
-            old['apply_all']=old['apply_all'] or item['apply_all']
-    combined[:]=accepted.values()
-    combined.status='partial' if combined.checked_ids and combined.failures else 'success' if combined.checked_ids else 'failed'
-    owner.terminology_status=dict(status=combined.status,candidate_count=len(disputes),
-        distinct_terms=len(candidates),verified_count=len(combined.checked_ids),
-        unverified_count=len(combined.failures),conflict_count=len(conflicts),
-        failure_categories=dict(Counter(combined.failures.values())),batches=len(batches))
-    if get_runtime_context() is not owner or bool(getattr(owner.cancellation_token,'is_cancelled',False)):
-        from .service import CancelledError
-        raise CancelledError('术语核验任务已取消。')
-    persist_learned_mappings(owner.game_name,list(combined))
+            old = accepted[pair]
+            old['source_ids'] = sorted(set(old['source_ids']) | set(item['source_ids']))
+            old['sources'] = list(dict.fromkeys([*old['sources'], *item['sources']]))
+            old['apply_all'] = old['apply_all'] or item['apply_all']
+    combined[:] = accepted.values()
+    combined.status = 'partial' if combined.checked_ids and combined.failures else 'success' if combined.checked_ids else 'failed'
+    require_current()
+    # Successful coverage is stored separately, with real tool receipts. A
+    # partial artifact permits retrying only unchecked IDs; absent capability
+    # and evidence-free responses never create a verified-search artifact.
+    if cache_path and combined.checked_ids and _has_search_evidence(combined.evidence) and _search_result_urls(combined.evidence):
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(str(cache_path), dict(version=2, identity=key,
+            checked_ids=sorted(combined.checked_ids), mappings=list(combined),
+            search_evidence=combined.evidence))
+        record_run_event('cache_write', stage='term_verification', path=str(cache_path))
+    if persist and combined:
+        task_glossary = getattr(owner, 'glossary_snapshot', None)
+        if task_glossary is None:
+            persist_learned_mappings(owner.game_name, list(combined))
+        else:
+            selected = [library.id for library in task_glossary.libraries
+                if runtime_game_identity(library.name) == runtime_game_identity(owner.game_name)]
+            existing_ids = {str(row['id']) for row in glossary_catalog()}
+            if len(selected) == 1 and selected[0] in existing_ids:
+                persist_learned_mappings(selected[0], list(combined))
+            else:
+                record_run_event('terminology_candidate_persistence_skipped',
+                    reason='target_missing_or_ambiguous', enabled_glossary_ids=[x.id for x in task_glossary.libraries])
     owner.discovered_terms.update(item['to'] for item in combined)
-    record_run_event('domain_term_verification_summary',**owner.terminology_status)
-    if combined.status=='failed':
-        print('   [联网全局术语] 核验未执行或失败，本次不更新术语；已核验词保持。')
-    elif combined.status=='partial':
-        print(f'   [联网全局术语] 核验部分成功，{len(combined.failures)} 条候选证据尚未核验。')
-    elif not combined:
-        print('   [联网全局术语] 核验成功，没有达到门槛的新映射。')
+    combined.total_budget_seconds = total_budget_seconds
+    combined.elapsed_seconds = round(time.monotonic()-started_monotonic, 3)
+    _publish_term_summary(combined, scope_ids=scope_ids, distinct_terms=len(candidates),
+                          batches=len(batches), capability=capability, cached=cached and not pending,
+                          conflict_count=len(conflicts))
+    record_run_event('optional_stage_completed', stage='domain_terms', job_id=owner.job_id,
+        started_monotonic=started_monotonic, finished_monotonic=time.monotonic(),
+        elapsed_seconds=owner.terminology_status['elapsed_seconds'], status=combined.status,
+        verified_ids=sorted(combined.checked_ids), unverified_ids=sorted(scope_ids-combined.checked_ids),
+        budget_seconds=total_budget_seconds)
     return combined
 
 
@@ -676,6 +939,10 @@ def _discover_term_batch(
             reason="no_candidate_text",
         )
         return TermVerificationResult(status='not_run')
+    if not _messages_only:
+        capability = term_search_capability()
+        if not capability['available']:
+            return TermVerificationResult(status=capability['status'])
     if not _messages_only: record_run_event(
         "domain_term_search_started",
         game=runtime_context.game_name,
@@ -724,39 +991,57 @@ def _discover_term_batch(
         return messages
     from .asr_provider_snapshot import task_provider_snapshot, request_record
     from .ai_providers import provider_for_stage, AIProviderError
-    from .provider_input_budget import failure_category, retry_delay, wait_retry
+    from .provider_input_budget import failure_category, retry_delay, RetryBudget
     snapshot=task_provider_snapshot('polish')
     endpoint=snapshot.endpoint()
     provider=provider_for_stage(snapshot.execution_settings(),'polish',sender=post_chat_completion)
     cli_transport=snapshot.kind=='cli'
     cancelled=lambda: get_runtime_context() is not runtime_context or bool(getattr(runtime_context.cancellation_token,'is_cancelled',False))
-    retry_budget=_retry_budget if _retry_budget is not None else [max(0,API_RETRIES-1)]
+    retry_budget=_retry_budget if _retry_budget is not None else RetryBudget(API_RETRIES-1, total_seconds=OPTIONAL_TERM_SEARCH_SECONDS, cleanup_reserve_seconds=3)
     last_error = None
     for attempt in range(1, API_RETRIES + 1):
         diag=request_record(snapshot,stage='domain_terms',batch_id=_batch_id,attempt=attempt,
             input_characters=sum(len(x['primary_text']) for x in disputes))
         attempt_started=time.perf_counter()
+        stream_counts, last_emit = Counter(), [0.]
+        def on_stream_event(kind, detail):
+            if cancelled():
+                return
+            stream_counts[kind] += 1
+            if kind == 'delta':
+                diag['returned_content_chars'] = diag.get('returned_content_chars', 0) + len(str(detail or ''))
+            now = time.perf_counter()
+            if now-last_emit[0] >= .25 or kind in {'stage','request_identity','final','error','search_receipt'}:
+                record_run_event('asr_provider_progress', job_id=runtime_context.job_id,
+                    stage='domain_terms', batch_id=_batch_id, configured_model=snapshot.model,
+                    actual_model=diag.get('response_model'), transport=snapshot.transport,
+                    provider_event=kind, event_count=sum(stream_counts.values()),
+                    returned_content_chars=diag.get('returned_content_chars', 0),
+                    last_activity_ms=round((now-attempt_started)*1000,3))
+                last_emit[0] = now
         try:
             if cancelled():
                 raise AIProviderError('术语核验已取消。',category='cancelled')
-            if not cli_transport and endpoint.get('provider') != 'bailian':
-                raise AIProviderError('当前 Provider 未配置可验证的联网检索能力。',category='unsupported_search')
+            policy = retry_budget.request_policy(snapshot.timeout_policy)
+            diag.update(task_deadline_monotonic=retry_budget.deadline_monotonic,
+                remaining_budget_seconds=retry_budget.remaining_seconds())
             content = provider.complete(
                     messages,
                     stage="domain_terms",
                     operation_kind='domain_terms',
                     enable_search=cli_transport,
+                    **({'on_stream_event':on_stream_event} if cli_transport else {}),
                     request_diagnostics=diag,
-                    _timeout_policy=snapshot.timeout_policy,
+                    _timeout_policy=policy,
                     cancel_check=cancelled,
                     max_tokens=4096,
                     temperature=0.0,
-                    timeout=(10, max(API_TIMEOUT_SECONDS, 180)),
+                    timeout=policy.total,
                     response_format={"type": "json_object"},
                     extra_body=({'enable_search':True,'search_options':{'forced_search':True,'search_strategy':'turbo'}}
                         if endpoint.get('provider')=='bailian' else None),
                 )
-            if not diag.get('search_evidence'):
+            if not _has_search_evidence(diag.get('search_evidence')):
                 raise AIProviderError('未收到实际检索证据，本批不标记联网核验成功。',category='search_evidence_missing')
             parsed = parse_qwen_object(content)
             returned = parsed.get("mappings", [])
@@ -813,6 +1098,7 @@ def _discover_term_batch(
                         target,
                         item.get("sources", []),
                         requests,
+                        budget=retry_budget, cancel_check=cancelled,
                     )
                     if not verified_sources:
                         rejected_candidates.append((source, target))
@@ -878,6 +1164,14 @@ def _discover_term_batch(
                     "   [联网候选待复核] 未达到本地核验/官方高置信门槛，"
                     f"未写入成片：{sample}。"
                 )
+            fetched_sources = list(dict.fromkeys(url for item in accepted for url in item['sources']))
+            if fetched_sources:
+                diag['search_evidence'].append({'tool': 'https_source_fetch', 'urls': fetched_sources,
+                    'verification': 'target_present_in_fetched_body'})
+            if not _search_result_urls(diag['search_evidence']):
+                raise AIProviderError('检索工具已运行，但没有可验证的返回来源；本批保留未核验范围。',
+                                      category='insufficient_evidence')
+            diag['validator_result'] = 'checked_ids_search_receipt_and_returned_sources'
             record_run_event(
                 "domain_term_search_completed",
                 game=runtime_context.game_name,
@@ -900,18 +1194,24 @@ def _discover_term_batch(
             failures={cue_id:'not_verified' for cue_id in expected_ids-checked_ids}
             return TermVerificationResult(accepted,
                 status='partial' if failures and checked_ids else 'success' if checked_ids else 'failed',
-                checked_ids=checked_ids,failures=failures)
+                checked_ids=checked_ids, failures=failures, evidence=diag['search_evidence'])
         except Exception as exc:
             last_error = exc
             category=failure_category(exc)
+            if category == "upgrade_required":
+                record_run_event("text_ai_terminal_failure", stage="domain_terms",
+                    category=category, error=redact_runtime_secrets(exc))
+                raise
             diag['fallback_reason']=category
+            if getattr(exc, 'cleanup_pending', False):
+                diag['cleanup_pending'] = True
             if not diag.get('failure_stage'):
                 diag['failure_stage']='output_parse' if category in {'request_error','parse_failure','format_mismatch'} else 'model'
             if cancelled() or category=='cancelled':
                 from .service import CancelledError
                 raise CancelledError('术语核验已取消。') from exc
             delay=retry_delay(exc,attempt)
-            retry=delay is not None and attempt<API_RETRIES and retry_budget[0]>0 and category!='search_evidence_missing'
+            retry=delay is not None and attempt<API_RETRIES and category not in {'search_evidence_missing', 'insufficient_evidence', 'total_timeout', 'queue_timeout'} and retry_budget.take()
             record_run_event(
                 "domain_term_search_retry" if retry else "domain_term_search_failed",
                 game=runtime_context.game_name,
@@ -920,12 +1220,14 @@ def _discover_term_batch(
                 category=category,batch_id=_batch_id,
             )
             if retry:
-                retry_budget[0]-=1
                 print(
                     f"   [警告] 联网术语表决失败，{delay} 秒后重试"
                     f"（{attempt}/{API_RETRIES}）"
                 )
-                if not wait_retry(delay,cancelled):
+                if not retry_budget.wait(delay,cancelled):
+                    if not cancelled():
+                        last_error=AIProviderError('联网核验总预算已用完。',category='total_timeout')
+                        break
                     from .service import CancelledError
                     raise CancelledError('术语核验已取消。')
             else:
@@ -934,7 +1236,9 @@ def _discover_term_batch(
             diag['total_duration_ms']=round((time.perf_counter()-attempt_started)*1000,3)
             record_run_event('asr_provider_request',**diag)
     print(f"   [警告] 联网术语表决失败，本次不自动改专名：{last_error}")
-    return TermVerificationResult(failures={row['id']:failure_category(last_error) for row in disputes})
+    return TermVerificationResult(failures={row['id']:failure_category(last_error) for row in disputes},
+                                  evidence=diag.get('search_evidence') or [],
+                                  cleanup_pending=bool(diag.get('cleanup_pending')))
 
 
 def apply_global_domain_term_mappings(segments, mappings):

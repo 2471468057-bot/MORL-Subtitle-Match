@@ -41,10 +41,9 @@ def main():
                     state=state,completed_batches=done,total_batches=total))
             if endpoint['model']==FILETRANS:
                 from twobyteasr.temp_audio_storage import oss_storage_from_settings
-                storage=oss_storage_from_settings(request['settings'])
+                storage=oss_storage_from_settings(request['settings'], credentials=tuple(request.get('storage_credentials') or ()))
                 if storage is None:raise RuntimeError('Qwen 3.1 长文件转写需要配置临时 OSS 存储。')
                 results=filetrans(audio,endpoint,cache,storage,progress=progress,check=check,
-                    restart_terminal=True,
                     auto_delete=bool(request['settings'].get('models',{}).get('oss_auto_delete',True)))
             else:
                 results=transcribe_chunks(audio,endpoint,cache,progress=progress,check=check)

@@ -13,6 +13,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# The old HOTFIX format permits arbitrary in-place writes/deletes and cannot
+# provide transactional user-data safety. Fail before creating logs or files.
+throw "旧 ZIP 热替换更新已停用。请从官方发布页下载 Setup，保存工程并退出程序后覆盖安装；不要先卸载或删除用户资料。"
+
 if ($LogPath) {
     $logDir = Split-Path -Parent $LogPath
     if (-not $logDir) { $logDir = "." }

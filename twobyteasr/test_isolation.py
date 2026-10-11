@@ -36,9 +36,16 @@ def install():
     # Do not discover the operator's Python/model caches via HOME or registry.
     for folder in ('profile', 'models', 'hf-cache', 'modelscope-cache', 'torch-cache'):
         (root / folder).mkdir(parents=True, exist_ok=True)
+    configured_models = os.environ.get('2BYTEASR_MODEL_ROOT', '').strip()
+    model_root = root/'models'
+    if configured_models:
+        candidate = Path(configured_models).expanduser().resolve()
+        if candidate.is_relative_to(root):
+            model_root = candidate
+    model_root.mkdir(parents=True, exist_ok=True)
     os.environ.update(USERPROFILE=str(root/'profile'), HF_HOME=str(root/'hf-cache'),
                       MODELSCOPE_CACHE=str(root/'modelscope-cache'), TORCH_HOME=str(root/'torch-cache'),
-                      **{'2BYTEASR_MODEL_ROOT': str(root/'models')})
+                      **{'2BYTEASR_MODEL_ROOT': str(model_root)})
     for key in tuple(os.environ):
         if key.endswith(('_API_KEY', '_ACCESS_TOKEN', '_AUTH_TOKEN')):
             os.environ.pop(key, None)

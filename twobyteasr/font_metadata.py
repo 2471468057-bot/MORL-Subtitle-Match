@@ -36,38 +36,56 @@ def _chinese_name(records, kinds):
 
 @lru_cache(maxsize=1024)
 def read_faces(filename: str) -> tuple[FontMetadata, ...]:
-    data = Path(filename).read_bytes()
-    u16 = lambda at: struct.unpack_from('>H', data, at)[0]
-    u32 = lambda at: struct.unpack_from('>I', data, at)[0]
-    offsets = [u32(12 + i * 4) for i in range(u32(8))] if data[:4] == b'ttcf' else [0]
-    faces = []
-    for index, offset in enumerate(offsets):
-        tables = {}
-        for i in range(u16(offset + 4)):
-            at = offset + 12 + i * 16
-            tables[data[at:at + 4]] = u32(at + 8)
-        names = {}; aliases = set(); localized = []
-        start = tables[b'name']; strings = start + u16(start + 4)
-        for i in range(u16(start + 2)):
-            platform, encoding, language, kind, length, pos = struct.unpack_from('>6H', data, start + 6 + i * 12)
-            if kind not in (1, 2, 4, 6, 16, 17):
-                continue
-            try:
-                text = data[strings + pos:strings + pos + length].decode('utf-16-be' if platform in (0, 3) else 'mac_roman')
-            except UnicodeError:
-                continue
-            if platform in (0, 3): localized.append((kind, language, text))
-            if kind in (1, 4, 6, 16): aliases.add(text)
-            if kind not in names or language == 0x409: names[kind] = text
-        faces.append(FontMetadata(str(Path(filename).resolve()), index,
-            names.get(16, names.get(1, '')), names.get(17, names.get(2, '')),
-            names.get(4, names.get(1, '')), names.get(6, ''),
-            u16(tables[b'OS/2'] + 4) if b'OS/2' in tables else 400, tuple(sorted(aliases)),
-            u16(tables[b'head'] + 18),
-            u16(tables[b'OS/2'] + 74) if b'OS/2' in tables else u16(tables[b'hhea'] + 4),
-            u16(tables[b'OS/2'] + 76) if b'OS/2' in tables else -struct.unpack_from('>h', data, tables[b'hhea'] + 6)[0],
-            _chinese_name(localized, (16, 1)) or names.get(16, names.get(1, '')),
-            _chinese_name(localized, (17, 2)) or names.get(17, names.get(2, ''))))
+    # Read only the table directory and the few tables used below. Startup
+    # scans every installed font (hundreds of MB of CJK glyph data); reading
+    # whole files evicted the OS cache and cost seconds on a cold disk.
+    with open(filename, 'rb') as stream:
+        def read(offset, length):
+            stream.seek(offset)
+            return stream.read(length)
+        u16 = lambda buffer, at: struct.unpack_from('>H', buffer, at)[0]
+        u32 = lambda buffer, at: struct.unpack_from('>I', buffer, at)[0]
+        header = read(0, 12)
+        if header[:4] == b'ttcf':
+            count = u32(header, 8)
+            listing = read(12, count * 4)
+            offsets = [u32(listing, i * 4) for i in range(count)]
+        else:
+            offsets = [0]
+        faces = []
+        for index, offset in enumerate(offsets):
+            table_count = u16(read(offset + 4, 2), 0)
+            directory = read(offset + 12, table_count * 16)
+            tables = {}
+            for i in range(table_count):
+                at = i * 16
+                tables[directory[at:at + 4]] = (u32(directory, at + 8), u32(directory, at + 12))
+            names = {}; aliases = set(); localized = []
+            name_offset, name_length = tables[b'name']
+            data = read(name_offset, name_length)
+            strings = u16(data, 4)
+            for i in range(u16(data, 2)):
+                platform, encoding, language, kind, length, pos = struct.unpack_from('>6H', data, 6 + i * 12)
+                if kind not in (1, 2, 4, 6, 16, 17):
+                    continue
+                try:
+                    text = data[strings + pos:strings + pos + length].decode('utf-16-be' if platform in (0, 3) else 'mac_roman')
+                except UnicodeError:
+                    continue
+                if platform in (0, 3): localized.append((kind, language, text))
+                if kind in (1, 4, 6, 16): aliases.add(text)
+                if kind not in names or language == 0x409: names[kind] = text
+            os2 = read(tables[b'OS/2'][0], 78) if b'OS/2' in tables else None
+            hhea = read(tables[b'hhea'][0], 8) if os2 is None else None
+            faces.append(FontMetadata(str(Path(filename).resolve()), index,
+                names.get(16, names.get(1, '')), names.get(17, names.get(2, '')),
+                names.get(4, names.get(1, '')), names.get(6, ''),
+                u16(os2, 4) if os2 is not None else 400, tuple(sorted(aliases)),
+                u16(read(tables[b'head'][0] + 18, 2), 0),
+                u16(os2, 74) if os2 is not None else u16(hhea, 4),
+                u16(os2, 76) if os2 is not None else -struct.unpack_from('>h', hhea, 6)[0],
+                _chinese_name(localized, (16, 1)) or names.get(16, names.get(1, '')),
+                _chinese_name(localized, (17, 2)) or names.get(17, names.get(2, ''))))
     return tuple(faces)
 
 
@@ -136,6 +154,16 @@ def resolve_local_face(family: str, weight: int = 0, style: str = '', bold: bool
     return chosen, f'缺失字体：{family}；临时使用 {chosen.full_name}，原始选择保留'
 
 
+@lru_cache(maxsize=1)
+def _faces_by_alias() -> dict[str, tuple[FontMetadata, ...]]:
+    """Casefolded alias -> faces, in local_faces() order (built once)."""
+    index: dict[str, list[FontMetadata]] = {}
+    for face in local_faces():
+        for alias in dict.fromkeys(name.casefold() for name in face.aliases):
+            index.setdefault(alias, []).append(face)
+    return {alias: tuple(faces) for alias, faces in index.items()}
+
+
 def restore_legacy_heavy_identity(style):
     """Only fill absent identity when a real full face alias proves Heavy/900.
 
@@ -145,8 +173,7 @@ def restore_legacy_heavy_identity(style):
     if style.font_weight or style.font_style_name or style.font_file:
         return
     family = style.font_family.casefold()
-    matches = [f for f in local_faces() if family in {a.casefold() for a in f.aliases}
-               and family != f.family.casefold()]
+    matches = [f for f in _faces_by_alias().get(family, ()) if family != f.family.casefold()]
     if matches and {(f.style, f.weight) for f in matches} == {('Heavy', 900)}:
         style.font_style_name = 'Heavy'
         style.font_weight = 900

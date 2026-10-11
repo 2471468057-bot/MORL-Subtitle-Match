@@ -1,0 +1,22 @@
+{
+  "category": "webpage",
+  "note": "Hand-authored product-UI explainers (no page capture): five feature scenes for the GitHub README, cut into one GIF each.",
+  "duration_s": 45,
+  "fps": 30,
+  "canvas": { "w": 1600, "h": 800, "aspect": "2:1" },
+  "style": "Brand language of the 2ByteASR website (website/DESIGN.md, 2026-10-09): solid dark ground, two surface levels, hairline rules, no gradients or glows; one chapter colour per scene; Source Han Sans Heavy titles, Medium UI text. Simplified, faithful app UI pieces with one clear action per step and a step caption that says what is happening.",
+  "palette": ["#17121e", "#211a28", "#2a2232", "#3a3142", "#f4eee9", "#cec4cb", "#a0949e", "#a48ad9", "#d6957c", "#c48cb4", "#ec8db0", "#8aa5b8", "#b34470", "#69cf9b", "#e9b65b", "#e0809f", "#7fb8c2"],
+  "font": "Source Han Sans SC (local OTF)",
+  "export": "mp4",
+  "asset_needs": [],
+  "block": "press-ripple (motion pattern reused inline for cursor presses)",
+  "content": {
+    "scenes": [
+      { "id": "s1-roles", "start": 0, "end": 10, "text": "一份字幕，三种分工", "motion": "role cards light up in turn; text types in with speaker chips; per-character ticks; check marks; lines drop into A/B speaker lanes" },
+      { "id": "s2-razor", "start": 10, "end": 19, "text": "剃刀切在字缝里", "motion": "per-character ticks; razor snaps gap to gap with a live before/after card; split; undo" },
+      { "id": "s3-review", "start": 19, "end": 27, "text": "三个模型写法不同，并排对照", "motion": "three model cards, differing character highlighted, cursor press adopts Qwen3-ASR, character flips" },
+      { "id": "s4-terms", "start": 27, "end": 35, "text": "游戏术语库：整理一次，反复使用", "motion": "per-game term list; wrong names in subtitles flagged and replaced from the list" },
+      { "id": "s5-clips", "start": 35, "end": 45, "text": "直播切片：先找到值得剪的片段", "motion": "danmaku heat curve draws, peaks labelled, candidate cards, press adds a clip and highlights its range" }
+    ]
+  }
+}

@@ -369,7 +369,7 @@ class StudioProjectController:
         self.page.open_project(self.session.project_path)
         self.page._begin_media_ingest(media_path)
 
-    def open_project_entry(self,path,*,single_shot_fn,skip_dirty_guard=False,on_ready=None):
+    def open_project_entry(self,path,*,single_shot_fn,skip_dirty_guard=False,on_ready=None,expected_result_ref=None):
         from PySide6.QtWidgets import QApplication
         page=self.page
         if page.isVisible() and QApplication.platformName()!='offscreen':
@@ -377,21 +377,28 @@ class StudioProjectController:
             gate=getattr(page,'_readiness',None)
             if gate is None:gate=page._readiness=StudioReadiness(page)
             gate.on_ready=on_ready
-            return gate.begin(path,skip_dirty_guard=skip_dirty_guard)
-        result=self.open_project(path,single_shot_fn=single_shot_fn,skip_dirty_guard=skip_dirty_guard)
-        if on_ready is not None and page.project is not None:on_ready()
+            return gate.begin(path,skip_dirty_guard=skip_dirty_guard,expected_result_ref=expected_result_ref)
+        result=self.open_project(path,single_shot_fn=single_shot_fn,skip_dirty_guard=skip_dirty_guard,expected_result_ref=expected_result_ref)
+        loaded_path = self.session.project_path
+        if (on_ready is not None and page.project is not None and page._project_view_state == 'open'
+                and loaded_path is not None and Path(loaded_path).resolve() == Path(path).resolve()):
+            if expected_result_ref:
+                from .recognition_result import verify_result_reference
+                verify_result_reference(expected_result_ref, project=page.project, project_path=loaded_path)
+            on_ready()
         return result
 
     def open_project(
         self, path: str | os.PathLike[str], *, single_shot_fn,
         skip_dirty_guard: bool = False,
+        expected_result_ref=None,
     ) -> None:
         from .ui_motion import reveal_cue
         page = self.page
         # Contents already settle the visible splitters once. A second full
         # widget-tree pass here used to delay every project transition.
         result = self._open_project_contents(
-            path, single_shot_fn=single_shot_fn, skip_dirty_guard=skip_dirty_guard
+            path, single_shot_fn=single_shot_fn, skip_dirty_guard=skip_dirty_guard,expected_result_ref=expected_result_ref
         )
         if page.project is not None and page._project_view_state == "open":
             page._studio_trace("UI_READY", upper_sizes=page.upper_splitter.sizes(),
@@ -399,11 +406,11 @@ class StudioProjectController:
             reveal_cue(page.studio_toolbar)
         return result
 
-    def _open_project_contents(self, path, *, single_shot_fn, skip_dirty_guard=False):
+    def _open_project_contents(self, path, *, single_shot_fn, skip_dirty_guard=False,expected_result_ref=None):
         # Synchronous compatibility API for non-visible tools/tests. User
         # navigation consumes these same steps through StudioReadiness.
         for _ in self._open_project_steps(path, single_shot_fn=single_shot_fn,
-                                          skip_dirty_guard=skip_dirty_guard):
+                                          skip_dirty_guard=skip_dirty_guard,expected_result_ref=expected_result_ref):
             pass
 
     def _open_project_steps(
@@ -413,6 +420,7 @@ class StudioProjectController:
         single_shot_fn,
         skip_dirty_guard: bool = False,
         loaded_project=None,
+        expected_result_ref=None,
     ) -> None:
         page = self.page
         profile_started = perf_counter()
@@ -420,6 +428,7 @@ class StudioProjectController:
         profile: dict[str, float] = {}
         open_stage = "REQUEST"
         requested_path = Path(path).expanduser()
+        previous_view_state = page._project_view_state
         current_path = self.session.project_path
         replacing = self.session.project is not None and (
             current_path is None
@@ -444,6 +453,9 @@ class StudioProjectController:
             page._studio_trace("PROJECT_LOAD_BEGIN", official_path=str(requested_path))
             with self._studio_operation("project_deserialize", project_id=project_id):
                 project = loaded_project if loaded_project is not None else load_project(requested_path)
+            if expected_result_ref:
+                from .recognition_result import verify_result_reference
+                verify_result_reference(expected_result_ref, project=project, project_path=requested_path)
             page._studio_trace("P74C_T0_PROJECT_SELECTED", project_path=str(requested_path.resolve()))
             page._studio_trace("PROJECT_DESERIALIZED", cue_count=len(project.cues), media_path=project.media.path)
             if hasattr(page, "_studio_mark_startup_milestone"):
@@ -454,7 +466,12 @@ class StudioProjectController:
                 project_id=project_id,
                 media_path=str(project.media.path or ""),
             ):
-                project, recovered_autosave = page._resolve_project_recovery(requested_path, project)
+                if expected_result_ref:
+                    # Recognition completion names an exact committed revision.
+                    # Autosave recovery belongs to explicit normal project open.
+                    recovered_autosave = False
+                else:
+                    project, recovered_autosave = page._resolve_project_recovery(requested_path, project)
             if hasattr(page, "_studio_startup_media_path"):
                 page._studio_startup_media_path = str(project.media.path or "")
             primary_asset = project.media_pool[0] if project.media_pool else None
@@ -507,9 +524,9 @@ class StudioProjectController:
                 audio_timebase=str((primary_asset.audio_metadata if primary_asset is not None else {}).get("timebase") or ""),
             )
         except Exception as exc:
-            page._project_view_state = "hub"
+            page._project_view_state = previous_view_state if self.session.project is not None else "hub"
             page._project_opening_path = ""
-            page._set_hub_toolbar_mode(True)
+            page._set_hub_toolbar_mode(self.session.project is None)
             page.studio_empty.setEnabled(True)
             page.hub_loading_label.hide()
             page._studio_trace("OPEN_FAILED", stage=open_stage, exception_type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
@@ -534,6 +551,16 @@ class StudioProjectController:
                 project.generation_metadata["speaker_recovery"] = load_candidate_snapshot(project)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 project.generation_metadata["speaker_recovery_error"] = str(exc)
+        # Freeze legacy visible captions before models, cue lookups and render
+        # revisions capture them. A later timeline hydration is too late.
+        from .studio_caption_timeline import ensure_independent_captions
+        ensure_independent_captions(project)
+        from .caption_source_receipts import recover_caption_sources
+        recover_caption_sources(project)
+        from .studio_caption_timeline import recover_caption_words
+        recovered_words = recover_caption_words(project)
+        if recovered_words:
+            page._studio_trace("CAPTION_WORDS_RECOVERED", count=recovered_words)
         page.project = project
         page._manual_selection_hold = False
         visibility = project.studio_state.get("subtitle_track_visibility", {})
@@ -746,11 +773,10 @@ class StudioProjectController:
         mark_hydration("timeline_window")
         if project.generation_metadata.get('display_overlap_audit',{}).get('status') != 'user_undone':
             from .display_timing import project_display_tail_plan
-            from .studio_commands import RepairDisplayHandoffsCommand
             ends,audit=project_display_tail_plan(project)
+            page._pending_display_handoffs_preview = {"project_id": project.project_id, "ends": ends, "audit": audit}
             if ends:
-                page.undo_stack.push(RepairDisplayHandoffsCommand(project,ends,audit,page._changed))
-                bind_text(page.save_state, '已收口{value0}条说话人交接显示边界，可撤销；原始声学证据保留。', property='toolTip', value0=len(ends))
+                bind_text(page.save_state, '发现{value0}条可预览的显示边界修复，确认后应用；原始工程保持。', property='toolTip', value0=len(ends))
         missing_fonts = missing_project_fonts(project)
         if missing_fonts:
             message = "缺失字体: " + "、".join(missing_fonts)
@@ -810,6 +836,17 @@ class StudioProjectController:
                         restore_seconds = restore_source_seconds(
                             sequence_of(project), playhead_ms
                         )
+                    # Restore the actual clip instance and the same content-clock
+                    # artifact used by the compositor/audio/task renderer. Opening
+                    # the original FLV first seeks in its discontinuous PTS domain
+                    # and can time out before the deferred proxy rebind is allowed.
+                    target_resolver = getattr(page, "_multitrack_preview_target", None)
+                    target = target_resolver(playhead_ms) if callable(target_resolver) else None
+                    if target:
+                        playable_source = str(target["source_path"])
+                        restore_seconds = int(target["source_ms"]) / 1000.0
+                    elif hasattr(page, "_preview_media_path"):
+                        playable_source = page._preview_media_path(playable_source)
                     page._studio_trace(
                         "MEDIA_RESTORE_SEEK",
                         playhead_ms=playhead_ms,

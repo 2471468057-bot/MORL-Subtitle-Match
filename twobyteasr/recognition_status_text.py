@@ -3,6 +3,13 @@ from .i18n import tr, join_text
 
 
 def recognition_event_text(kind, payload):
+    if payload.get('backend') == 'moss' and kind == 'asr_worker_progress':
+        phase = {'audio_preparation': '音频准备', 'model_loading': '模型加载',
+                 'audio_encoding': '音频编码', 'generation': '生成', 'parsing': '解析',
+                 'handoff': '衔接', 'completed': '完成', 'needs_review': '需要复核'}.get(payload.get('phase'), '准备')
+        return tr('MOSS · {phase} · {seconds:.1f} 秒 · 已生成 {tokens} tokens',
+                  phase=tr(phase), seconds=float(payload.get('elapsed_seconds', 0)),
+                  tokens=int(payload.get('generated_tokens') or 0))
     if kind == 'speaker_progress':
         state = {
             'loading': '正在加载说话人模型', 'loaded': '模型已加载，开始分析',
@@ -10,7 +17,7 @@ def recognition_event_text(kind, payload):
             'merging': '正在匹配字幕标签', 'completed': '说话人结果已合并，身份待确认',
             'failed': '分析失败，文字已保留',
         }.get(payload.get('state'), '准备中')
-        parts = [tr('Nemotron · {state}', state=tr(state))]
+        parts = [tr('说话人 · {state}', state=tr(state))]
         if 'processed_end' in payload:
             parts.append(tr('已分析 {start:.1f}–{end:.1f} 秒',
                 start=payload.get('processed_start', 0), end=payload['processed_end']))

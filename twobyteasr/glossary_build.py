@@ -429,10 +429,15 @@ def _structured_call(
     except AIProviderError as exc:
         category = str(getattr(exc, "category", "") or "")
         if category == "cancelled":
-            raise GlossarySearchError("cancelled", "检索已取消。") from exc
-        if category in {"unauthorized", "auth"} or "401" in str(exc):
-            raise GlossarySearchError("unauthorized", f"AI 认证失败：{exc}") from exc
-        raise GlossarySearchError(category or "unavailable", f"AI 调用失败：{exc}") from exc
+            failure = GlossarySearchError("cancelled", "检索已取消。")
+        elif category in {"unauthorized", "auth"} or "401" in str(exc):
+            failure = GlossarySearchError("unauthorized", f"AI 认证失败：{exc}")
+        else:
+            failure = GlossarySearchError(category or "unavailable", f"AI 调用失败：{exc}")
+        # Keep request-dispatch evidence on failure without logging the entire
+        # diagnostic object (which can contain private CLI input metadata).
+        failure.request_sent = bool(diag.get('request_sent') or diag.get('cli_pid'))
+        raise failure from exc
     except (ValueError, TypeError) as exc:
         raise GlossarySearchError(
             "unavailable", f"AI 返回不符合契约：{' '.join(str(exc).split())[:200]}"
@@ -995,6 +1000,11 @@ def run_full_library_update(legacy, game_name, settings, *, report=None,
                             cancel_check=None, resume=None, checkpoint_writer=None,
                             on_candidates=None, on_event=None):
     """Preserve sourced work on a bounded failure; cancellation stays cancellation."""
+    if (settings.get('models') or {}).get('glossary_execution_mode') == 'full':
+        from .glossary_fullflow import run_complete_library_update
+        return run_complete_library_update(legacy, game_name, settings, report=report,
+            cancel_check=cancel_check, resume=resume, checkpoint_writer=checkpoint_writer,
+            on_candidates=on_candidates, on_event=on_event)
     latest = {}
     started = time.perf_counter()
 
@@ -1059,6 +1069,9 @@ def _run_full_library_update(
     checkpoint_writer: Callable[[Mapping[str, Any]], None] | None = None,
     on_candidates: Callable[[list[SearchedTerm]], None] | None = None,
     on_event=None,
+    on_document=None,
+    source_budget=None,
+    deadline_override=None,
 ) -> dict:
     """清单式完整建库 v3：程序负责收集，模型负责整理。
 
@@ -1103,6 +1116,8 @@ def _run_full_library_update(
         )
     provider = provider_for_stage(settings_dict, "polish")
     board = HealthBoard()
+    board.request_limit = max(1, min(100, int(models.get('glossary_max_source_requests', 24))))
+    board.request_budget = source_budget
     model_cache = load_model_cache()
     cache_hits = 0
     from .glossary_outcome import resumable_checkpoint
@@ -1114,6 +1129,8 @@ def _run_full_library_update(
     category_cursors=copy.deepcopy(resume.get('category_cursors',{})) if isinstance(resume,Mapping) else {}
     models = settings_dict.get('models', {})
     deadline = time.monotonic() + max(30, min(1800, float(models.get('glossary_task_budget_seconds', 360))))
+    if deadline_override is not None:
+        deadline = min(deadline, deadline_override)
 
     from .task_execution_events import ExecutionObserver
     observer = ExecutionObserver(on_event,{k:capability.get(k, "") for k in ("provider","service","transport","model")})
@@ -1558,6 +1575,10 @@ def _run_full_library_update(
         html = None if member_names or health.in_cooldown() or catalog.get('discovery_only') else _try_fetch(url, board=board)
         page_names = 0
         if html:
+            if on_document is not None:
+                from .glossary_fullflow import document_text
+                on_document(dict(url=url, title=catalog.get('title', ''),
+                    text=document_text(html), fetched_at=time.time()))
             pages_chars += len(html)
             before = len(candidates)
             for entry in extract_catalog_names({url:html}, [catalog], existing_terms=[], structured_only=True):

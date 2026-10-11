@@ -1,0 +1,1952 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1600, height=800">
+    <title>兔白字幕 · 功能演示</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "HanSans";
+        src: url("assets/fonts/SourceHanSansSC-Medium.otf") format("opentype");
+        font-weight: 500;
+      }
+      @font-face {
+        font-family: "HanSans";
+        src: url("assets/fonts/SourceHanSansSC-Heavy.otf") format("opentype");
+        font-weight: 900;
+      }
+      /* Japanese UI text uses Japanese glyph forms; Chinese subtitle content keeps HanSans */
+      @font-face {
+        font-family: "YuGo";
+        src: local("Yu Gothic Medium"), local("YuGothic-Medium");
+        font-weight: 500;
+      }
+      @font-face {
+        font-family: "YuGo";
+        src: local("Yu Gothic Bold"), local("YuGothic-Bold");
+        font-weight: 900;
+      }
+      html[lang="ja"] #root {
+        font-family: "YuGo", "HanSans", sans-serif;
+        font-feature-settings: "palt" 1;
+        line-height: 1.32;
+      }
+      html[lang="ja"] .zh,
+      html[lang="ja"] .dm {
+        font-family: "HanSans", sans-serif;
+      }
+      /* en / ja subtitles: word-sized labels centred on their timing slot */
+      html[lang="en"] .cue .cc,
+      html[lang="ja"] .cue .cc {
+        width: auto;
+        margin-left: 0;
+        white-space: nowrap;
+        transform: translateX(-50%);
+      }
+      html[lang="en"] .cue .cc {
+        font-size: 30px;
+      }
+      html[lang="ja"] .cue .cc {
+        font-size: 34px;
+      }
+      html[lang="en"] .l4-t,
+      html[lang="ja"] .l4-t {
+        white-space: nowrap;
+      }
+      /* en / ja replacement: the old word narrows while the new one widens, so the line never has a gap */
+      html[lang="en"] .sw,
+      html[lang="ja"] .sw {
+        display: inline-flex;
+      }
+      html[lang="en"] .sw .old,
+      html[lang="en"] .sw .new,
+      html[lang="ja"] .sw .old,
+      html[lang="ja"] .sw .new {
+        position: relative;
+        display: inline-block;
+        overflow: hidden;
+      }
+      html[lang="en"] .sw .new,
+      html[lang="ja"] .sw .new {
+        max-width: 0;
+      }
+      /* en / ja review line: old and new versions stacked, crossfaded on adopt */
+      .cur3-t .v {
+        display: block;
+      }
+      .cur3-t .v2 {
+        position: absolute;
+        left: 0;
+        top: 0;
+        opacity: 0;
+      }
+      .cur3-t .w {
+        position: relative;
+        display: inline-block;
+      }
+      :root {
+        --bg: #17121e;
+        --s1: #211a28;
+        --s2: #2a2232;
+        --s3: #342b3d;
+        --ln: #3a3142;
+        --ln2: #4a4054;
+        --tx: #f4eee9;
+        --tx2: #cec4cb;
+        --tx3: #a0949e;
+        --tx4: #8b818b;
+        --vio: #a48ad9;
+        --apr: #d6957c;
+        --mau: #c48cb4;
+        --ber: #ec8db0;
+        --sea: #8aa5b8;
+        --brand: #b34470;
+        --ok: #69cf9b;
+        --warn: #e9b65b;
+        --spa: #e0809f;
+        --spb: #7fb8c2;
+        --razor: #ff8a3d;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1600px;
+        height: 800px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--tx);
+        font-family: "HanSans", sans-serif;
+        font-weight: 500;
+      }
+      .scene {
+        position: absolute;
+        inset: 0;
+      }
+      .inner {
+        position: absolute;
+        inset: 0;
+      }
+      .bignum {
+        position: absolute;
+        right: 64px;
+        top: 40px;
+        font-size: 168px;
+        font-weight: 900;
+        line-height: 1;
+        color: var(--tx);
+        opacity: 0.05;
+      }
+      .head {
+        position: absolute;
+        left: 80px;
+        top: 50px;
+        width: 1200px;
+      }
+      .eyebrow {
+        display: block;
+        font-size: 22px;
+        letter-spacing: 0.16em;
+      }
+      .title {
+        display: block;
+        margin-top: 4px;
+        font-size: 50px;
+        font-weight: 900;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+      }
+      .caps {
+        position: relative;
+        height: 40px;
+        margin-top: 10px;
+      }
+      .cap {
+        position: absolute;
+        left: 0;
+        top: 0;
+        font-size: 27px;
+        color: var(--tx2);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .cap b {
+        color: var(--tx);
+        font-weight: 500;
+      }
+      .rule {
+        position: absolute;
+        left: 80px;
+        right: 80px;
+        top: 216px;
+        height: 1px;
+        background: var(--ln);
+        transform-origin: left center;
+      }
+      .panel {
+        position: absolute;
+        background: var(--s1);
+        border: 1px solid var(--ln);
+        border-radius: 18px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 8px;
+        font-size: 20px;
+        white-space: nowrap;
+      }
+      .cursor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 46px;
+        height: 46px;
+        filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.45));
+      }
+      .cursor svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .ring {
+        position: absolute;
+        width: 36px;
+        height: 36px;
+        margin: -18px 0 0 -18px;
+        border-radius: 50%;
+        border: 2px solid var(--ok);
+        opacity: 0;
+      }
+
+      /* ---------- scene 1: roles ---------- */
+      .roles {
+        position: absolute;
+        left: 80px;
+        top: 250px;
+        width: 390px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .role {
+        position: relative;
+        height: 140px;
+        padding: 20px 24px;
+        background: var(--s1);
+        border: 1px solid var(--ln);
+        border-radius: 16px;
+      }
+      .rc-on {
+        position: absolute;
+        inset: -1px;
+        border: 2px solid var(--c);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--c) 13%, transparent);
+        opacity: 0;
+      }
+      .rc-k {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 21px;
+        color: var(--c);
+      }
+      .rc-dot {
+        display: block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--c);
+      }
+      .rc-m {
+        position: relative;
+        display: block;
+        margin-top: 6px;
+        font-size: 30px;
+        font-weight: 900;
+      }
+      .rc-d {
+        position: relative;
+        display: block;
+        margin-top: 4px;
+        font-size: 21px;
+        color: var(--tx3);
+      }
+      .work {
+        left: 510px;
+        top: 250px;
+        width: 1010px;
+        height: 452px;
+      }
+      .wave-row {
+        position: absolute;
+        left: 28px;
+        top: 22px;
+        right: 28px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .wave-label {
+        font-size: 20px;
+        color: var(--tx3);
+        white-space: nowrap;
+      }
+      .wave {
+        display: block;
+        width: 760px;
+        height: 40px;
+        transform-origin: left center;
+      }
+      .lines {
+        position: absolute;
+        left: 28px;
+        top: 86px;
+        right: 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .line {
+        position: relative;
+        height: 50px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .spk {
+        width: 44px;
+        color: #1b1420;
+        font-weight: 900;
+      }
+      .spk.a {
+        background: var(--spa);
+      }
+      .spk.b {
+        background: var(--spb);
+      }
+      .txt {
+        position: relative;
+        display: flex;
+        font-size: 31px;
+        letter-spacing: 0.02em;
+      }
+      .ch {
+        position: relative;
+        display: block;
+        opacity: 0;
+      }
+      .tk {
+        position: absolute;
+        left: 0;
+        bottom: -9px;
+        width: 2px;
+        height: 9px;
+        background: var(--apr);
+        opacity: 0;
+      }
+      .lt {
+        margin-left: 6px;
+        font-size: 20px;
+        color: var(--apr);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .ok {
+        margin-left: auto;
+        font-size: 20px;
+        color: var(--ok);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .scan {
+        position: absolute;
+        top: 4px;
+        bottom: 4px;
+        left: 60px;
+        width: 4px;
+        border-radius: 2px;
+        background: var(--mau);
+        opacity: 0;
+      }
+      .lanes {
+        position: absolute;
+        left: 28px;
+        right: 28px;
+        top: 292px;
+        height: 140px;
+      }
+      .ruler {
+        position: absolute;
+        left: 70px;
+        right: 12px;
+        top: 0;
+        height: 26px;
+        border-bottom: 1px solid var(--ln);
+      }
+      .rl {
+        position: absolute;
+        top: 0;
+        font-size: 17px;
+        color: var(--tx4);
+      }
+      .lane {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 44px;
+        border-radius: 10px;
+        background: var(--s2);
+      }
+      .lane-h {
+        position: absolute;
+        left: 12px;
+        top: 0;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 19px;
+        color: var(--tx2);
+      }
+      .blk {
+        position: absolute;
+        top: 5px;
+        height: 34px;
+        border-radius: 7px;
+        padding: 0 8px;
+        display: flex;
+        align-items: center;
+        font-size: 17px;
+        color: #1b1420;
+        white-space: nowrap;
+        overflow: hidden;
+        transform-origin: left center;
+      }
+
+      /* ---------- scene 2: razor ---------- */
+      .tl2 {
+        left: 80px;
+        top: 250px;
+        width: 1440px;
+        height: 452px;
+      }
+      .r2 {
+        position: absolute;
+        left: 120px;
+        right: 40px;
+        top: 26px;
+        height: 30px;
+        border-bottom: 1px solid var(--ln);
+      }
+      .r2 .rl {
+        font-size: 17px;
+      }
+      .lane2 {
+        position: absolute;
+        left: 20px;
+        right: 20px;
+        top: 76px;
+        height: 104px;
+        border-radius: 12px;
+        background: var(--s2);
+      }
+      .lane2-h {
+        position: absolute;
+        left: 14px;
+        top: 0;
+        height: 104px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 19px;
+        color: var(--tx2);
+      }
+      .cue {
+        position: absolute;
+        top: 82px;
+        height: 92px;
+        border-radius: 10px;
+        border: 2px solid var(--spb);
+        background: color-mix(in srgb, var(--spb) 30%, var(--s2));
+      }
+      .cue .cc {
+        position: absolute;
+        top: 22px;
+        width: 40px;
+        margin-left: -20px;
+        text-align: center;
+        font-size: 38px;
+        line-height: 46px;
+      }
+      .bt {
+        position: absolute;
+        top: 182px;
+        width: 2px;
+        height: 16px;
+        margin-left: -1px;
+        background: var(--apr);
+        opacity: 0;
+      }
+      .ctime {
+        position: absolute;
+        top: 202px;
+        font-size: 20px;
+        color: var(--apr);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .razor {
+        position: absolute;
+        left: 0;
+        top: 6px;
+        width: 0;
+        height: 204px;
+        opacity: 0;
+      }
+      .razor-line {
+        position: absolute;
+        left: -2px;
+        top: 34px;
+        width: 4px;
+        height: 170px;
+        border-radius: 2px;
+        background: var(--razor);
+      }
+      .razor-head {
+        position: absolute;
+        left: -22px;
+        top: 0;
+        width: 44px;
+        height: 34px;
+        border-radius: 10px;
+        background: var(--razor);
+        color: #1b1420;
+        font-size: 22px;
+        font-weight: 900;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .prev {
+        left: 120px;
+        top: 250px;
+        width: 760px;
+        height: 170px;
+        padding: 22px 26px;
+        border-color: var(--razor);
+        opacity: 0;
+      }
+      .pv-t {
+        display: block;
+        font-size: 20px;
+        color: var(--razor);
+      }
+      .pv-rows {
+        position: relative;
+        margin-top: 14px;
+        height: 90px;
+      }
+      .pv {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        opacity: 0;
+      }
+      .pv-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 27px;
+      }
+      .pv-row .chip {
+        border: 1px solid var(--razor);
+        color: var(--razor);
+      }
+      .undo {
+        right: 40px;
+        top: 250px;
+        width: 420px;
+        height: 170px;
+        padding: 26px 28px;
+        opacity: 0;
+      }
+      .undo-k {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        height: 46px;
+        padding: 0 18px;
+        border-radius: 12px;
+        border: 1px solid var(--ln2);
+        background: var(--s2);
+        font-size: 22px;
+      }
+      .undo-d {
+        display: block;
+        margin-top: 16px;
+        font-size: 21px;
+        color: var(--tx3);
+      }
+
+      /* ---------- scene 3: review ---------- */
+      .cur3 {
+        left: 80px;
+        top: 250px;
+        width: 1440px;
+        height: 140px;
+        padding: 20px 30px;
+      }
+      .cur3-l {
+        display: block;
+        font-size: 21px;
+        color: var(--tx3);
+      }
+      .cur3-t {
+        position: relative;
+        display: block;
+        white-space: nowrap;
+        margin-top: 8px;
+        font-size: 46px;
+        font-weight: 900;
+        letter-spacing: 0.02em;
+      }
+      .flip {
+        position: relative;
+        display: inline-block;
+        vertical-align: top;
+        width: 1em;
+        height: 1.3em;
+        overflow: hidden;
+      }
+      .flip span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        display: block;
+      }
+      .mark {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 2px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--warn);
+        opacity: 0;
+      }
+      .badge3 {
+        position: absolute;
+        right: 30px;
+        top: 44px;
+        height: 42px;
+        min-width: 300px;
+      }
+      .badge3 .chip {
+        position: absolute;
+        right: 0;
+        top: 0;
+        height: 42px;
+        padding: 0 18px;
+        font-size: 20px;
+        opacity: 0;
+      }
+      .cards3 {
+        position: absolute;
+        left: 80px;
+        top: 420px;
+        width: 1440px;
+        display: flex;
+        gap: 24px;
+      }
+      .mc {
+        position: relative;
+        flex: 1;
+        height: 210px;
+        padding: 22px 26px;
+        background: var(--s1);
+        border: 1px solid var(--ln);
+        border-radius: 16px;
+      }
+      .mc-sel {
+        position: absolute;
+        inset: -1px;
+        border: 3px solid var(--ber);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--ber) 10%, transparent);
+        opacity: 0;
+      }
+      .mc-top {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .num {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--s3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 19px;
+        font-weight: 900;
+      }
+      .mc .chip {
+        border: 1px solid var(--c);
+        color: var(--c);
+      }
+      .mc-t {
+        position: relative;
+        display: block;
+        white-space: nowrap;
+        margin-top: 30px;
+        font-size: 29px;
+        letter-spacing: 0.02em;
+      }
+      .diff {
+        position: relative;
+        display: inline-block;
+        color: var(--tx);
+      }
+      .diff i {
+        position: absolute;
+        left: -3px;
+        right: -3px;
+        top: 2px;
+        bottom: 0;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--apr) 45%, transparent);
+        opacity: 0;
+      }
+      .diff em {
+        position: relative;
+        font-style: normal;
+      }
+      .mc-tag {
+        position: absolute;
+        right: 22px;
+        top: 22px;
+        color: var(--ber);
+        font-size: 21px;
+        opacity: 0;
+      }
+
+      /* ---------- scene 4: terms ---------- */
+      .lib {
+        left: 80px;
+        top: 250px;
+        width: 560px;
+        height: 452px;
+        padding: 24px 26px;
+      }
+      .lib-h {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 22px;
+      }
+      .lib-h span {
+        font-size: 19px;
+        color: var(--tx3);
+      }
+      .games {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .games .chip {
+        background: var(--s2);
+        color: var(--tx2);
+        border: 1px solid var(--ln);
+      }
+      .games .chip.on {
+        background: color-mix(in srgb, var(--sea) 25%, var(--s2));
+        border-color: var(--sea);
+        color: var(--tx);
+      }
+      .terms {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 20px;
+      }
+      .term {
+        position: relative;
+        height: 84px;
+        padding: 12px 16px;
+        border-radius: 12px;
+        background: var(--s2);
+      }
+      .term-on {
+        position: absolute;
+        inset: 0;
+        border: 2px solid var(--sea);
+        border-radius: 12px;
+        opacity: 0;
+      }
+      .term-a {
+        position: relative;
+        display: block;
+        font-size: 25px;
+      }
+      .term-a small {
+        margin-left: 10px;
+        font-size: 19px;
+        color: var(--tx3);
+      }
+      .term-b {
+        position: relative;
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+        font-size: 18px;
+        color: var(--tx3);
+      }
+      .term-b .ok2 {
+        color: var(--ok);
+      }
+      .subs4 {
+        left: 680px;
+        top: 250px;
+        width: 840px;
+        height: 452px;
+        padding: 24px 30px;
+      }
+      .subs4-h {
+        display: block;
+        font-size: 22px;
+      }
+      .l4s {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .l4 {
+        position: relative;
+        height: 86px;
+        padding: 0 22px;
+        border-radius: 14px;
+        background: var(--s2);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .l4-t {
+        position: relative;
+        display: flex;
+        align-items: center;
+        font-size: 32px;
+      }
+      .sw {
+        position: relative;
+        display: block;
+        height: 48px;
+      }
+      .sw .old,
+      .sw .new {
+        left: 0;
+        top: 0;
+        display: block;
+        white-space: nowrap;
+        line-height: 48px;
+      }
+      .sw .old {
+        position: relative;
+      }
+      .sw .new {
+        position: absolute;
+      }
+      .sw .old {
+        color: var(--warn);
+      }
+      .sw .new {
+        color: var(--ok);
+        opacity: 0;
+      }
+      .sw .strike {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 24px;
+        height: 3px;
+        background: var(--warn);
+        transform-origin: left center;
+      }
+      .l4-r {
+        margin-left: auto;
+        font-size: 20px;
+        white-space: nowrap;
+        opacity: 0;
+      }
+
+      /* ---------- scene 5: clips ---------- */
+      .heat {
+        left: 80px;
+        top: 240px;
+        width: 1440px;
+        height: 236px;
+        overflow: hidden;
+      }
+      .heat-l {
+        position: absolute;
+        left: 28px;
+        top: 18px;
+        font-size: 21px;
+        color: var(--tx3);
+      }
+      .heat svg {
+        position: absolute;
+        left: 28px;
+        top: 48px;
+        width: 1384px;
+        height: 150px;
+      }
+      .ax {
+        position: absolute;
+        top: 204px;
+        font-size: 17px;
+        color: var(--tx4);
+      }
+      .dm {
+        position: absolute;
+        left: 0;
+        font-size: 19px;
+        color: var(--tx2);
+        white-space: nowrap;
+        padding: 3px 12px;
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--s3) 85%, transparent);
+      }
+      .pk {
+        position: absolute;
+        top: 30px;
+        width: 0;
+        height: 180px;
+        opacity: 0;
+      }
+      .pk-line {
+        position: absolute;
+        left: -1px;
+        top: 34px;
+        width: 2px;
+        height: 140px;
+        background: var(--mau);
+        opacity: 0.6;
+      }
+      .pk-lab {
+        position: absolute;
+        left: -80px;
+        top: 0;
+        width: 160px;
+        text-align: center;
+      }
+      .pk-lab span {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 10px;
+        background: var(--mau);
+        color: #1b1420;
+        font-size: 19px;
+        font-weight: 900;
+      }
+      .band {
+        position: absolute;
+        top: 48px;
+        height: 150px;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--ber) 28%, transparent);
+        border: 2px solid var(--ber);
+        opacity: 0;
+      }
+      .cands {
+        position: absolute;
+        left: 80px;
+        top: 506px;
+        width: 1440px;
+        display: flex;
+        gap: 24px;
+      }
+      .cd {
+        position: relative;
+        flex: 1;
+        height: 196px;
+        padding: 20px 24px;
+        background: var(--s1);
+        border: 1px solid var(--ln);
+        border-radius: 16px;
+      }
+      .cd-sel {
+        position: absolute;
+        inset: -1px;
+        border: 3px solid var(--ber);
+        border-radius: 16px;
+        opacity: 0;
+      }
+      .cd-t {
+        position: relative;
+        display: block;
+        font-size: 25px;
+        font-weight: 900;
+      }
+      .cd-time {
+        position: relative;
+        display: block;
+        margin-top: 6px;
+        font-size: 19px;
+        color: var(--mau);
+      }
+      .cd-why {
+        position: relative;
+        display: block;
+        margin-top: 8px;
+        font-size: 19px;
+        color: var(--tx3);
+      }
+      .cd-btn {
+        position: absolute;
+        left: 24px;
+        bottom: 18px;
+        height: 40px;
+        min-width: 200px;
+      }
+      .cd-btn span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 40px;
+        padding: 0 18px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        font-size: 20px;
+        white-space: nowrap;
+      }
+      .cd-btn .b0 {
+        background: var(--brand);
+        color: var(--tx);
+      }
+      .cd-btn .b1 {
+        background: color-mix(in srgb, var(--ok) 22%, var(--s2));
+        color: var(--ok);
+        border: 1px solid var(--ok);
+        opacity: 0;
+      }
+      .cd-btn.ghost .b0 {
+        background: var(--s2);
+        color: var(--tx3);
+        border: 1px solid var(--ln);
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-hpo7" id="root" data-composition-id="main" data-start="0" data-width="1600" data-height="800" data-duration="45" data-fps="30">
+      <!-- ======================= 01 roles ======================= -->
+      <section data-hf-id="hf-qjgf" id="s1" class="clip scene" data-start="0" data-duration="10" data-track-index="0">
+        <div data-hf-id="hf-mv1a" id="s1-in" class="inner">
+          <div data-hf-id="hf-ckz1" class="bignum">01</div>
+          <div data-hf-id="hf-z992" class="head">
+            <span data-hf-id="hf-nk84" class="eyebrow" id="s1-eb" style="color: var(--vio)">01 · 识别</span>
+            <span data-hf-id="hf-xgc5" class="title" id="s1-ti">一份字幕，三种分工</span>
+            <div data-hf-id="hf-br8j" class="caps">
+              <div data-hf-id="hf-n1g2" class="cap" id="s1-c1"><b data-hf-id="hf-6it7">① MOSS</b> 写出文字，并分出 A、B 两位说话人</div>
+              <div data-hf-id="hf-x3kd" class="cap" id="s1-c2"><b data-hf-id="hf-pddc">② FireRedASR2-AED</b> 给每个字标上起止时间</div>
+              <div data-hf-id="hf-j66x" class="cap" id="s1-c3"><b data-hf-id="hf-yvw2">③ Qwen3-ASR</b> 再听一遍，逐字核对写法</div>
+              <div data-hf-id="hf-pjfp" class="cap" id="s1-c4">最后，<b data-hf-id="hf-g9pz">按说话人</b>放进各自的字幕轨</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-dgpv" class="rule" id="s1-rule"></div>
+          <div data-hf-id="hf-94ij" class="roles">
+            <div data-hf-id="hf-0f1z" class="role" id="s1-r1" style="--c: var(--vio)">
+              <div data-hf-id="hf-9s2t" class="rc-on"></div>
+              <span data-hf-id="hf-0mi5" class="rc-k"><i data-hf-id="hf-hxs3" class="rc-dot"></i>主力转写</span>
+              <span data-hf-id="hf-69r4" class="rc-m">MOSS</span>
+              <span data-hf-id="hf-idla" class="rc-d">写出文字，分清谁在说</span>
+            </div>
+            <div data-hf-id="hf-q0yf" class="role" id="s1-r2" style="--c: var(--apr)">
+              <div data-hf-id="hf-8rzt" class="rc-on"></div>
+              <span data-hf-id="hf-sayq" class="rc-k"><i data-hf-id="hf-5xvn" class="rc-dot"></i>字幕时间轴</span>
+              <span data-hf-id="hf-xcyu" class="rc-m">FireRedASR2-AED</span>
+              <span data-hf-id="hf-o46f" class="rc-d">给每个字标上时间</span>
+            </div>
+            <div data-hf-id="hf-t1d2" class="role" id="s1-r3" style="--c: var(--mau)">
+              <div data-hf-id="hf-9yww" class="rc-on"></div>
+              <span data-hf-id="hf-v8t7" class="rc-k"><i data-hf-id="hf-5jkm" class="rc-dot"></i>文字复核</span>
+              <span data-hf-id="hf-abql" class="rc-m">Qwen3-ASR</span>
+              <span data-hf-id="hf-rgwy" class="rc-d">再听一遍，核对写法</span>
+            </div>
+          </div>
+          <div data-hf-id="hf-5x6j" class="panel work" id="s1-work">
+            <div data-hf-id="hf-j9q8" class="wave-row">
+              <span data-hf-id="hf-kv4f" class="wave-label">直播录像 · 双人对话</span>
+              <svg data-hf-id="hf-g50m" class="wave" id="s1-wave" viewBox="0 0 760 40" preserveAspectRatio="none" />
+            </div>
+            <div data-hf-id="hf-qvs1" class="lines">
+              <div data-hf-id="hf-8bpg" class="line" id="s1-l1">
+                <span data-hf-id="hf-yt99" class="chip spk a">A</span>
+                <span data-hf-id="hf-h5kz" class="txt" data-text="我们先沿着河边往前走"></span>
+                <span data-hf-id="hf-3gku" class="lt">00:00.8 → 00:03.2</span>
+                <span data-hf-id="hf-kjdw" class="ok">✓ 一致</span>
+                <i data-hf-id="hf-76fz" class="scan"></i>
+              </div>
+              <div data-hf-id="hf-j773" class="line" id="s1-l2">
+                <span data-hf-id="hf-p9ot" class="chip spk b">B</span>
+                <span data-hf-id="hf-ikx6" class="txt" data-text="我拿到了你们先走"></span>
+                <span data-hf-id="hf-dyeb" class="lt">00:05.2 → 00:07.2</span>
+                <span data-hf-id="hf-bbvg" class="ok">✓ 一致</span>
+                <i data-hf-id="hf-d7fj" class="scan"></i>
+              </div>
+              <div data-hf-id="hf-d1ha" class="line" id="s1-l3">
+                <span data-hf-id="hf-23sh" class="chip spk a">A</span>
+                <span data-hf-id="hf-8k8h" class="txt" data-text="看到了我先拉住它"></span>
+                <span data-hf-id="hf-zw59" class="lt">00:17.6 → 00:19.8</span>
+                <span data-hf-id="hf-a4yd" class="ok">✓ 一致</span>
+                <i data-hf-id="hf-ct4i" class="scan"></i>
+              </div>
+            </div>
+            <div data-hf-id="hf-dvzd" class="lanes" id="s1-lanes">
+              <div data-hf-id="hf-db9w" class="ruler">
+                <span data-hf-id="hf-nz9m" class="rl" style="left: 0">00:00</span>
+                <span data-hf-id="hf-tvma" class="rl" style="left: 210px">00:05</span>
+                <span data-hf-id="hf-x2lx" class="rl" style="left: 420px">00:10</span>
+                <span data-hf-id="hf-z3gl" class="rl" style="left: 630px">00:15</span>
+              </div>
+              <div data-hf-id="hf-615a" class="lane" style="top: 36px">
+                <span data-hf-id="hf-fswj" class="lane-h"><i data-hf-id="hf-qosf" class="rc-dot" style="--c: var(--spa); background: var(--spa)"></i>A</span>
+                <span data-hf-id="hf-8cvo" class="blk" id="s1-b1" style="left: 105px; width: 98px; background: var(--spa)">我们先沿着…</span>
+                <span data-hf-id="hf-gzfo" class="blk" id="s1-b3" style="left: 811px; width: 92px; background: var(--spa)">看到了我…</span>
+              </div>
+              <div data-hf-id="hf-wb09" class="lane" style="top: 88px">
+                <span data-hf-id="hf-feli" class="lane-h"><i data-hf-id="hf-hd8e" class="rc-dot" style="background: var(--spb)"></i>B</span>
+                <span data-hf-id="hf-25tw" class="blk" id="s1-b2" style="left: 290px; width: 82px; background: var(--spb)">我拿到了…</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 02 razor ======================= -->
+      <section data-hf-id="hf-4trd" id="s2" class="clip scene" data-start="10" data-duration="9" data-track-index="0">
+        <div data-hf-id="hf-79rj" id="s2-in" class="inner">
+          <div data-hf-id="hf-drw4" class="bignum">02</div>
+          <div data-hf-id="hf-gwvu" class="head">
+            <span data-hf-id="hf-dvba" class="eyebrow" id="s2-eb" style="color: var(--ber)">02 · 精修</span>
+            <span data-hf-id="hf-4ols" class="title" id="s2-ti">剃刀切在字缝里</span>
+            <div data-hf-id="hf-pyub" class="caps">
+              <div data-hf-id="hf-tj05" class="cap" id="s2-c1">每个字都有自己的<b data-hf-id="hf-oee6">起止时间</b></div>
+              <div data-hf-id="hf-7w0t" class="cap" id="s2-c2">拖动剃刀，它只会停在<b data-hf-id="hf-v0pe">字与字之间</b></div>
+              <div data-hf-id="hf-qrii" class="cap" id="s2-c3">松开就切开，<b data-hf-id="hf-smpj">时间跟着字走</b></div>
+              <div data-hf-id="hf-kcvs" class="cap" id="s2-c4">切错了？<b data-hf-id="hf-ho1r">一键撤销</b></div>
+            </div>
+          </div>
+          <div data-hf-id="hf-xtm6" class="rule" id="s2-rule"></div>
+          <div data-hf-id="hf-wed4" class="panel tl2" id="s2-panel">
+            <div data-hf-id="hf-kchu" class="r2" id="s2-ruler"></div>
+            <div data-hf-id="hf-7qao" class="lane2">
+              <span data-hf-id="hf-07xv" class="lane2-h"><i data-hf-id="hf-vfoi" class="rc-dot" style="background: var(--spb)"></i>B 白兔</span>
+            </div>
+            <div data-hf-id="hf-zk16" class="cue" id="s2-cue"></div>
+            <div data-hf-id="hf-o7td" class="cue" id="s2-cueL" style="opacity: 0"></div>
+            <div data-hf-id="hf-tjlj" class="cue" id="s2-cueR" style="opacity: 0"></div>
+            <div data-hf-id="hf-xyef" id="s2-ticks"></div>
+            <span data-hf-id="hf-z6qr" class="ctime" id="s2-tl">05.23 → 07.18</span>
+            <span data-hf-id="hf-fb6u" class="ctime" id="s2-tr">07.18 → 09.40</span>
+            <div data-hf-id="hf-7696" class="razor" id="s2-razor">
+              <div data-hf-id="hf-bkz7" class="razor-line"></div>
+              <div data-hf-id="hf-9q57" class="razor-head">✂</div>
+            </div>
+            <div data-hf-id="hf-ndsm" class="panel prev" id="s2-prev">
+              <span data-hf-id="hf-odje" class="pv-t">✂ 按字词分配，保留切点</span>
+              <div data-hf-id="hf-nhp7" class="pv-rows" id="s2-pvs"></div>
+            </div>
+            <div data-hf-id="hf-zme0" class="panel undo" id="s2-undo">
+              <span data-hf-id="hf-8qmj" class="undo-k" id="s2-undo-k">↶ 撤销　Ctrl + Z</span>
+              <span data-hf-id="hf-mhke" class="undo-d">合并、切分、移动都能撤销</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 03 review ======================= -->
+      <section data-hf-id="hf-h1jo" id="s3" class="clip scene" data-start="19" data-duration="8" data-track-index="0">
+        <div data-hf-id="hf-3q3o" id="s3-in" class="inner">
+          <div data-hf-id="hf-ddl3" class="bignum">03</div>
+          <div data-hf-id="hf-hb6v" class="head">
+            <span data-hf-id="hf-20eg" class="eyebrow" id="s3-eb" style="color: var(--apr)">03 · 校对</span>
+            <span data-hf-id="hf-d93o" class="title" id="s3-ti">同一句，对照候选再采用</span>
+            <div data-hf-id="hf-pkja" class="caps">
+              <div data-hf-id="hf-hep6" class="cap" id="s3-c1">三个模型各自听一遍，<b data-hf-id="hf-9knz">写法不同的字</b>会被标出来</div>
+              <div data-hf-id="hf-z2bz" class="cap" id="s3-c2">MOSS 和 FireRed 听成「他」，Qwen3-ASR 听成<b data-hf-id="hf-lolr">「它」</b></div>
+              <div data-hf-id="hf-enxl" class="cap" id="s3-c3">点一下采用，<b data-hf-id="hf-sik3">字幕立即更新</b>，自动跳到下一条</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-qkwl" class="rule" id="s3-rule"></div>
+          <div data-hf-id="hf-x3pq" class="panel cur3" id="s3-cur">
+            <span data-hf-id="hf-hnbr" class="cur3-l">当前字幕 · A 河边探险家 · 00:17.6</span>
+            <span data-hf-id="hf-s1h1" class="cur3-t">看到了我先拉住<span data-hf-id="hf-ybak" class="flip"><span data-hf-id="hf-xhh6" id="s3-old">他</span><span data-hf-id="hf-ft2i" id="s3-new">它</span><i data-hf-id="hf-yivr" class="mark" id="s3-mark"></i></span>你从侧面打</span>
+            <div data-hf-id="hf-97hc" class="badge3">
+              <span data-hf-id="hf-t698" class="chip" id="s3-warn" style="background: color-mix(in srgb, var(--warn) 18%, var(--s2)); color: var(--warn); border: 1px solid var(--warn)">⚠ 三个模型写法不同</span>
+              <span data-hf-id="hf-phkh" class="chip" id="s3-done" style="background: color-mix(in srgb, var(--ok) 18%, var(--s2)); color: var(--ok); border: 1px solid var(--ok)">✓ 已采用 Qwen3-ASR</span>
+            </div>
+          </div>
+          <div data-hf-id="hf-fwkk" class="cards3">
+            <div data-hf-id="hf-ysgg" class="mc" id="s3-m1" style="--c: var(--vio)">
+              <div data-hf-id="hf-miy6" class="mc-top"><span data-hf-id="hf-kud6" class="num">1</span><span data-hf-id="hf-v6ls" class="chip">当前 · MOSS</span></div>
+              <span data-hf-id="hf-2nl0" class="mc-t">看到了我先拉住<span data-hf-id="hf-ivt8" class="diff"><i data-hf-id="hf-wt6k"></i><em data-hf-id="hf-7fgz">他</em></span>你从侧面打</span>
+            </div>
+            <div data-hf-id="hf-5zyc" class="mc" id="s3-m2" style="--c: var(--apr)">
+              <div data-hf-id="hf-a92q" class="mc-top"><span data-hf-id="hf-l8o7" class="num">2</span><span data-hf-id="hf-alat" class="chip">FireRedASR2-AED</span></div>
+              <span data-hf-id="hf-zj4s" class="mc-t">看到了我先拉住<span data-hf-id="hf-voo4" class="diff"><i data-hf-id="hf-zeb8"></i><em data-hf-id="hf-leur">他</em></span>你从侧面打</span>
+            </div>
+            <div data-hf-id="hf-zsht" class="mc" id="s3-m3" style="--c: var(--mau)">
+              <div data-hf-id="hf-iqrv" class="mc-sel"></div>
+              <span data-hf-id="hf-wu3f" class="mc-tag" id="s3-tag">✓ 已采用</span>
+              <div data-hf-id="hf-andr" class="mc-top"><span data-hf-id="hf-lmz8" class="num">3</span><span data-hf-id="hf-o1ei" class="chip">Qwen3-ASR</span></div>
+              <span data-hf-id="hf-yc7p" class="mc-t">看到了我先拉住<span data-hf-id="hf-uhr1" class="diff"><i data-hf-id="hf-y7e5"></i><em data-hf-id="hf-00cc">它</em></span>你从侧面打</span>
+            </div>
+          </div>
+          <i data-hf-id="hf-mbkm" class="ring" id="s3-ring1"></i><i data-hf-id="hf-idgl" class="ring" id="s3-ring2"></i>
+          <div data-hf-id="hf-os79" class="cursor" id="s3-cursor">
+            <svg data-hf-id="hf-ulu9" viewBox="0 0 24 24"><path data-hf-id="hf-msrs" d="M5 3 L5 19 L9 15 L12 22 L15 20.5 L11.5 14 L18 14 Z" fill="#ffffff" stroke="#141414" stroke-width="1.4" stroke-linejoin="round" /></svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 04 terms ======================= -->
+      <section data-hf-id="hf-d7ye" id="s4" class="clip scene" data-start="27" data-duration="8" data-track-index="0">
+        <div data-hf-id="hf-ohsd" id="s4-in" class="inner">
+          <div data-hf-id="hf-eki6" class="bignum">04</div>
+          <div data-hf-id="hf-hphw" class="head">
+            <span data-hf-id="hf-1eso" class="eyebrow" id="s4-eb" style="color: var(--sea)">04 · 词库</span>
+            <span data-hf-id="hf-eq9s" class="title" id="s4-ti">游戏术语库：整理一次，反复使用</span>
+            <div data-hf-id="hf-p689" class="caps">
+              <div data-hf-id="hf-n702" class="cap" id="s4-c1">角色名、术语和<b data-hf-id="hf-1uc4">常见错词</b>，按游戏整理</div>
+              <div data-hf-id="hf-9acz" class="cap" id="s4-c2">对照词库，找出字幕里<b data-hf-id="hf-qtx5">写错的专名</b></div>
+              <div data-hf-id="hf-jmeu" class="cap" id="s4-c3">确认后写回字幕；<b data-hf-id="hf-h1ql">换一段录像照样能用</b></div>
+            </div>
+          </div>
+          <div data-hf-id="hf-eln4" class="rule" id="s4-rule"></div>
+          <div data-hf-id="hf-sw5m" class="panel lib" id="s4-lib">
+            <div data-hf-id="hf-21qj" class="lib-h">我的词库<span data-hf-id="hf-j0t6">按游戏归档</span></div>
+            <div data-hf-id="hf-jpu1" class="games">
+              <span data-hf-id="hf-qf27" class="chip on">明日方舟</span><span data-hf-id="hf-e81b" class="chip">洛克王国：世界</span><span data-hf-id="hf-tmo7" class="chip">瓦罗兰特</span><span data-hf-id="hf-bgcu" class="chip">绝区零</span>
+            </div>
+            <div data-hf-id="hf-wyah" class="terms">
+              <div data-hf-id="hf-50hv" class="term" id="s4-t1">
+                <div data-hf-id="hf-riq8" class="term-on"></div>
+                <span data-hf-id="hf-3zve" class="term-a">阿米娅<small data-hf-id="hf-x0s4">← 阿米亚、阿米雅</small></span>
+                <span data-hf-id="hf-epvo" class="term-b">角色 · 内置参考 · <span data-hf-id="hf-0o9d" class="ok2">已确认</span></span>
+              </div>
+              <div data-hf-id="hf-wcm0" class="term" id="s4-t2">
+                <div data-hf-id="hf-riaw" class="term-on"></div>
+                <span data-hf-id="hf-urke" class="term-a">源石技艺<small data-hf-id="hf-namw">← 原石技艺</small></span>
+                <span data-hf-id="hf-4e30" class="term-b">术语 · 内置参考 · <span data-hf-id="hf-4thh" class="ok2">已确认</span></span>
+              </div>
+              <div data-hf-id="hf-x49t" class="term" id="s4-t3">
+                <div data-hf-id="hf-qbdt" class="term-on"></div>
+                <span data-hf-id="hf-nes8" class="term-a">能天使<small data-hf-id="hf-04sq">← 能天师</small></span>
+                <span data-hf-id="hf-iwpr" class="term-b">角色 · 用户整理 · <span data-hf-id="hf-60ek" class="ok2">已确认</span></span>
+              </div>
+            </div>
+          </div>
+          <div data-hf-id="hf-rigm" class="panel subs4" id="s4-subs">
+            <span data-hf-id="hf-mdzg" class="subs4-h">本批字幕</span>
+            <div data-hf-id="hf-ic8j" class="l4s">
+              <div data-hf-id="hf-vud9" class="l4" id="s4-l1">
+                <span data-hf-id="hf-3apk" class="chip spk a">A</span>
+                <span data-hf-id="hf-anaz" class="l4-t">我们先等<span data-hf-id="hf-ig3n" class="sw"><span data-hf-id="hf-diuo" class="old">阿米亚</span><span data-hf-id="hf-z752" class="new">阿米娅</span><i data-hf-id="hf-7qtu" class="strike"></i></span>开技能</span>
+                <span data-hf-id="hf-175d" class="l4-r" style="color: var(--ok)">✓ 已修正</span>
+              </div>
+              <div data-hf-id="hf-zsha" class="l4" id="s4-l2">
+                <span data-hf-id="hf-l8ch" class="chip spk b">B</span>
+                <span data-hf-id="hf-udo2" class="l4-t">这套<span data-hf-id="hf-svib" class="sw"><span data-hf-id="hf-4quk" class="old">原石技艺</span><span data-hf-id="hf-9rpu" class="new">源石技艺</span><i data-hf-id="hf-rffa" class="strike"></i></span>真的好强</span>
+                <span data-hf-id="hf-xftx" class="l4-r" style="color: var(--ok)">✓ 已修正</span>
+              </div>
+              <div data-hf-id="hf-3qlb" class="l4" id="s4-l3">
+                <span data-hf-id="hf-2wej" class="chip spk a">A</span>
+                <span data-hf-id="hf-q9ex" class="l4-t">能天使这波输出拉满</span>
+                <span data-hf-id="hf-h6hy" class="l4-r" style="color: var(--tx3)">✓ 无需修改</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 05 clips ======================= -->
+      <section data-hf-id="hf-77f9" id="s5" class="clip scene" data-start="35" data-duration="10" data-track-index="0">
+        <div data-hf-id="hf-xz22" id="s5-in" class="inner">
+          <div data-hf-id="hf-e675" class="bignum">05</div>
+          <div data-hf-id="hf-i3sx" class="head">
+            <span data-hf-id="hf-ufop" class="eyebrow" id="s5-eb" style="color: var(--mau)">05 · 创作</span>
+            <span data-hf-id="hf-rajn" class="title" id="s5-ti">直播切片：先找到值得剪的片段</span>
+            <div data-hf-id="hf-orx8" class="caps">
+              <div data-hf-id="hf-psac" class="cap" id="s5-c1">导入直播<b data-hf-id="hf-2o1e">弹幕 XML</b>，和字幕一起分析</div>
+              <div data-hf-id="hf-v3wh" class="cap" id="s5-c2">找出高能片段，<b data-hf-id="hf-t3bb">写明理由和时间</b></div>
+              <div data-hf-id="hf-lcel" class="cap" id="s5-c3">选好就<b data-hf-id="hf-i75z">加入剪辑</b>，时间轴同步选中</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-mvwv" class="rule" id="s5-rule"></div>
+          <div data-hf-id="hf-vqph" class="panel heat" id="s5-heat">
+            <span data-hf-id="hf-2htz" class="heat-l">弹幕热度 · 2 小时录像</span>
+            <svg data-hf-id="hf-6u6q" id="s5-svg" viewBox="0 0 1384 150" preserveAspectRatio="none" />
+            <span data-hf-id="hf-0ik7" class="ax" style="left: 28px">0:00</span>
+            <span data-hf-id="hf-8wf5" class="ax" style="left: 368px">0:30</span>
+            <span data-hf-id="hf-xdpy" class="ax" style="left: 714px">1:00</span>
+            <span data-hf-id="hf-abva" class="ax" style="left: 1060px">1:30</span>
+            <span data-hf-id="hf-t8u2" class="ax" style="left: 1378px">2:00</span>
+            <div data-hf-id="hf-9vr4" class="band" id="s5-band" style="left: 499px; width: 34px"></div>
+            <div data-hf-id="hf-gfv4" class="pk" id="s5-p1" style="left: 512px"><div data-hf-id="hf-fscy" class="pk-line"></div><div data-hf-id="hf-opcx" class="pk-lab"><span data-hf-id="hf-43in">残血反杀</span></div></div>
+            <div data-hf-id="hf-eifh" class="pk" id="s5-p2" style="left: 789px"><div data-hf-id="hf-u4ye" class="pk-line"></div><div data-hf-id="hf-o8s5" class="pk-lab"><span data-hf-id="hf-nw1d">翻车爆笑</span></div></div>
+            <div data-hf-id="hf-7mrs" class="pk" id="s5-p3" style="left: 1162px"><div data-hf-id="hf-uj9f" class="pk-line"></div><div data-hf-id="hf-pfp8" class="pk-lab"><span data-hf-id="hf-0yey">弹幕集中</span></div></div>
+            <div data-hf-id="hf-kf5z" id="s5-dm"></div>
+          </div>
+          <div data-hf-id="hf-3eep" class="cands">
+            <div data-hf-id="hf-jj3c" class="cd" id="s5-k1">
+              <div data-hf-id="hf-1awi" class="cd-sel"></div>
+              <span data-hf-id="hf-sfza" class="cd-t">残血反杀，直播间瞬间炸了</span>
+              <span data-hf-id="hf-x4as" class="cd-time">0:42:10 – 0:42:48 · 38 秒</span>
+              <span data-hf-id="hf-4mfg" class="cd-why">字幕：“稳住，我还能打” · 弹幕刷屏“反杀”</span>
+              <div data-hf-id="hf-phkv" class="cd-btn" id="s5-btn"><span data-hf-id="hf-1cji" class="b0">＋ 加入剪辑</span><span data-hf-id="hf-k55r" class="b1">✓ 已加入剪辑</span></div>
+            </div>
+            <div data-hf-id="hf-s6z7" class="cd" id="s5-k2">
+              <span data-hf-id="hf-lccx" class="cd-t">翻车后嘴硬，弹幕全在笑</span>
+              <span data-hf-id="hf-1gbn" class="cd-time">1:05:30 – 1:06:02 · 32 秒</span>
+              <span data-hf-id="hf-7oap" class="cd-why">字幕：“这是战术失误” · 弹幕“哈哈哈”</span>
+              <div data-hf-id="hf-quvj" class="cd-btn ghost"><span data-hf-id="hf-n5pe" class="b0">＋ 加入剪辑</span></div>
+            </div>
+            <div data-hf-id="hf-o8v6" class="cd" id="s5-k3">
+              <span data-hf-id="hf-5d43" class="cd-t">弹幕高峰，整屏都在刷同一句</span>
+              <span data-hf-id="hf-o4v8" class="cd-time">1:38:00 – 1:38:40 · 40 秒</span>
+              <span data-hf-id="hf-ej3s" class="cd-why">一句台词引出大量接梗</span>
+              <div data-hf-id="hf-7tnz" class="cd-btn ghost"><span data-hf-id="hf-nk0f" class="b0">＋ 加入剪辑</span></div>
+            </div>
+          </div>
+          <i data-hf-id="hf-onsk" class="ring" id="s5-ring1"></i><i data-hf-id="hf-xbof" class="ring" id="s5-ring2"></i>
+          <div data-hf-id="hf-tntj" class="cursor" id="s5-cursor">
+            <svg data-hf-id="hf-1tol" viewBox="0 0 24 24"><path data-hf-id="hf-5540" d="M5 3 L5 19 L9 15 L12 22 L15 20.5 L11.5 14 L18 14 Z" fill="#ffffff" stroke="#141414" stroke-width="1.4" stroke-linejoin="round" /></svg>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+        var NS = "http://www.w3.org/2000/svg";
+        function $(s) {
+          return document.querySelector(s);
+        }
+        function $$(s) {
+          return Array.prototype.slice.call(document.querySelectorAll(s));
+        }
+        // Seeded PRNG: same pixels on every render.
+        function prng(seed) {
+          return function () {
+            seed |= 0;
+            seed = (seed + 0x6d2b79f5) | 0;
+            var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        // ---------- interface language ----------
+        // <html lang> picks the text set. The Chinese markup above is the zh version;
+        // en / ja replace interface text only. Transcribed subtitles, terms and
+        // danmaku stay Chinese because that is what the app recognises.
+        var DOT_B = '<i class="rc-dot" style="background: var(--spb)"></i>';
+        var DOT = '<i class="rc-dot"></i>';
+        var I18N = {
+          en: {
+            _before: "Before",
+            _after: "After",
+            _words: true,
+            _s1: ["Let's follow the river first", "Got it, you go ahead", "I see it. I'll hold it"],
+            _s2: [["Got", "it,", "you", "go", "ahead"], ["I'll", "catch", "up"], [2, 3, 4, 5]],
+            "#s1-eb": "01 · Recognize",
+            "#s1-ti": "One set of subtitles, three roles",
+            "#s1-c1": "<b>① MOSS</b> writes the text and separates speakers A and B",
+            "#s1-c2": "<b>② FireRedASR2-AED</b> gives every word a start and end time",
+            "#s1-c3": "<b>③ Qwen3-ASR</b> listens again and checks every word",
+            "#s1-c4": "Finally, each line goes onto <b>its speaker's own track</b>",
+            "#s1-r1 .rc-k": DOT + "Primary transcription",
+            "#s1-r1 .rc-d": "Writes text, labels speakers",
+            "#s1-r2 .rc-k": DOT + "Subtitle timeline",
+            "#s1-r2 .rc-d": "Times every word",
+            "#s1-r3 .rc-k": DOT + "Text review",
+            "#s1-r3 .rc-d": "Listens again to check",
+            "#s1-work .wave-label": "Stream recording · 2 speakers",
+            "#s1 .ok": "✓ Match",
+            "#s1-b1": "Let's…",
+            "#s1-b2": "Got it…",
+            "#s1-b3": "I see…",
+            "#s2-eb": "02 · Refine",
+            "#s2-ti": "The razor cuts between words",
+            "#s2-c1": "Every word has its own <b>start and end time</b>",
+            "#s2-c2": "Drag the razor and it only stops <b>between words</b>",
+            "#s2-c3": "Release to cut; <b>the timing follows the text</b>",
+            "#s2-c4": "Cut in the wrong place? <b>Undo with one key</b>",
+            "#s2 .lane2-h": DOT_B + "B Rabbit",
+            "#s2-prev .pv-t": "✂ Split by word timing, cut point kept",
+            "#s2-undo-k": "↶ Undo&emsp;Ctrl + Z",
+            "#s2-undo .undo-d": "Undo merges, splits and moves",
+            "#s3-eb": "03 · Proofread",
+            "#s3-ti": "Compare alternatives, then apply one",
+            "#s3-c1": "Three models listen separately; <b>words written differently</b> are flagged",
+            "#s3-c2": 'MOSS and FireRed wrote "him"; Qwen3-ASR wrote <b>"it"</b>',
+            "#s3-cur .cur3-t":
+              '<span class="v" id="s3-old">I\'ll hold <span class="w">him<i class="mark" id="s3-mark"></i></span>, you flank</span>' +
+              '<span class="v v2" id="s3-new">I\'ll hold <span class="w">it<i class="mark" id="s3-mark2" style="background: #69cf9b; opacity: 1"></i></span>, you flank</span>',
+            "#s3-m1 .mc-t, #s3-m2 .mc-t": 'I\'ll hold <span class="diff"><i></i><em>him</em></span>, you flank',
+            "#s3-m3 .mc-t": 'I\'ll hold <span class="diff"><i></i><em>it</em></span>, you flank',
+            "#s3-c3": "Click to apply: <b>the subtitle updates</b> and moves to the next line",
+            "#s3-cur .cur3-l": "Current Subtitle · A River Explorer · 00:17.6",
+            "#s3-warn": "⚠ The models disagree",
+            "#s3-done": "✓ Applied Qwen3-ASR",
+            "#s3-m1 .chip": "Current · MOSS",
+            "#s3-tag": "✓ Applied",
+            "#s4-eb": "04 · Glossary",
+            "#s4-ti": "Game glossaries: organize once, use again",
+            "#s4-c1": "Character names, terms and <b>common misrecognitions</b>, organized by game",
+            "#s4-c2": "Check against the glossary to find <b>misspelled names</b> in the subtitles",
+            "#s4-c3": "Confirm to write them back; <b>it works for your next recording too</b>",
+            "#s4-lib .lib-h": "My glossaries<span>By game</span>",
+            "#s4-lib .games": '<span class="chip on">Arknights</span><span class="chip">VALORANT</span><span class="chip">Zenless Zone Zero</span>',
+            "#s4-t1 .term-a": "Amiya<small>← Amia, Amiyah</small>",
+            "#s4-t2 .term-a": "Originium Arts<small>← Original Arts</small>",
+            "#s4-t3 .term-a": "Exusiai<small>← Exusia</small>",
+            "#s4-l1 .l4-t": 'Wait for&nbsp;<span class="sw" data-room="110"><span class="old">Amia<i class="strike"></i></span><span class="new">Amiya</span></span>&nbsp;to use her skill',
+            "#s4-l2 .l4-t": 'These&nbsp;<span class="sw" data-room="260"><span class="old">Original Arts<i class="strike"></i></span><span class="new">Originium Arts</span></span>&nbsp;are so strong',
+            "#s4-l3 .l4-t": "Exusiai's DPS is maxed out",
+            "#s4-t1 .term-b": 'Character · Built-in reference · <span class="ok2">Confirmed</span>',
+            "#s4-t2 .term-b": 'Term · Built-in reference · <span class="ok2">Confirmed</span>',
+            "#s4-t3 .term-b": 'Character · Added by you · <span class="ok2">Confirmed</span>',
+            "#s4-subs .subs4-h": "This batch of subtitles",
+            "#s4-l1 .l4-r, #s4-l2 .l4-r": "✓ Corrected",
+            "#s4-l3 .l4-r": "✓ No change needed",
+            "#s5-eb": "05 · Create",
+            "#s5-ti": "Find the stream moments worth cutting",
+            "#s5-c1": "Import stream <b>chat XML</b> and analyze it with the subtitles",
+            "#s5-c2": "Find highlight moments, <b>each with a reason and a time range</b>",
+            "#s5-c3": "<b>Add to edit</b>, and the range is selected on the timeline",
+            "#s5-heat .heat-l": "Chat activity · 2-hour recording",
+            "#s5-p1 .pk-lab span": "Comeback",
+            "#s5-p2 .pk-lab span": "Funny fail",
+            "#s5-p3 .pk-lab span": "Chat burst",
+            "#s5-k1 .cd-t": "Clutch comeback at low HP",
+            "#s5-k1 .cd-time": "0:42:10 – 0:42:48 · 38 s",
+            "#s5-k1 .cd-why": "Chat ~5× the usual · viewers amazed",
+            "#s5-k2 .cd-t": "Funny fail, chat in stitches",
+            "#s5-k2 .cd-time": "1:05:30 – 1:06:02 · 32 s",
+            "#s5-k2 .cd-why": "Viewers laughing: lots of funny chat",
+            "#s5-k3 .cd-t": "Chat spike on a single line",
+            "#s5-k3 .cd-time": "1:38:00 – 1:38:40 · 40 s",
+            "#s5-k3 .cd-why": "One line sparks a wave of replies",
+            ".cd-btn .b0": "+ Add to edit",
+            "#s5-btn .b1": "✓ Added to edit",
+          },
+          ja: {
+            _before: "前半",
+            _after: "後半",
+            _s1: ["まず川沿いに進もう", "取ったよ、先に行って", "見えた、それを押さえる"],
+            _s2: [Array.from("取ったよ、先に行って"), Array.from("後ろからついていく"), [4, 7, 9, 10]],
+            "#s1-eb": "01 · 認識",
+            "#s1-ti": "ひとつの字幕を、3つの役割で",
+            "#s1-c1": "<b>① MOSS</b> が文字を書き起こし、話者 A・B を分ける",
+            "#s1-c2": "<b>② FireRedASR2-AED</b> が1文字ずつ開始・終了の時刻を付ける",
+            "#s1-c3": "<b>③ Qwen3-ASR</b> がもう一度聞き、表記を1文字ずつ照合",
+            "#s1-c4": "最後に、<b>話者ごと</b>の字幕トラックへ",
+            "#s1-r1 .rc-k": DOT + "メイン転写",
+            "#s1-r1 .rc-d": "文字起こしと話者の区別",
+            "#s1-r2 .rc-k": DOT + "字幕タイムライン",
+            "#s1-r2 .rc-d": "1文字ずつ時刻を付ける",
+            "#s1-r3 .rc-k": DOT + "テキストレビュー",
+            "#s1-r3 .rc-d": "聞き直して表記を照合",
+            "#s1-work .wave-label": "配信録画 · 2人の会話",
+            "#s1 .ok": "✓ 一致",
+            "#s1-b1": "まず川…",
+            "#s1-b2": "取った…",
+            "#s1-b3": "見えた…",
+            "#s2-eb": "02 · 仕上げ",
+            "#s2-ti": "文字と文字の間で切る",
+            "#s2-c1": "1文字ずつ<b>開始と終了の時刻</b>があります",
+            "#s2-c2": "分割ツールをドラッグすると、<b>文字と文字の間</b>にだけ止まる",
+            "#s2-c3": "離すと分割。<b>時刻は文字に付いてくる</b>",
+            "#s2-c4": "切り間違えても、<b>すぐ元に戻せる</b>",
+            "#s2 .lane2-h": DOT_B + "B 白うさぎ",
+            "#s2-prev .pv-t": "✂ 単語の時刻で分割、切断位置を保持",
+            "#s2-undo-k": "↶ 元に戻す　Ctrl + Z",
+            "#s2-undo .undo-d": "結合・分割・移動も元に戻せます",
+            "#s3-eb": "03 · 校正",
+            "#s3-ti": "同じ発話の候補を比べて採用",
+            "#s3-c1": "3つのモデルがそれぞれ聞き取り、<b>表記の違う箇所</b>を示す",
+            "#s3-c2": "MOSS と FireRed は「彼」、Qwen3-ASR は<b>「それ」</b>と書き起こした",
+            "#s3-cur .cur3-t":
+              '<span class="v" id="s3-old"><span class="w">彼<i class="mark" id="s3-mark"></i></span>を押さえる、横から打って</span>' +
+              '<span class="v v2" id="s3-new"><span class="w">それ<i class="mark" id="s3-mark2" style="background: #69cf9b; opacity: 1"></i></span>を押さえる、横から打って</span>',
+            "#s3-m1 .mc-t, #s3-m2 .mc-t": '<span class="diff"><i></i><em>彼</em></span>を押さえる、横から打って',
+            "#s3-m3 .mc-t": '<span class="diff"><i></i><em>それ</em></span>を押さえる、横から打って',
+            "#s3-c3": "クリックで採用すると<b>字幕がすぐ更新</b>され、次の字幕へ",
+            "#s3-cur .cur3-l": "現在の字幕 · A 川辺の探検家 · 00:17.6",
+            "#s3-warn": "⚠ モデルごとに表記が違う",
+            "#s3-done": "✓ Qwen3-ASR を採用",
+            "#s3-m1 .chip": "現在 · MOSS",
+            "#s3-tag": "✓ 採用済み",
+            "#s4-eb": "04 · 用語集",
+            "#s4-ti": "ゲーム用語集：一度整理すれば次の動画にも",
+            "#s4-c1": "キャラクター名・用語・<b>よくある誤認識</b>をゲームごとに整理",
+            "#s4-c2": "用語集と照らし合わせ、字幕の<b>誤った固有名詞</b>を見つける",
+            "#s4-c3": "確認して字幕に反映。<b>次の録画でもそのまま使える</b>",
+            "#s4-lib .lib-h": "マイ用語集<span>ゲームごと</span>",
+            "#s4-lib .games": '<span class="chip on">アークナイツ</span><span class="chip">VALORANT</span><span class="chip">ゼンレスゾーンゼロ</span>',
+            "#s4-t1 .term-a": "アーミヤ<small>← アミヤ、アーミア</small>",
+            "#s4-t2 .term-a": "ロドス<small>← ロードス</small>",
+            "#s4-t3 .term-a": "エクシア<small>← エクシヤ</small>",
+            "#s4-l1 .l4-t": '<span class="sw" data-room="150"><span class="old">アミヤ<i class="strike"></i></span><span class="new">アーミヤ</span></span>のスキルを待とう',
+            "#s4-l2 .l4-t": 'さすが<span class="sw" data-room="150"><span class="old">ロードス<i class="strike"></i></span><span class="new">ロドス</span></span>のオペレーター',
+            "#s4-l3 .l4-t": "エクシアの火力がすごい",
+            "#s4-t1 .term-b": 'キャラクター · 内蔵参照 · <span class="ok2">確認済み</span>',
+            "#s4-t2 .term-b": '用語 · 内蔵参照 · <span class="ok2">確認済み</span>',
+            "#s4-t3 .term-b": 'キャラクター · 自分で追加 · <span class="ok2">確認済み</span>',
+            "#s4-subs .subs4-h": "このバッチの字幕",
+            "#s4-l1 .l4-r, #s4-l2 .l4-r": "✓ 修正済み",
+            "#s4-l3 .l4-r": "✓ 変更不要",
+            "#s5-eb": "05 · 制作",
+            "#s5-ti": "配信の切り抜き：まず見どころを探す",
+            "#s5-c1": "配信の<b>コメント XML</b> を読み込み、字幕と合わせて分析",
+            "#s5-c2": "見どころを探し、<b>理由と時間範囲</b>を示す",
+            "#s5-c3": "<b>クリップへ追加</b>すると、タイムラインでも範囲を選択",
+            "#s5-heat .heat-l": "コメント量 · 2時間の録画",
+            "#s5-p1 .pk-lab span": "逆転",
+            "#s5-p2 .pk-lab span": "爆笑の失敗",
+            "#s5-p3 .pk-lab span": "コメント集中",
+            "#s5-k1 .cd-t": "瀕死から逆転、配信が沸いた",
+            "#s5-k1 .cd-time": "0:42:10 – 0:42:48 · 38秒",
+            "#s5-k1 .cd-why": "コメントが通常の約5倍・驚きの声",
+            "#s5-k2 .cd-t": "失敗の言い訳にコメント爆笑",
+            "#s5-k2 .cd-time": "1:05:30 – 1:06:02 · 32秒",
+            "#s5-k2 .cd-why": "笑いのコメントが急増",
+            "#s5-k3 .cd-t": "同じ一言でコメントが埋まる",
+            "#s5-k3 .cd-time": "1:38:00 – 1:38:40 · 40秒",
+            "#s5-k3 .cd-why": "ひと言から大量のネタコメント",
+            ".cd-btn .b0": "＋ クリップへ追加",
+            "#s5-btn .b1": "✓ クリップに追加済み",
+          },
+        };
+        var LANG = (document.documentElement.lang || "zh").slice(0, 2);
+        var L = I18N[LANG] || { _before: "前段", _after: "后段" };
+        Object.keys(L).forEach(function (sel) {
+          if (sel.charAt(0) === "_") return;
+          var hits = $$(sel);
+          if (!hits.length) throw new Error("i18n selector matched nothing: " + sel);
+          hits.forEach(function (el) {
+            el.innerHTML = L[sel];
+          });
+        });
+
+        // ---------- static DOM built from data (deterministic) ----------
+        // scene 1: characters (en: words) with timing ticks
+        var JOIN = L._words ? " " : "";
+        $$("#s1 .txt").forEach(function (el, n) {
+          if (L._s1) el.dataset.text = L._s1[n];
+          var toks = L._words ? el.dataset.text.split(" ") : Array.from(el.dataset.text);
+          toks.forEach(function (ch, i) {
+            var s = document.createElement("span");
+            s.className = "ch";
+            s.textContent = ch;
+            if (L._words && i < toks.length - 1) s.style.marginRight = "0.28em";
+            var tk = document.createElement("i");
+            tk.className = "tk";
+            s.appendChild(tk);
+            el.appendChild(s);
+          });
+        });
+        // scene 1: waveform bars
+        (function () {
+          var svg = $("#s1-wave");
+          var r = prng(7);
+          for (var i = 0; i < 96; i++) {
+            var x = i * 7.9;
+            var env = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.21)) * (0.6 + 0.4 * r());
+            var h = Math.max(3, env * 38);
+            var rect = document.createElementNS(NS, "rect");
+            rect.setAttribute("x", x.toFixed(1));
+            rect.setAttribute("y", ((40 - h) / 2).toFixed(1));
+            rect.setAttribute("width", "4");
+            rect.setAttribute("height", h.toFixed(1));
+            rect.setAttribute("rx", "2");
+            rect.setAttribute("fill", "#8aa5b8");
+            svg.appendChild(rect);
+          }
+        })();
+
+        // scene 2: cue built from real timings (5.233–9.400 s, cut at 7.183 s)
+        var S2 = { t0: 5.0, px: 264, x0: 120, start: 5.233, cut: 7.183, end: 9.4 };
+        function x2(t) {
+          return S2.x0 + (t - S2.t0) * S2.px;
+        }
+        var left = L._s2 ? L._s2[0] : "我拿到了你们先走".split("");
+        var right = L._s2 ? L._s2[1] : "我在后面跟上".split("");
+        var bounds = [];
+        (function () {
+          var i;
+          if (!L._words) {
+            for (i = 0; i <= left.length; i++) bounds.push(S2.start + ((S2.cut - S2.start) * i) / left.length);
+            for (i = 1; i <= right.length; i++) bounds.push(S2.cut + ((S2.end - S2.cut) * i) / right.length);
+          } else {
+            var spread = function (t0, t1, toks) {
+              var tot = 0, acc = 0;
+              toks.forEach(function (w) { tot += w.length + 1; });
+              toks.forEach(function (w) {
+                acc += w.length + 1;
+                bounds.push(t0 + ((t1 - t0) * acc) / tot);
+              });
+            };
+            bounds.push(S2.start);
+            spread(S2.start, S2.cut, left);
+            spread(S2.cut, S2.end, right);
+          }
+        })();
+        var chars = left.concat(right);
+        function buildCue(el, from, to) {
+          var x = x2(bounds[from]);
+          el.style.left = x + "px";
+          el.style.width = x2(bounds[to]) - x + "px";
+          for (var i = from; i < to; i++) {
+            var c = document.createElement("span");
+            c.className = "cc";
+            c.textContent = chars[i];
+            c.style.left = (x2(bounds[i]) + x2(bounds[i + 1])) / 2 - x + "px";
+            el.appendChild(c);
+          }
+        }
+        buildCue($("#s2-cue"), 0, chars.length);
+        buildCue($("#s2-cueL"), 0, left.length);
+        buildCue($("#s2-cueR"), left.length, chars.length);
+        (function () {
+          var holder = $("#s2-ticks");
+          bounds.forEach(function (b) {
+            var t = document.createElement("i");
+            t.className = "bt";
+            t.style.left = x2(b) + "px";
+            holder.appendChild(t);
+          });
+          var ruler = $("#s2-ruler");
+          for (var s = 5.0; s <= 9.51; s += 0.5) {
+            var l = document.createElement("span");
+            l.className = "rl";
+            l.style.left = Math.max(0, (s - S2.t0) * S2.px - 18) + "px";
+            l.textContent = "00:0" + s.toFixed(1);
+            ruler.appendChild(l);
+          }
+          $("#s2-tl").style.left = x2(S2.start) + 6 + "px";
+          $("#s2-tr").style.left = x2(S2.cut) + 14 + "px";
+        })();
+        // razor stops: after 了(4), 们(6), 先(7), 走(8)
+        var stops = L._s2 ? L._s2[2] : [4, 6, 7, 8];
+        (function () {
+          var holder = $("#s2-pvs");
+          stops.forEach(function (k, i) {
+            var pv = document.createElement("div");
+            pv.className = "pv";
+            pv.id = "s2-pv" + i;
+            pv.innerHTML =
+              '<div class="pv-row"><span class="chip">' + L._before + '</span><span class="zh">' + chars.slice(0, k).join(JOIN) + "</span></div>" +
+              '<div class="pv-row"><span class="chip">' + L._after + '</span><span class="zh">' + chars.slice(k).join(JOIN) + "</span></div>";
+            holder.appendChild(pv);
+          });
+        })();
+
+        // scene 5: heat curve + danmaku
+        var HEAT_W = 1384;
+        (function () {
+          var svg = $("#s5-svg");
+          var r = prng(11);
+          var peaks = [
+            [0.348, 1.0, 0.012],
+            [0.548, 0.78, 0.014],
+            [0.818, 0.92, 0.018],
+          ];
+          var pts = [];
+          for (var i = 0; i <= 160; i++) {
+            var f = i / 160;
+            var v = 0.12 + 0.1 * Math.sin(f * 21) * Math.sin(f * 5.3) + 0.06 * r();
+            peaks.forEach(function (p) {
+              v += p[1] * Math.exp(-Math.pow(f - p[0], 2) / (2 * p[2] * p[2])) * 0.75;
+            });
+            pts.push([f * HEAT_W, 150 - Math.min(0.98, Math.max(0.04, v)) * 150]);
+          }
+          var d = "M0,150 " + pts.map(function (p) { return "L" + p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ") + " L" + HEAT_W + ",150 Z";
+          var area = document.createElementNS(NS, "path");
+          area.setAttribute("d", d);
+          area.setAttribute("fill", "#c48cb4");
+          area.setAttribute("fill-opacity", "0.28");
+          area.setAttribute("id", "s5-area");
+          var line = document.createElementNS(NS, "path");
+          line.setAttribute("d", "M" + pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" L"));
+          line.setAttribute("fill", "none");
+          line.setAttribute("stroke", "#c48cb4");
+          line.setAttribute("stroke-width", "3");
+          line.setAttribute("id", "s5-line");
+          svg.appendChild(area);
+          svg.appendChild(line);
+          var words = ["哈哈哈哈哈", "666", "反杀了！！", "笑死我了", "这波可以", "名场面", "又翻车了", "主播牛啊", "截图了", "全体起立"];
+          var dm = $("#s5-dm");
+          for (var k = 0; k < words.length; k++) {
+            var s = document.createElement("span");
+            s.className = "dm";
+            s.id = "s5-dm" + k;
+            s.textContent = words[k];
+            s.style.top = 52 + (k % 4) * 34 + "px";
+            dm.appendChild(s);
+          }
+        })();
+
+        // ---------- timeline ----------
+        var tl = gsap.timeline({ paused: true });
+        var T = { s1: 0, s2: 10, s3: 19, s4: 27, s5: 35 };
+        var LEN = { s1: 10, s2: 9, s3: 8, s4: 8, s5: 10 };
+
+        function frame(id) {
+          var t0 = T[id];
+          var end = t0 + LEN[id];
+          tl.fromTo("#" + id + "-in", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power1.out" }, t0);
+          tl.fromTo("#" + id + "-eb", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.5, ease: "expo.out" }, t0 + 0.15);
+          tl.fromTo("#" + id + "-ti", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.6, ease: "power4.out" }, t0 + 0.22);
+          tl.fromTo("#" + id + "-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: "power2.inOut" }, t0 + 0.3);
+          tl.to("#" + id + "-in", { opacity: 0, duration: 0.45, ease: "power2.in" }, end - 0.5);
+        }
+        function cap(sel, tIn, tOut) {
+          tl.fromTo(sel, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, tIn);
+          if (tOut) tl.to(sel, { opacity: 0, y: -8, duration: 0.22, ease: "power1.in" }, tOut);
+        }
+        function press(cursorSel, ringA, ringB, x, y, at, ringColor) {
+          // press-ripple pattern: decel arrival, lockstep press, two rings, exit
+          tl.fromTo(cursorSel, { x: x + 420, y: y + 260, opacity: 0 }, { x: x, y: y, opacity: 1, duration: 0.55, ease: "power3.out" }, at - 0.6);
+          tl.to(cursorSel, { scale: 0.86, duration: 0.1, ease: "power1.in" }, at);
+          tl.to(cursorSel, { scale: 1, duration: 0.35, ease: "back.out(1.8)" }, at + 0.12);
+          [ringA, ringB].forEach(function (r, i) {
+            var el = $(r);
+            // ring centred on the pointer tip (tip sits at 5/24, 3/24 of the 46px cursor box)
+            el.style.left = x + 10 + "px";
+            el.style.top = y + 6 + "px";
+            el.style.borderColor = ringColor;
+            tl.fromTo(r, { scale: 0.5, opacity: i ? 0.6 : 1 }, { scale: 2.6, opacity: 0, duration: 0.42, ease: "power2.out", immediateRender: false }, at + 0.1 + i * 0.07);
+          });
+          tl.to(cursorSel, { x: x + 380, y: y + 240, opacity: 0, duration: 0.45, ease: "power2.in" }, at + 0.55);
+        }
+
+        // ===== 01 roles =====
+        (function () {
+          var t = T.s1;
+          frame("s1");
+          tl.fromTo(".roles .role", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.55, ease: "power3.out", stagger: 0.09 }, t + 0.45);
+          tl.fromTo("#s1-work", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.6, ease: "expo.out" }, t + 0.6);
+          tl.fromTo("#s1-wave", { scaleX: 0 }, { scaleX: 1, duration: 1.2, ease: "power2.out" }, t + 0.9);
+          // step 1: MOSS writes the lines with speaker chips
+          cap("#s1-c1", t + 1.1, t + 3.7);
+          tl.to("#s1-r1 .rc-on", { opacity: 1, duration: 0.3, ease: "power2.out" }, t + 1.1);
+          tl.to("#s1-r1 .rc-on", { opacity: 0, duration: 0.25, ease: "power1.in" }, t + 3.7);
+          ["#s1-l1", "#s1-l2", "#s1-l3"].forEach(function (l, i) {
+            var at = t + 1.35 + i * 0.72;
+            tl.fromTo(l + " .spk", { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2.2)" }, at);
+            tl.fromTo(l + " .ch", { opacity: 0 }, { opacity: 1, duration: 0.05, ease: "none", stagger: 0.05 }, at + 0.15);
+          });
+          // step 2: FireRed puts every character on the clock
+          cap("#s1-c2", t + 3.95, t + 6.0);
+          tl.to("#s1-r2 .rc-on", { opacity: 1, duration: 0.3, ease: "power2.out" }, t + 3.95);
+          tl.to("#s1-r2 .rc-on", { opacity: 0, duration: 0.25, ease: "power1.in" }, t + 6.0);
+          ["#s1-l1", "#s1-l2", "#s1-l3"].forEach(function (l, i) {
+            var at = t + 4.15 + i * 0.4;
+            tl.fromTo(l + " .tk", { opacity: 0, scaleY: 0 }, { opacity: 1, scaleY: 1, duration: 0.18, ease: "power2.out", stagger: 0.035 }, at);
+            tl.fromTo(l + " .lt", { opacity: 0, x: -12 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, at + 0.3);
+          });
+          // step 3: Qwen3-ASR re-listens and checks every line
+          cap("#s1-c3", t + 6.25, t + 7.75);
+          tl.to("#s1-r3 .rc-on", { opacity: 1, duration: 0.3, ease: "power2.out" }, t + 6.25);
+          tl.to("#s1-r3 .rc-on", { opacity: 0, duration: 0.25, ease: "power1.in" }, t + 7.75);
+          ["#s1-l1", "#s1-l2", "#s1-l3"].forEach(function (l, i) {
+            var at = t + 6.4 + i * 0.32;
+            tl.fromTo(l + " .scan", { opacity: 0, x: 0 }, { opacity: 0.9, x: 520, duration: 0.55, ease: "sine.inOut" }, at);
+            tl.to(l + " .scan", { opacity: 0, duration: 0.15, ease: "power1.in" }, at + 0.5);
+            tl.fromTo(l + " .ok", { opacity: 0, x: 10 }, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out" }, at + 0.5);
+          });
+          // step 4: lines land on per-speaker tracks
+          cap("#s1-c4", t + 7.95);
+          ["#s1-b1", "#s1-b2", "#s1-b3"].forEach(function (b, i) {
+            tl.fromTo(b, { opacity: 0, scaleX: 0 }, { opacity: 1, scaleX: 1, duration: 0.45, ease: "expo.out" }, t + 8.1 + i * 0.16);
+          });
+        })();
+
+        // ===== 02 razor =====
+        (function () {
+          var t = T.s2;
+          frame("s2");
+          tl.fromTo("#s2-panel", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.6, ease: "expo.out" }, t + 0.45);
+          tl.fromTo("#s2-cue", { opacity: 0, scaleX: 0.6 }, { opacity: 1, scaleX: 1, duration: 0.6, ease: "power3.out" }, t + 0.75);
+          cap("#s2-c1", t + 0.9, t + 2.25);
+          tl.fromTo(".bt", { opacity: 0, scaleY: 0 }, { opacity: 1, scaleY: 1, duration: 0.2, ease: "power2.out", stagger: 0.05 }, t + 1.2);
+          // razor travels gap to gap, previewing both halves each time
+          cap("#s2-c2", t + 2.4, t + 5.35);
+          var b0 = x2(bounds[2]);
+          tl.fromTo("#s2-razor", { opacity: 0, x: b0 }, { opacity: 1, x: x2(bounds[stops[0]]), duration: 0.7, ease: "power3.out" }, t + 2.45);
+          tl.fromTo("#s2-prev", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, t + 2.75);
+          stops.forEach(function (k, i) {
+            var at = t + 2.75 + i * 0.62;
+            if (i > 0) tl.to("#s2-razor", { x: x2(bounds[k]), duration: 0.32, ease: "power2.inOut" }, at - 0.2);
+            tl.set("#s2-pv" + i, { opacity: 1 }, at);
+            if (i > 0) tl.set("#s2-pv" + (i - 1), { opacity: 0 }, at);
+          });
+          // release: cut
+          var cutAt = t + 5.2;
+          cap("#s2-c3", t + 5.5, t + 6.95);
+          tl.to("#s2-razor .razor-head", { scale: 0.85, duration: 0.1, ease: "power1.in" }, cutAt);
+          tl.to("#s2-razor .razor-head", { scale: 1, duration: 0.3, ease: "back.out(2)" }, cutAt + 0.1);
+          tl.set("#s2-cue", { opacity: 0 }, cutAt + 0.12);
+          tl.set(["#s2-cueL", "#s2-cueR"], { opacity: 1 }, cutAt + 0.12);
+          tl.fromTo("#s2-cueL", { x: 0 }, { x: -7, duration: 0.4, ease: "power3.out" }, cutAt + 0.12);
+          tl.fromTo("#s2-cueR", { x: 0 }, { x: 7, duration: 0.4, ease: "power3.out" }, cutAt + 0.12);
+          tl.to("#s2-razor", { opacity: 0, duration: 0.3, ease: "power1.in" }, cutAt + 0.35);
+          tl.to("#s2-prev", { opacity: 0, y: 10, duration: 0.3, ease: "power1.in" }, cutAt + 0.35);
+          tl.fromTo(["#s2-tl", "#s2-tr"], { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out", stagger: 0.1 }, cutAt + 0.45);
+          tl.to(".bt", { opacity: 0, duration: 0.25, ease: "power1.in" }, cutAt + 0.35);
+          // undo
+          cap("#s2-c4", t + 7.1);
+          tl.fromTo("#s2-undo", { opacity: 0, x: 30 }, { opacity: 1, x: 0, duration: 0.45, ease: "power3.out" }, t + 6.6);
+          tl.to("#s2-undo-k", { scale: 0.92, duration: 0.1, ease: "power1.in" }, t + 7.35);
+          tl.to("#s2-undo-k", { scale: 1, duration: 0.3, ease: "back.out(2)" }, t + 7.47);
+          tl.to(["#s2-tl", "#s2-tr"], { opacity: 0, duration: 0.2, ease: "power1.in" }, t + 7.45);
+          tl.to(["#s2-cueL", "#s2-cueR"], { x: 0, duration: 0.35, ease: "power2.inOut" }, t + 7.5);
+          tl.set(["#s2-cueL", "#s2-cueR"], { opacity: 0 }, t + 7.86);
+          tl.set("#s2-cue", { opacity: 1 }, t + 7.86);
+        })();
+
+        // ===== 03 review =====
+        (function () {
+          var t = T.s3;
+          frame("s3");
+          tl.fromTo("#s3-cur", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "expo.out" }, t + 0.45);
+          tl.fromTo(".cards3 .mc", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.1 }, t + 0.8);
+          cap("#s3-c1", t + 1.0, t + 2.6);
+          tl.fromTo(".cards3 .diff i", { opacity: 0, scaleX: 0 }, { opacity: 1, scaleX: 1, duration: 0.35, ease: "power2.out", stagger: 0.12 }, t + 1.7);
+          tl.fromTo("#s3-mark", { opacity: 0, scaleX: 0 }, { opacity: 1, scaleX: 1, duration: 0.35, ease: "power2.out" }, t + 1.9);
+          tl.fromTo("#s3-warn", { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: 0.4, ease: "back.out(1.6)" }, t + 2.0);
+          cap("#s3-c2", t + 2.75, t + 4.6);
+          // adopt candidate 3 (Qwen3-ASR)
+          // candidate 3 box from the static layout: left 80 + 2 × (464 + 24), top 420, 464 × 210
+          var px = 1056 + 464 * 0.55;
+          var py = 420 + 210 * 0.6;
+          var at = t + 4.0;
+          press("#s3-cursor", "#s3-ring1", "#s3-ring2", px, py, at, "var(--ber)");
+          tl.to("#s3-m3", { scale: 0.97, duration: 0.1, ease: "power1.in" }, at);
+          tl.to("#s3-m3", { scale: 1, duration: 0.35, ease: "back.out(1.8)" }, at + 0.12);
+          tl.to("#s3-m3 .mc-sel", { opacity: 1, duration: 0.25, ease: "power2.out" }, at + 0.12);
+          tl.fromTo("#s3-tag", { opacity: 0, x: 10 }, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out" }, at + 0.2);
+          tl.to(["#s3-m1", "#s3-m2"], { opacity: 0.45, duration: 0.4, ease: "power1.out" }, at + 0.2);
+          // the subtitle's character flips 他 -> 它
+          if (LANG === "zh") {
+            tl.fromTo("#s3-old", { yPercent: 0 }, { yPercent: -110, duration: 0.4, ease: "power3.inOut" }, at + 0.35);
+            tl.fromTo("#s3-new", { yPercent: 110 }, { yPercent: 0, duration: 0.4, ease: "power3.inOut" }, at + 0.35);
+            tl.to("#s3-mark", { backgroundColor: "#69cf9b", duration: 0.3, ease: "none" }, at + 0.5);
+          } else {
+            tl.to("#s3-old", { opacity: 0, duration: 0.3, ease: "power2.in" }, at + 0.35);
+            tl.fromTo("#s3-new", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power2.out" }, at + 0.45);
+            tl.fromTo("#s3-new .w", { yPercent: 70 }, { yPercent: 0, duration: 0.45, ease: "power3.out" }, at + 0.45);
+          }
+          tl.to("#s3-warn", { opacity: 0, duration: 0.2, ease: "power1.in" }, at + 0.4);
+          tl.fromTo("#s3-done", { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: 0.4, ease: "back.out(1.6)" }, at + 0.55);
+          cap("#s3-c3", t + 4.75);
+        })();
+
+        // ===== 04 terms =====
+        (function () {
+          var t = T.s4;
+          frame("s4");
+          tl.fromTo("#s4-lib", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.6, ease: "power3.out" }, t + 0.45);
+          tl.fromTo("#s4-lib .term", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out", stagger: 0.09 }, t + 0.8);
+          tl.fromTo("#s4-subs", { opacity: 0, x: 30 }, { opacity: 1, x: 0, duration: 0.6, ease: "expo.out" }, t + 0.7);
+          tl.fromTo("#s4-subs .l4", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out", stagger: 0.1 }, t + 1.0);
+          cap("#s4-c1", t + 0.95, t + 2.35);
+          cap("#s4-c2", t + 2.5, t + 5.3);
+          [
+            ["#s4-t1", "#s4-l1", t + 2.7],
+            ["#s4-t2", "#s4-l2", t + 4.0],
+          ].forEach(function (p) {
+            var term = p[0], line = p[1], at = p[2];
+            tl.to(term + " .term-on", { opacity: 1, duration: 0.25, ease: "power2.out" }, at);
+            tl.fromTo(line + " .strike", { scaleX: 0 }, { scaleX: 1, duration: 0.35, ease: "power2.inOut" }, at + 0.25);
+            tl.to(line + " .old", { opacity: 0, y: -16, duration: 0.3, ease: "power2.in" }, at + 0.7);
+            tl.to(line + " .strike", { opacity: 0, duration: 0.2, ease: "power1.in" }, at + 0.7);
+            tl.fromTo(line + " .new", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, at + 0.82);
+            if (LANG !== "zh") {
+              // data-room: a little more than the wider word, so the tween stays close to linear
+              var room = Number($(line + " .sw").dataset.room);
+              tl.fromTo(line + " .old", { maxWidth: room }, { maxWidth: 0, duration: 0.25, ease: "power2.in" }, at + 0.7);
+              tl.fromTo(line + " .new", { maxWidth: 0 }, { maxWidth: room, duration: 0.4, ease: "power2.out" }, at + 0.85);
+            }
+            tl.fromTo(line + " .l4-r", { opacity: 0, x: 10 }, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out" }, at + 0.95);
+            tl.to(term + " .term-on", { opacity: 0, duration: 0.3, ease: "power1.in" }, at + 1.1);
+          });
+          tl.fromTo("#s4-l3 .l4-r", { opacity: 0, x: 10 }, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out" }, t + 5.2);
+          cap("#s4-c3", t + 5.45);
+        })();
+
+        // ===== 05 clips =====
+        (function () {
+          var t = T.s5;
+          frame("s5");
+          tl.fromTo("#s5-heat", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "expo.out" }, t + 0.45);
+          tl.fromTo("#s5-svg", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 1.6, ease: "power2.inOut" }, t + 0.8);
+          cap("#s5-c1", t + 0.95, t + 3.1);
+          // danmaku drifts across the chart (deterministic lanes and speeds)
+          for (var k = 0; k < 10; k++) {
+            var startAt = t + 0.9 + k * 0.42;
+            var dur = 3.4 + (k % 3) * 0.5;
+            tl.fromTo("#s5-dm" + k, { x: 1440, opacity: 0 }, { x: -220, opacity: 1, duration: dur, ease: "none" }, startAt);
+            tl.to("#s5-dm" + k, { opacity: 0, duration: 0.3, ease: "power1.in" }, startAt + dur - 0.3);
+          }
+          ["#s5-p1", "#s5-p2", "#s5-p3"].forEach(function (p, i) {
+            tl.fromTo(p, { opacity: 0, y: -12 }, { opacity: 1, y: 0, duration: 0.45, ease: "back.out(1.8)" }, t + 2.4 + i * 0.22);
+          });
+          cap("#s5-c2", t + 3.35, t + 6.05);
+          tl.fromTo(".cands .cd", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.12 }, t + 3.4);
+          // add the first candidate to the edit
+          // "加入剪辑" button from the static layout: card left 80 + 24, top 506 + 196 − 18 − 40
+          var at = t + 5.6;
+          press("#s5-cursor", "#s5-ring1", "#s5-ring2", 104 + 70, 644 + 20, at, "var(--ok)");
+          tl.to("#s5-btn .b0", { opacity: 0, duration: 0.15, ease: "power1.in" }, at + 0.12);
+          tl.fromTo("#s5-btn .b1", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(2)" }, at + 0.15);
+          tl.to("#s5-k1 .cd-sel", { opacity: 1, duration: 0.25, ease: "power2.out" }, at + 0.15);
+          tl.fromTo("#s5-band", { opacity: 0, scaleX: 0.2 }, { opacity: 1, scaleX: 1, duration: 0.45, ease: "expo.out" }, at + 0.3);
+          tl.to(["#s5-p2", "#s5-p3"], { opacity: 0.35, duration: 0.4, ease: "power1.out" }, at + 0.3);
+          cap("#s5-c3", t + 6.3);
+        })();
+
+        tl.seek(0);
+        window.__timelines["main"] = tl;
+      })();
+    </script>
+  </body>
+</html>

@@ -14,6 +14,27 @@ from PySide6.QtWidgets import QButtonGroup, QPushButton, QVBoxLayout, QWidget
 from twobyteasr.ui_theme import GREEN, INK, MUTED
 
 
+# Pages that share this sidebar (Model Workshop, Term Library, History) used
+# different page/sidebar stylesheets, so switching between them changed the
+# title size and the navigation height. Sizes live here; colours stay themed by
+# each page. A widget's own style sheet wins over its ancestors' sheets.
+PAGE_TITLE_QSS = "font-size: 24px; font-weight: 800;"
+SIDEBAR_HEADING_QSS = "font-size: 14px; font-weight: 600;"
+_NAVIGATION_GEOMETRY_QSS = (
+    "QPushButton#workspaceNav { padding: 10px 12px; min-height: 22px; font-size: 13px; }"
+)
+
+
+def style_workspace_page_title(label):
+    label.setStyleSheet(PAGE_TITLE_QSS)
+    return label
+
+
+def style_workspace_sidebar_heading(label):
+    label.setStyleSheet(SIDEBAR_HEADING_QSS)
+    return label
+
+
 class WorkspaceNavigation(QWidget):
     recognition_requested = Signal()
     workshop_requested = Signal()
@@ -30,6 +51,7 @@ class WorkspaceNavigation(QWidget):
     def __init__(self, active: str, parent=None):
         super().__init__(parent)
         self.buttons: dict[str, QPushButton] = {}
+        self.setStyleSheet(_NAVIGATION_GEOMETRY_QSS)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         layout = QVBoxLayout(self)
@@ -41,6 +63,8 @@ class WorkspaceNavigation(QWidget):
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setIconSize(QSize(18, 18))
+            # Page sheets add different borders; keep one row height everywhere.
+            button.setFixedHeight(42)
             button.clicked.connect(lambda _checked=False, value=key: self._activate(value))
             self.group.addButton(button)
             self.buttons[key] = button

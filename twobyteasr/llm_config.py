@@ -214,7 +214,15 @@ def _decode_payload(data: bytes) -> dict:
     return payload if isinstance(payload, dict) else {"schema": 2}
 
 
+# Decrypted store keyed by (path, mtime_ns, size). Settings pages read keys
+# hundreds of times while building; each read was a file read plus a DPAPI
+# decrypt. Any rewrite (ours or external) changes the key.
+_DECRYPTED_SECRETS: tuple | None = None
+
+
 def _write_encrypted_secrets(payload: dict) -> Path:
+    global _DECRYPTED_SECRETS
+    _DECRYPTED_SECRETS = None
     path = secrets_path()
     if session_credentials_enabled():
         with _SESSION_SECRETS_LOCK:
@@ -264,8 +272,19 @@ def _read_secrets(*, read_only_path: Path | None = None) -> dict:
             # without copying credentials or migrating/modifying its source.
             return _decode_payload(_dpapi("unprotect", Path(read_only_path).read_bytes()))
         path = secrets_path()
-        if path.is_file():
-            return _decode_payload(_dpapi("unprotect", path.read_bytes()))
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            stat = None
+        if stat is not None:
+            global _DECRYPTED_SECRETS
+            key = (str(path), stat.st_mtime_ns, stat.st_size)
+            cached = _DECRYPTED_SECRETS
+            if cached is not None and cached[0] == key:
+                return copy.deepcopy(cached[1])
+            payload = _decode_payload(_dpapi("unprotect", path.read_bytes()))
+            _DECRYPTED_SECRETS = (key, copy.deepcopy(payload))
+            return payload
         old_path = old_project_secrets_path()
         if old_path.is_file():
             # 项目改名（QwenASR -> 2ByteASR）后的密钥迁移；DPAPI 为当前用户级加密，可直接复制。
@@ -337,7 +356,7 @@ def asr_api_display(endpoint: dict) -> str:
     try:
         from .ui import ASR_API_PRESETS
 
-        provider = str(endpoint.get("provider") or "dashscope")
+        provider = str(endpoint.get("provider") or "qwen31_filetrans")
         preset = ASR_API_PRESETS.get(provider, {})
         label = str(preset.get("short") or preset.get("label") or provider)
         model_id = str(endpoint.get("model") or "")
@@ -359,20 +378,32 @@ def read_asr_api_key(provider: str, base_url: str = "") -> tuple[str, str]:
     if provider=='spark_asr_v2':
         values=read_spark_credentials(base_url)
         return (values['api_key'] if all(values.values()) else ''),'Spark scoped credentials'
-    return read_api_key(str(provider or "dashscope"), str(base_url or ""))
+    value, source = read_api_key(str(provider or "qwen31_filetrans"), str(base_url or ""))
+    if value or provider != 'qwen31_filetrans': return value, source
+    # Preserve same-family, same-endpoint credentials during preset retirement;
+    # do not copy secrets, change their owner, or look in other providers.
+    for legacy in ('qwen_filetrans', 'qwen31_flash', 'dashscope_qwen_audio'):
+        value, source = read_scoped_api_key(legacy, str(base_url or ''))
+        if value: return value, 'Qwen same-endpoint migrated scope'
+    from urllib.parse import urlsplit
+    if urlsplit(str(base_url or '')).hostname and urlsplit(str(base_url)).hostname.endswith('.aliyuncs.com'):
+        value, source = read_api_key('dashscope', str(base_url))
+        if value: return value, source
+    return '', 'not configured'
 
 
 def qwen_asr_endpoint_from_settings(settings: dict) -> dict:
     models = settings.get("models", {})
+    url = str(models.get("qwen_asr_api_url", "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription") or "").strip().rstrip("/")
     api_key, key_source = read_asr_api_key(
-        str(models.get("qwen_asr_api_provider", "dashscope") or "dashscope"),
-        str(models.get("qwen_asr_api_url", "") or ""),
+        str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans"),
+        url,
     )
     endpoint = {
-        "provider": str(models.get("qwen_asr_api_provider", "dashscope") or "dashscope").strip(),
-        "protocol": str(models.get("qwen_asr_api_protocol", "dashscope_multimodal") or "dashscope_multimodal").strip(),
-        "model": str(models.get("qwen_asr_api_model", "qwen3-asr-flash") or "").strip(),
-        "url": str(models.get("qwen_asr_api_url", "") or "").strip().rstrip("/"),
+        "provider": str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans").strip(),
+        "protocol": str(models.get("qwen_asr_api_protocol", "dashscope_filetrans") or "dashscope_filetrans").strip(),
+        "model": str(models.get("qwen_asr_api_model", "qwen-audio-3.1-asr-flash-filetrans") or "").strip(),
+        "url": url,
         "api_key": api_key,
         "key_source": key_source,
         # 三十九轮：转写风格（clean|verbatim）。OpenRouter MAI 通道映射为
@@ -400,6 +431,16 @@ def save_spark_credentials(url: str, **values) -> Path:
 
 
 def validate_qwen_asr_endpoint(endpoint: dict, *, require_key: bool = True) -> None:
+    model = str(endpoint.get('model') or '')
+    if model.startswith('qwen3-asr-flash') and not model.endswith('-filetrans'):
+        from .i18n import tr
+        raise RuntimeError(tr('此 Qwen 云端短音频入口已移除，请选择 Qwen Audio 3.1 长音频转写。'))
+    if model.startswith('qwen-audio-') and model != 'qwen-audio-3.1-asr-flash-filetrans':
+        raise RuntimeError('此 Qwen Audio 旧版本或短音频入口已移除，请选择 Qwen Audio 3.1 长音频转写。')
+    if model == 'qwen-audio-3.1-asr-flash-filetrans' and endpoint.get('protocol') != 'dashscope_filetrans':
+        raise RuntimeError('Qwen Audio 3.1 Filetrans 必须使用异步 Filetrans 协议。')
+    if model == 'microsoft/mai-transcribe-2':
+        raise RuntimeError('旧 MAI 2 模型不能作为新版运行。请先向当前服务商确认 MAI 2.1 的实际模型 ID 或稳定别名映射。')
     if endpoint.get('protocol')=='spark_wss':
         from .spark_asr import URL, MODEL
         if endpoint.get('url')!=URL or endpoint.get('model')!=MODEL:
@@ -421,7 +462,7 @@ def validate_qwen_asr_endpoint(endpoint: dict, *, require_key: bool = True) -> N
         allow_query=str(endpoint.get("protocol")) == "azure_transcription",
     )
     if require_key and not str(endpoint.get("api_key", "")).strip():
-        provider = str(endpoint.get("provider") or "dashscope")
+        provider = str(endpoint.get("provider") or "qwen31_filetrans")
         raise RuntimeError(
             f"ASR API 缺少密钥。请填写 {provider} 服务商的 API Key。"
         )
@@ -637,6 +678,8 @@ def normalize_provider_profile(profile: dict) -> dict:
     normalized: dict[str, str] = {}
     for field in PROFILE_FIELDS:
         normalized[field] = str(profile.get(field, "") or "").strip()
+    for field in ('json_mode', 'structured_output'):
+        normalized[field] = profile[field] if isinstance(profile.get(field), bool) else True
     return normalized
 
 
@@ -668,6 +711,8 @@ def resolved_service_values(settings: dict, service_id: str) -> dict:
         "models": list(catalog),
         "protocol": (profile.get("protocol") or "auto").strip(),
         "capabilities": list(spec.get("capabilities", ())),
+        "json_mode": profile['json_mode'],
+        "structured_output": profile['structured_output'],
     }
 
 
@@ -778,6 +823,8 @@ def update_active_profile(
     base_url: str | None = None,
     model: str | None = None,
     protocol: str | None = None,
+    json_mode: bool | None = None,
+    structured_output: bool | None = None,
     unified: bool | None = None,
 ) -> dict:
     """Persist explicit edits into the active provider profile and flat fields."""
@@ -799,6 +846,10 @@ def update_active_profile(
         profile["model"] = str(model or "").strip()
     if protocol is not None:
         profile["protocol"] = str(protocol or "").strip()
+    if json_mode is not None:
+        profile['json_mode'] = bool(json_mode)
+    if structured_output is not None:
+        profile['structured_output'] = bool(structured_output)
     # Empty profile fields fall back to the catalog spec so the profile never
     # shadows a spec default with an empty string.
     for field in PROFILE_FIELDS:
@@ -889,6 +940,21 @@ def endpoint_requires_key(endpoint: dict) -> bool:
     url = str(endpoint.get("base_url") or endpoint.get("url") or "")
     return not (provider in {"custom", "local", "ollama", "lmstudio"}
                 and _is_loopback_host(urlsplit(url).hostname))
+
+
+def effective_ai_identity(settings: dict, stage: str = 'polish') -> dict:
+    """Credential-free display of the same endpoint and transport we invoke."""
+    from .asr_provider_snapshot import snapshot_in_settings, resolve_provider_snapshot
+    snapshot = snapshot_in_settings(settings) or resolve_provider_snapshot(settings, stage=stage)
+    endpoint = snapshot.endpoint()
+    provider, service = snapshot.provider, snapshot.profile_id
+    return {'provider': provider, 'service': service,
+            'label': str(AI_SERVICE_SPECS.get(service, {}).get('label') or provider),
+            'transport': snapshot.transport,
+            'model': snapshot.model,
+            'base_url': str(endpoint.get('base_url') or ''),
+            'protocol': str(endpoint.get('protocol') or ''),
+            'credential_configured': bool(endpoint.get('api_key'))}
 
 
 def auth_headers(api_key: str) -> dict:

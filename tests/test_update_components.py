@@ -1,0 +1,447 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""Component manifest, signed feed, update planning, download and staging."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import threading
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from twobyteasr import update_manifest as um
+from twobyteasr import updater
+
+
+# ---------------------------------------------------------------- helpers
+
+
+def _keypair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                                serialization.NoEncryption())
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    return private, public
+
+
+@pytest.fixture()
+def trusted_key(monkeypatch):
+    private, public = _keypair()
+    monkeypatch.setitem(um.TRUSTED_UPDATE_KEYS, um.key_id_for(public), base64.b64encode(public).decode())
+    return private
+
+
+def _write(root: Path, rel: str, data: bytes) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def _make_payload(root: Path, *, version="0.6.5", app_text=b"app-v1", renderer=b"renderer-v1") -> dict:
+    _write(root, "2ByteASR.exe", b"MZ" + app_text)
+    _write(root, "2ByteASRUpdater.exe", b"MZ-helper")
+    _write(root, "twobyteasr/ui.py", b"print(1)\n" + app_text)
+    _write(root, "twobyteasr/old_module.py", b"old")
+    _write(root, "python310.dll", b"python-dll")
+    _write(root, "PySide6/Qt6Core.dll", b"qt")
+    _write(root, "renderer/service.mjs", b"service")
+    _write(root, "renderer/node_modules/remotion/index.js", renderer)
+    _write(root, "assets/fonts/a.otf", b"font")
+    _write(root, "assets/app_icon.ico", b"icon")
+    _write(root, "tools/ffmpeg/bin/ffmpeg.exe", b"ffmpeg")
+    _write(root, "wheels/x.whl", b"wheel")
+    _write(root, "licenses/LICENSE.txt", b"gpl")
+    _write(root, "2byteasr_version.json", json.dumps({"version": version, "channel": "stable"}).encode())
+    _write(root, "dependencies.lock.json", json.dumps({
+        "environments": {"main": {"packages": ["a==1"]}}, "models": {"moss": {"revision": "r1"}}}).encode())
+    for name in um.PRESERVED_FILES:
+        _write(root, name, b"factory")
+    manifest = um.build_installed_manifest(root, version=version, build={"git_sha": "x"})
+    (root / um.COMPONENTS_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest
+
+
+def _component_zip(payload: Path, name: str, record: dict) -> bytes:
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr(um.ARCHIVE_INDEX_NAME, json.dumps(
+            {"component": name, "content_sha256": record["content_sha256"], "files": record["files"]}))
+        for rel, _size, _sha in record["files"]:
+            bundle.write(payload / rel, rel)
+    return body.getvalue()
+
+
+def _feed(new_payload: Path, new_manifest: dict, *, version="0.6.6", channel="stable", setup=b"SETUP",
+          base="https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.6/", skip=()):
+    files, components = {}, {}
+    for name in um.COMPONENT_ORDER:
+        record = new_manifest["components"][name]
+        entry = {k: record[k] for k in ("content_sha256", "file_count", "bytes")}
+        if name in skip:
+            entry["archive"] = None
+        else:
+            data = _component_zip(new_payload, name, record)
+            archive_name = f"2ByteASR-{version}-{name}-{record['content_sha256'][:12]}.zip"
+            files[base + archive_name] = data
+            entry["archive"] = {"name": archive_name, "size": len(data),
+                                "sha256": hashlib.sha256(data).hexdigest(), "urls": [base + archive_name]}
+        components[name] = entry
+    files[base + "2ByteASR-Setup-0.6.6.exe"] = setup
+    lock = json.loads((new_payload / "dependencies.lock.json").read_text("utf-8"))
+    manifest = {
+        "schema": um.UPDATE_SCHEMA, "product": um.PRODUCT, "app_id": um.APP_ID, "version": version,
+        "tag": "v" + version, "channel": channel, "platform": "windows", "arch": "x64",
+        "release_page": "https://github.com/NOTBAD314/2ByteASR/releases/tag/v" + version,
+        "notes": {"zh": "修复若干问题", "en": "Fixes"},
+        "setup": {"name": "2ByteASR-Setup-0.6.6.exe", "size": len(setup),
+                  "sha256": hashlib.sha256(setup).hexdigest(), "urls": [base + "2ByteASR-Setup-0.6.6.exe"]},
+        "components": components, "environments": um.environment_contracts(lock),
+        "models": um.model_contracts(lock), "build": {"git_sha": "y"},
+    }
+    return manifest, files
+
+
+class FakeResponse:
+    def __init__(self, data=b"", status=200, headers=None, chunk=7):
+        self.content = data
+        self.status_code = status
+        self.headers = headers or {"Content-Length": str(len(data))}
+        self._chunk = chunk
+
+    def iter_content(self, chunk_size):
+        for start in range(0, len(self.content), self._chunk):
+            yield self.content[start:start + self._chunk]
+
+    def json(self):
+        return json.loads(self.content.decode())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _server(files: dict, *, ranges=True, log=None):
+    def get(url, headers=None, timeout=None, stream=False, allow_redirects=True):
+        if log is not None:
+            log.append((url, dict(headers or {})))
+        if url not in files:
+            return FakeResponse(b"missing", status=404)
+        data = files[url]
+        start = 0
+        header = (headers or {}).get("Range", "")
+        if header and ranges:
+            start = int(header.split("=")[1].split("-")[0])
+            if start >= len(data):
+                return FakeResponse(b"", status=416)
+            part = data[start:]
+            return FakeResponse(part, status=206, headers={"Content-Range": f"bytes {start}-{len(data) - 1}/{len(data)}",
+                                                           "Content-Length": str(len(part))})
+        return FakeResponse(data)
+    return get
+
+
+@pytest.fixture()
+def isolated_state(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    monkeypatch.setenv(updater.STATE_ENV, str(state))
+    monkeypatch.delenv(updater.FEED_ENV, raising=False)
+    monkeypatch.delenv(updater.CHANNEL_ENV, raising=False)
+    return state
+
+
+# ---------------------------------------------------------------- versions
+
+
+def test_semver_precedence_is_not_string_order():
+    v = um.parse_version
+    assert v("0.6.10") > v("0.6.9")
+    assert v("0.6.5") > v("0.6.5-rc.2") > v("0.6.5-rc.1")
+    assert v("1.0.0-alpha.10") > v("1.0.0-alpha.9")
+    assert v("1.0.0-alpha.beta") > v("1.0.0-alpha.1")
+    assert v("v0.6.5") == v("0.6.5")
+    assert str(v("0.6.6-test.1")) == "0.6.6-test.1"
+    with pytest.raises(um.ManifestError):
+        v("0.6")
+    with pytest.raises(um.ManifestError):
+        v("0.6.5-01")
+
+
+# --------------------------------------------------------------- components
+
+
+def test_classification_keeps_user_files_out_of_every_component():
+    assert um.classify("2byteasr_settings.json") is None
+    assert um.classify("glossary.txt") is None
+    assert um.classify("2byteasr_components.json") is None
+    assert um.classify(".update-backup/x/2ByteASR.exe") is None
+    assert um.classify("2ByteASR.exe") == "app"
+    assert um.classify("base_library.zip") == "app"
+    assert um.classify("twobyteasr/ui.py") == "app"
+    assert um.classify("renderer/service.mjs") == "app"
+    assert um.classify("renderer/node_modules/a/b.js") == "renderer"
+    assert um.classify("renderer/public/fonts/x.otf") == "renderer"
+    assert um.classify("assets/fonts/x.otf") == "assets"
+    assert um.classify("assets/app_icon.ico") == "app"
+    assert um.classify("python310.dll") == "python-runtime"
+    assert um.classify("PySide6/Qt6Core.dll") == "python-runtime"
+    for bad in ("../x", "/abs", "C:/x", "a//b", "a/./b", "a\\..\\b"):
+        with pytest.raises(um.ManifestError):
+            um.classify(bad)
+
+
+def test_content_identity_ignores_version_and_detects_changes(tmp_path):
+    first = _make_payload(tmp_path / "a", version="0.6.5")
+    second = _make_payload(tmp_path / "b", version="0.6.6")
+    third = _make_payload(tmp_path / "c", version="0.6.6", app_text=b"app-v2")
+    for name in um.COMPONENT_ORDER:
+        if name != "app":
+            assert first["components"][name]["content_sha256"] == third["components"][name]["content_sha256"]
+    assert first["components"]["app"]["content_sha256"] != third["components"]["app"]["content_sha256"]
+    # The version file itself is an app file, so equal versions are needed for equal app hashes.
+    assert first["components"]["renderer"] == second["components"]["renderer"]
+    um.validate_installed_manifest(first)
+    tampered = json.loads(json.dumps(first))
+    tampered["components"]["app"]["files"][0][2] = "0" * 64
+    with pytest.raises(um.ManifestError):
+        um.validate_installed_manifest(tampered)
+
+
+# --------------------------------------------------------------- signatures
+
+
+def test_signature_accepts_only_embedded_keys(trusted_key):
+    data = b'{"x":1}'
+    signature = um.sign_manifest(data, trusted_key)
+    assert um.verify_manifest_signature(data, signature)
+    with pytest.raises(um.ManifestError):
+        um.verify_manifest_signature(data + b" ", signature)
+    other, _public = _keypair()
+    with pytest.raises(um.ManifestError, match="未受信任"):
+        um.verify_manifest_signature(data, um.sign_manifest(data, other))
+
+
+def test_production_key_is_embedded_and_private_key_is_not_in_repository():
+    root = Path(__file__).resolve().parents[1]
+    assert um.TRUSTED_UPDATE_KEYS, "a public key must be embedded"
+    for path in (root / "twobyteasr").glob("*.py"):
+        text = path.read_text("utf-8", errors="ignore")
+        assert "PRIVATE KEY-----" not in text
+        assert '"dpapi"' not in text or path.name == "update_manifest.py"
+
+
+# ------------------------------------------------------------------- check
+
+
+def test_check_verifies_signature_and_plans_only_changed_components(tmp_path, isolated_state, trusted_key):
+    installed = tmp_path / "install"
+    _make_payload(installed)
+    new_payload = tmp_path / "new"
+    new_manifest = _make_payload(new_payload, version="0.6.6", app_text=b"app-v2")
+    manifest, files = _feed(new_payload, new_manifest)
+    data = json.dumps(manifest).encode()
+    files[updater.STABLE_FEED] = data
+    files[updater.STABLE_FEED + ".sig"] = um.sign_manifest(data, trusted_key)
+    check = updater.check_for_update(request_get=_server(files), root=installed)
+    assert check.newer and check.latest_version == "0.6.6"
+    assert check.plan.mode == "components"
+    assert [a.name for a in check.plan.downloads] == ["app"]
+    assert {a.name for a in check.plan.reused} == set(um.COMPONENT_ORDER) - {"app"}
+    assert check.plan.download_bytes == manifest["components"]["app"]["archive"]["size"]
+    assert check.plan.environment_changes == () and check.plan.model_changes == ()
+    # Tampered manifest bytes are rejected even when the signature file is intact.
+    files[updater.STABLE_FEED] = data.replace(b"0.6.6", b"0.6.7", 1)
+    with pytest.raises(updater.UpdateError):
+        updater.check_for_update(request_get=_server(files), root=installed)
+
+
+def test_damaged_component_is_repaired_and_missing_manifest_falls_back_to_setup(tmp_path, isolated_state, trusted_key):
+    installed = tmp_path / "install"
+    _make_payload(installed)
+    (installed / "tools/ffmpeg/bin/ffmpeg.exe").unlink()
+    new_payload = tmp_path / "new"
+    manifest_new = _make_payload(new_payload, version="0.6.6", app_text=b"app-v2")
+    manifest, _files = _feed(new_payload, manifest_new)
+    parsed = um.parse_update_manifest(json.dumps(manifest).encode())
+    plan = updater.plan_update(parsed, installed)
+    assert {a.name: a.reason for a in plan.downloads} == {"app": "changed", "tools": "repair"}
+    (installed / um.COMPONENTS_FILENAME).unlink()
+    plan = updater.plan_update(parsed, installed)
+    assert plan.mode == "setup" and plan.download_bytes == len(b"SETUP")
+    manifest2, _ = _feed(new_payload, manifest_new, skip=("app",))
+    _make_payload(installed)
+    plan = updater.plan_update(um.parse_update_manifest(json.dumps(manifest2).encode()), installed)
+    assert plan.mode == "setup" and "没有单独的元件包" in plan.fallback_reason
+
+
+def test_network_failures_back_off_and_do_not_raise_outside_check(tmp_path, isolated_state, monkeypatch):
+    installed = tmp_path / "install"
+    _make_payload(installed)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TWOBYTEASR_TEST_ROOT", raising=False)
+    monkeypatch.delenv("TWOBYTEASR_ACCEPTANCE_DIR", raising=False)
+    monkeypatch.delenv(updater.DISABLE_ENV, raising=False)
+
+    def offline(url, **kwargs):
+        raise ConnectionError("offline")
+
+    assert updater.automatic_check_due()
+    with pytest.raises(updater.UpdateError):
+        updater.check_for_update(request_get=offline, root=installed)
+    assert not updater.automatic_check_due()  # backed off; no retry storm on every start
+    cache = json.loads((isolated_state / "check.json").read_text("utf-8"))
+    assert cache["failures"] == 1 and cache["next_attempt_at"] > cache["last_failure_at"] + 3000
+
+
+def test_channel_mismatch_and_wrong_platform_are_rejected(tmp_path, isolated_state, trusted_key):
+    installed = tmp_path / "install"
+    _make_payload(installed)
+    new_payload = tmp_path / "new"
+    manifest, files = _feed(new_payload, _make_payload(new_payload, version="0.6.6"), channel="qa-local")
+    data = json.dumps(manifest).encode()
+    files[updater.STABLE_FEED] = data
+    files[updater.STABLE_FEED + ".sig"] = um.sign_manifest(data, trusted_key)
+    with pytest.raises(updater.UpdateError, match="渠道"):
+        updater.check_for_update(request_get=_server(files), root=installed)
+    manifest["platform"] = "macos"
+    with pytest.raises(um.ManifestError):
+        um.parse_update_manifest(json.dumps(manifest).encode())
+    manifest["platform"] = "windows"
+    manifest["setup"]["urls"] = ["http://evil.example/x.exe"]
+    with pytest.raises(um.ManifestError):
+        um.parse_update_manifest(json.dumps(manifest).encode())
+
+
+# ----------------------------------------------------------------- download
+
+
+class _Asset:
+    def __init__(self, data, name="a.zip"):
+        self.name, self.size, self.sha256 = name, len(data), hashlib.sha256(data).hexdigest()
+        self.urls = ("https://example.org/" + name,)
+
+
+def test_download_resumes_with_ranges(tmp_path, isolated_state):
+    data = bytes(range(256)) * 40
+    asset = _Asset(data)
+    folder = tmp_path / "dl"
+    folder.mkdir()
+    (folder / "a.zip.part").write_bytes(data[:1000])
+    log = []
+    path = updater.download_asset(asset, folder, request_get=_server({asset.urls[0]: data}, log=log),
+                                  sleep=lambda s: None)
+    assert path.read_bytes() == data
+    assert log[0][1].get("Range") == "bytes=1000-"
+
+
+def test_download_restarts_when_server_ignores_ranges(tmp_path, isolated_state):
+    data = b"x" * 5000
+    asset = _Asset(data)
+    folder = tmp_path / "dl"
+    folder.mkdir()
+    (folder / "a.zip.part").write_bytes(b"y" * 1200)  # stale bytes must not survive
+    path = updater.download_asset(asset, folder, request_get=_server({asset.urls[0]: data}, ranges=False),
+                                  sleep=lambda s: None)
+    assert path.read_bytes() == data
+
+
+def test_download_rejects_corruption_and_never_marks_partial_files(tmp_path, isolated_state):
+    data = b"z" * 3000
+    asset = _Asset(data)
+    folder = tmp_path / "dl"
+    with pytest.raises(updater.UpdateError):
+        updater.download_asset(asset, folder, request_get=_server({asset.urls[0]: b"z" * 2999 + b"!"}),
+                               attempts_per_url=2, sleep=lambda s: None)
+    assert not (folder / "a.zip").exists() and not (folder / "a.zip.verified").exists()
+    assert not (folder / "a.zip.part").exists()
+    with pytest.raises(updater.UpdateError):  # missing asset (404) on every mirror
+        updater.download_asset(asset, folder, request_get=_server({}), attempts_per_url=1, sleep=lambda s: None)
+
+
+def test_download_cancel_keeps_partial_for_resume(tmp_path, isolated_state):
+    data = b"c" * 5000
+    asset = _Asset(data)
+    cancel = threading.Event()
+    seen = []
+
+    def progress(received, total):
+        seen.append(received)
+        if received > 100:
+            cancel.set()
+
+    with pytest.raises(updater.UpdateCancelled):
+        updater.download_asset(asset, tmp_path / "dl", progress=progress, cancel=cancel,
+                               request_get=_server({asset.urls[0]: data}), sleep=lambda s: None)
+    assert (tmp_path / "dl" / "a.zip.part").exists()
+
+
+# ------------------------------------------------------------------ staging
+
+
+def test_prepare_stages_verified_files_and_writes_controlled_plan(tmp_path, isolated_state, trusted_key):
+    installed = tmp_path / "install"
+    _make_payload(installed)
+    new_payload = tmp_path / "new"
+    _write(new_payload, "twobyteasr/new_module.py", b"new")
+    new_manifest = _make_payload(new_payload, version="0.6.6", app_text=b"app-v2")
+    (new_payload / "twobyteasr/old_module.py").unlink()
+    new_manifest = um.build_installed_manifest(new_payload, version="0.6.6")
+    manifest, files = _feed(new_payload, new_manifest)
+    data = json.dumps(manifest).encode()
+    files[updater.STABLE_FEED] = data
+    files[updater.STABLE_FEED + ".sig"] = um.sign_manifest(data, trusted_key)
+    getter = _server(files)
+    check = updater.check_for_update(request_get=getter, root=installed)
+    prepared = updater.prepare_update(check, request_get=getter, root=installed, wait_pid=4321)
+    plan = prepared.plan_path.read_text("utf-8").splitlines()
+    assert plan[0] == "2BYTEASR-UPDATE-PLAN\t1"
+    assert "wait_pid\t4321" in plan
+    replaced = {line.split("\t", 1)[1] for line in plan if line.startswith("REPLACE\t")}
+    removed = {line.split("\t", 1)[1] for line in plan if line.startswith("REMOVE\t")}
+    assert "2ByteASR.exe" in replaced and "twobyteasr/new_module.py" in replaced
+    assert "twobyteasr/old_module.py" in removed
+    assert not (replaced | removed) & set(um.PRESERVED_FILES)
+    assert not any(p.startswith(("renderer/node_modules", "tools/", "wheels/")) for p in replaced | removed)
+    assert plan[-1] == f"END\t{len(replaced) + len(removed) + 1}"
+    staged = json.loads((prepared.staging / um.COMPONENTS_FILENAME).read_text("utf-8"))
+    assert staged["version"] == "0.6.6"
+    assert um.validate_installed_manifest(staged)["components"]["renderer"] == \
+        json.loads((installed / um.COMPONENTS_FILENAME).read_text("utf-8"))["components"]["renderer"]
+    assert (prepared.staging / "twobyteasr/new_module.py").read_bytes() == b"new"
+    assert not prepared.staging.is_relative_to(installed)
+    # A second preparation reuses the verified archive instead of downloading again.
+    log = []
+    updater.prepare_update(check, request_get=_server(files, log=log), root=installed)
+    assert not [url for url, _ in log if url.endswith(".zip")]
+
+
+def test_archive_with_extra_or_tampered_member_is_rejected(tmp_path, isolated_state):
+    payload = tmp_path / "p"
+    manifest = _make_payload(payload)
+    record = manifest["components"]["app"]
+    good = _component_zip(payload, "app", record)
+    archive = tmp_path / "a.zip"
+    body = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(good)) as source, zipfile.ZipFile(body, "w") as target:
+        for item in source.infolist():
+            target.writestr(item, source.read(item.filename))
+        target.writestr("2byteasr_settings.json", b"{}")
+    archive.write_bytes(body.getvalue())
+    with pytest.raises(updater.UpdateError):
+        updater._safe_extract(archive, "app", record["content_sha256"], tmp_path / "s1")
+    body = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(good)) as source, zipfile.ZipFile(body, "w") as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            target.writestr(item, b"MZ-evil" if item.filename == "2ByteASR.exe" else data)
+    archive.write_bytes(body.getvalue())
+    with pytest.raises(updater.UpdateError, match="校验不符"):
+        updater._safe_extract(archive, "app", record["content_sha256"], tmp_path / "s2")

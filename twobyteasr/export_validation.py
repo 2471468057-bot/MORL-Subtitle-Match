@@ -50,9 +50,22 @@ def record_completion(function):
             receipt.clear()
             receipt.update(started_monotonic=requested_start if requested_start is not None else time.monotonic(),
                            _receipt_active=True)
+        log = token = None
+        error = None
+        from .export_run_log import begin_export_log, end_export_log, note_export
         try:
+            if not nested and 'ffmpeg_path' in parameters.parameters:
+                ffmpeg = parameters.bind(*args, **kwargs).arguments['ffmpeg_path']
+                log, token = begin_export_log(ffmpeg, job)
+            elif not nested and 'ffmpeg' in parameters.parameters:
+                ffmpeg = parameters.bind(*args, **kwargs).arguments['ffmpeg']
+                log, token = begin_export_log(ffmpeg, job)
+            if log is not None:
+                receipt['diagnostics_path'] = str(log.path)
+            note_export('render_backend', {'function': function.__name__, 'module': function.__module__})
             return function(*args, **kwargs)
         except BaseException as exc:
+            error = exc
             # Once validated bytes have been committed, a late observer or
             # temporary-directory cleanup failure cannot undo that fact.
             published = published_output_path(job)
@@ -64,8 +77,18 @@ def record_completion(function):
                 receipt.clear()
             raise
         finally:
-            if not nested:
-                receipt.pop('_receipt_active', None)
+            try:
+                if log is not None:
+                    try:
+                        end_export_log(log, token, error)
+                    except Exception as exc:
+                        if published_output_path(job) is not None:
+                            _completion_warning(job, 'export_diagnostics', exc)
+                        elif error is None:
+                            raise
+            finally:
+                if not nested:
+                    receipt.pop('_receipt_active', None)
     return run
 
 
@@ -102,6 +125,8 @@ def publish_output(staged, output, job, metadata, *, cancelled=None):
     statistics = completion_statistics(staged, metadata)
     frozen = dict(metadata)
     frozen.update(statistics)
+    from .export_bitrate import target_comparison
+    frozen.update(target_comparison(job, metadata))
     frozen.update(output_path=str(output), format=dict(metadata.get('format', {}), filename=str(output)))
     if cancelled and cancelled():
         raise InterruptedError('render cancelled before publication')
@@ -121,6 +146,11 @@ def publish_output(staged, output, job, metadata, *, cancelled=None):
     receipt.update(frozen)
     receipt.update(published_monotonic=published,
                    elapsed_seconds=max(0.0, published - receipt.get('started_monotonic', published)))
+    from .export_run_log import note_export
+    note_export('output_published', dict(output_path=str(output), video_bitrate=frozen.get('video_bitrate'),
+        audio_bitrate=frozen.get('audio_bitrate'), container_bitrate_bps=frozen.get('average_bitrate_bps'),
+        requested_video_bitrate_bps=frozen.get('requested_video_bitrate_bps'),
+        bitrate_target_met=frozen.get('bitrate_target_met')))
     if not overwrite and os.name != 'nt':
         notify_after_publication(job, Path(staged).unlink)
 
@@ -163,6 +193,8 @@ def validate_output(ffmpeg, path, *, duration=None, fps=None, cancelled=None, pr
                 if child.returncode:raise RuntimeError('导出完整解码验证失败：'+log.read_text(encoding='utf-8',errors='replace')[-1500:])
             finally:
                 if child.poll() is None:child.kill();child.wait()
+        from .export_bitrate import export_bitrate_measurements
+        data.update(export_bitrate_measurements(ffmpeg, path, data, cancelled=cancelled))
         return data
     finally:
         log.unlink(missing_ok=True)

@@ -124,7 +124,7 @@ class StylePropertyRow(QFrame):
         self.setProperty("expanded", False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(10, 10, 8, 10)
         outer.setSpacing(4)
         header = QFrame()
         header.setObjectName("stylePropertyRowHeader")
@@ -134,7 +134,20 @@ class StylePropertyRow(QFrame):
         self.title_label = QLabel(title)
         self.title_label.setObjectName("stylePropertyRowTitle")
         header_layout.addWidget(self.title_label)
+        # Inline controls and summary (M16 one-line rows); empty otherwise.
+        self._inline = QHBoxLayout()
+        self._inline.setContentsMargins(0, 0, 0, 0)
+        self._inline.setSpacing(6)
+        header_layout.addLayout(self._inline)
+        self.inline_summary = QLabel("")
+        self.inline_summary.setObjectName("stylePropertyRowSummary")
+        self.inline_summary.setMinimumWidth(0)
+        self.inline_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.inline_summary.hide()
+        header_layout.addWidget(self.inline_summary, 1)
+        self._header_stretch = header_layout.count()
         header_layout.addStretch(1)
+        self._header_layout = header_layout
         self.chip = _PropertyChip()
         header_layout.addWidget(self.chip)
         self.chevron = QLabel("▸")
@@ -162,11 +175,37 @@ class StylePropertyRow(QFrame):
     def content_layout(self) -> QVBoxLayout:
         return self._content_layout
 
+    def inline_layout(self) -> QHBoxLayout:
+        return self._inline
+
+    def set_inline(self, inline: bool = True, *, summary: bool = True, expandable: bool = True) -> None:
+        """One line: title, the property's own controls, a short summary and
+        (only when there is more) a chevron (2026-10-09, M16, user)."""
+        self._inline_mode = bool(inline)
+        self._expandable = bool(expandable)
+        self.title_label.setFixedWidth(40 if inline else self.title_label.sizeHint().width())
+        self.summary_label.setVisible(not inline)
+        self.inline_summary.setVisible(inline and summary)
+        self.chip.set_colors([])
+        self.chip.setVisible(False)
+        # The summary takes the spare width when it is shown.
+        self._header_layout.setStretch(self._header_stretch, 0 if inline and summary else 1)
+        self.chevron.setVisible(expandable or callable(self._on_activate))
+        if inline and expandable and not callable(self._on_activate):
+            self.chevron.setText("更多 ▸")
+        layout = self.layout()
+        layout.setContentsMargins(10, 5, 8, 5)
+
     def set_summary(self, text: str) -> None:
         self.summary_label.setText(tr(str(text)))
+        self.inline_summary.setText(tr(str(text)))
 
     def set_chip_colors(self, colors: list[str] | None) -> None:
         self._tint_colors = [str(color) for color in (colors or []) if QColor(str(color)).isValid()][:8]
+        if getattr(self, "_inline_mode", False):
+            # The inline swatch already shows the colour.
+            self.update()
+            return
         self.chip.set_colors(self._tint_colors)
         self.update()
 
@@ -182,7 +221,10 @@ class StylePropertyRow(QFrame):
                 if other is not self and other.content.isVisible():
                     other.set_expanded(False)
         self.content.setVisible(expanded)
-        self.chevron.setText("▾" if expanded else "▸")
+        if getattr(self, "_inline_mode", False) and not callable(self._on_activate):
+            self.chevron.setText("收起 ▾" if expanded else "更多 ▸")
+        else:
+            self.chevron.setText("▾" if expanded else "▸")
         if self.property("expanded") != expanded:
             self.setProperty("expanded", expanded)
             self.style().unpolish(self)
@@ -196,6 +238,9 @@ class StylePropertyRow(QFrame):
             if callable(self._on_activate):
                 self._on_activate()
                 event.accept()
+                return
+            if not getattr(self, "_expandable", True):
+                super().mousePressEvent(event)
                 return
             if not self.content.isVisible():
                 self.toggle()
@@ -224,13 +269,42 @@ class StyleScopeSelector(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setHorizontalSpacing(8)
         self._layout.setVerticalSpacing(2)
+        self._short: dict[str, str] = {}
         self.setMinimumHeight(76)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_single_row(self, short_labels: Mapping[str, str]) -> None:
+        """All options on one row with short labels; the full label stays in
+        the tooltip (2026-10-09, M16: scope sits at the top of the panel)."""
+        self._short = dict(short_labels)
+        self._layout.setHorizontalSpacing(4)
+        for index, button in enumerate(self._buttons):
+            self._layout.addWidget(button, 0, index)
+            # Chips are as tall as the one-row selector.
+            button.setFixedHeight(STYLE_FIELD_HEIGHT - 6)
+            self._apply_label(index)
+        self.setMinimumHeight(0)
+        self.setFixedHeight(STYLE_FIELD_HEIGHT - 6)
+
+    def _apply_label(self, index: int) -> None:
+        label, data = self._items[index]
+        button = self._buttons[index]
+        full = label if hasattr(label, "source") else tr(label)
+        if data in self._short:
+            import re
+            count = re.search(r"\d+", str(full))
+            if count:
+                bind_text(button, '{label} {count}', label=tr(self._short[data]), count=count.group(0))
+            else:
+                bind_text(button, self._short[data])
+        else:
+            bind_text(button, label)
+        bind_text(button, '应用到{label}', property='toolTip', label=full)
 
     def addItem(self, label: str, data: str) -> None:
         index = len(self._items)
         self._items.append((label, data))
-        button = bind_text(QRadioButton(), label)
+        button = bind_text(QRadioButton(), self._short.get(data, label))
         button.setObjectName("scopeOption")
         button.setFixedHeight(STYLE_FIELD_HEIGHT - 2)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -243,9 +317,8 @@ class StyleScopeSelector(QWidget):
         self._layout.addWidget(button, index // 2, index % 2)
 
     def retranslate_ui(self):
-        for (label, _data), button in zip(self._items, self._buttons):
-            bind_text(button, label)
-            bind_text(button, '应用到{label}', property='toolTip', label=label if hasattr(label, "source") else tr(label))
+        for index in range(len(self._buttons)):
+            self._apply_label(index)
 
     def currentIndex(self) -> int:
         return self._group.checkedId()
@@ -261,7 +334,7 @@ class StyleScopeSelector(QWidget):
         if 0 <= index < len(self._items):
             data = self._items[index][1]
             self._items[index] = (label, data)
-            bind_text(self._buttons[index], label)
+            self._apply_label(index)
 
     def setCurrentIndex(self, index: int) -> None:
         if 0 <= index < len(self._buttons):
@@ -388,6 +461,8 @@ class StylePreview(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(78)
         self.setMaximumHeight(96)
+        self._sample_text = ""
+        self.sample_toggle = None
         self._style = None
         self._gradient: dict | None = None
         self._glow: dict | None = None
@@ -402,6 +477,39 @@ class StylePreview(QWidget):
         self._motion_timer.setInterval(16)
         self._motion_timer.timeout.connect(self._motion_tick)
         bind_text(self, '当前字幕样式预览', property='toolTip')
+
+    def enable_sample_toggle(self) -> None:
+        """'Aa' switches between the selected line and the fixed sample
+        (2026-10-09, M16, user: preview what is being edited first)."""
+        button = QToolButton(self)
+        button.setObjectName("stylePreviewSample")
+        button.setText("Aa")
+        button.setCheckable(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        bind_text(button, '切换为示例字幕 Aa 123（默认预览当前选中字幕）', property='toolTip')
+        button.toggled.connect(lambda _checked: self.update())
+        button.resize(30, 22)
+        self.sample_toggle = button
+        self._place_sample_toggle()
+
+    def _place_sample_toggle(self) -> None:
+        if self.sample_toggle is not None:
+            self.sample_toggle.move(self.width() - self.sample_toggle.width() - 6, 5)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._place_sample_toggle()
+
+    def set_sample_text(self, text: str) -> None:
+        text = " ".join(str(text or "").split())
+        if text != self._sample_text:
+            self._sample_text = text
+            self.update()
+
+    def display_text(self) -> str:
+        if self.sample_toggle is not None and not self.sample_toggle.isChecked() and self._sample_text:
+            return self._sample_text
+        return tr("示例字幕 Aa 123")
 
     def set_style(self, style) -> None:
         self._style = copy.deepcopy(style) if style is not None else None
@@ -505,9 +613,20 @@ class StylePreview(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), QColor("#343a38"))
-        painter.setPen(QPen(QColor("#5e6963"), 1))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QLinearGradient
+        from .theme_manager import theme_key
+        from .ui_theme import theme_definition
+        theme = theme_definition(theme_key())
+        stage = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        backdrop = QLinearGradient(stage.topLeft(), stage.bottomRight())
+        backdrop.setColorAt(0.0, QColor("#4a4458"))
+        backdrop.setColorAt(1.0, QColor("#2c3440"))
+        stage_path = QPainterPath()
+        stage_path.addRoundedRect(stage, 10, 10)
+        painter.fillPath(stage_path, backdrop)
+        painter.setPen(QPen(QColor(theme.border_strong), 1))
+        painter.drawPath(stage_path)
         if self._style is None:
             return
         style = self._style
@@ -519,10 +638,13 @@ class StylePreview(QWidget):
         font.setItalic(bool(style.italic))
         # Chinese-first sample catches the common font fallback issue while
         # retaining Latin and numeric glyphs in the same compact preview.
-        text = tr("示例字幕 Aa 123")
+        text = self.display_text()
+        room = self.width() - 24 - (40 if self.sample_toggle is not None else 0)
         # Keep the preview useful for oversized ASS sizes such as 500px.
-        while font.pointSizeF() > 10 and QFontMetrics(font).horizontalAdvance(text) > self.width() - 24:
+        while font.pointSizeF() > 10 and QFontMetrics(font).horizontalAdvance(text) > room:
             font.setPointSizeF(font.pointSizeF() - 1)
+        if QFontMetrics(font).horizontalAdvance(text) > room:
+            text = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, max(20, room))
         painter.setFont(font)
         bounds = painter.fontMetrics().boundingRect(text)
         x = (self.width() - bounds.width()) // 2

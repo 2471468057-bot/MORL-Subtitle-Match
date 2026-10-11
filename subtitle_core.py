@@ -481,6 +481,11 @@ def configure_runtime_llms(
         if value:
             updated["models"][key] = value
     profiles = models.get("provider_profiles")
+    for stage in ('polish', 'group'):
+        for option in ('json_mode', 'structured_output'):
+            key = stage+'_'+option
+            if isinstance(models.get(key), bool):
+                updated['models'][key] = models[key]
     if isinstance(profiles, dict) and profiles:
         updated["models"]["provider_profiles"] = json.loads(
             json.dumps(profiles, ensure_ascii=False)
@@ -755,6 +760,14 @@ def load_game_profiles():
 
 
 def active_game_profile():
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        # Runtime reads pinned profile data, even after a page renames/edits it.
+        identity = runtime_game_identity(get_runtime_context().game_name)
+        for library in snapshot.libraries:
+            if runtime_game_identity(library.name) == identity and library.profile_json:
+                return json.loads(library.profile_json)
+        return {}
     identity = runtime_game_identity(RUNTIME_GAME_NAME)
     for name, profile in load_game_profiles().items():
         if runtime_game_identity(profile.get("identity", name)) == identity:
@@ -841,6 +854,13 @@ def active_profile_lexicon_paths():
 
 def _iter_enabled_profiles():
     """按本批启用词库顺序产出 (profile) ；找不到匹配的 id 跳过。"""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        for library in snapshot.libraries:
+            profile = json.loads(library.profile_json) if library.profile_json else {}
+            if profile:
+                yield profile
+        return
     profiles = load_game_profiles()
     for identity in runtime_enabled_glossary_ids():
         for name, profile in profiles.items():
@@ -859,6 +879,11 @@ def enabled_profile_lexicon_paths():
 
 def load_enabled_game_lexicon_names():
     """读取本批启用词库的全部本地图鉴（弱候选，不直接触发替换）。"""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        return list(dict.fromkeys(x for library in snapshot.libraries for x in library.reference_terms)), [
+            (library.name, len(library.reference_terms), len(library.reference_terms))
+            for library in snapshot.libraries if library.reference_terms]
     names = []
     loaded = []
     for path in enabled_profile_lexicon_paths():
@@ -949,6 +974,145 @@ def load_learned_term_payload(*, strict=False):
         return {"schema": 1, "games": {}}
 
 
+_LEARNED_PAYLOAD_VIEW = {"key": None, "payload": None}
+_FILE_PAYLOAD_LOADER = load_learned_term_payload
+
+
+def _learned_term_payload_view():
+    """Parsed learned-term file for read-only callers; never mutate the result.
+
+    The file is ~0.5 MB and the home page alone asked for it ~70 times at
+    startup. Writers keep using ``load_learned_term_payload`` (a fresh copy);
+    any write replaces the file, which changes the (mtime, size) key.
+    """
+    loader = load_learned_term_payload
+    if loader is not _FILE_PAYLOAD_LOADER:  # a replaced loader is not keyed by the file
+        return loader()
+    path = LEARNED_TERMS_PATH
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {"schema": 1, "games": {}}
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    cached = _LEARNED_PAYLOAD_VIEW
+    if cached["key"] != key:
+        payload = load_learned_term_payload()
+        cached["payload"], cached["key"] = payload, key
+        return payload
+    return cached["payload"]
+
+
+def _glossary_entry_key(value, games):
+    """Resolve immutable storage IDs first; ambiguous display names are unsafe."""
+    value = str(value or "").strip()
+    if value in games:
+        return value
+    matches = [str(key) for key, entry in games.items() if isinstance(entry, dict)
+               and str(entry.get("library_id", key)) == value]
+    if len(matches) == 1:
+        return matches[0]
+    display_matches = [str(key) for key, entry in games.items() if isinstance(entry, dict)
+                       and runtime_game_identity(entry.get("game", "")) == runtime_game_identity(value)]
+    return display_matches[0] if len(display_matches) == 1 else ""
+
+
+def _glossary_write_key(value, games):
+    key = _glossary_entry_key(value, games)
+    if key:
+        return key
+    matches = [entry for entry in games.values() if isinstance(entry, dict)
+               and runtime_game_identity(entry.get('game', '')) == runtime_game_identity(value)]
+    if len(matches) > 1:
+        raise ValueError('同名词库存在多个稳定 ID，请明确选择目标词库后再保存。')
+    return runtime_game_identity(value)
+
+
+def glossary_catalog():
+    """Small metadata catalog, shared by Home, the library page and tasks.
+
+    Legacy dict keys are retained as stable IDs. Reading never migrates or guesses
+    historical spellings. Renaming changes only the display name.
+    """
+    games = _learned_term_payload_view().get("games", {})
+    games = games if isinstance(games, dict) else {}
+    result = {}
+    hidden = hidden_runtime_game_profile_ids()
+    for name, profile in load_game_profiles().items():
+        identity = runtime_game_identity(profile.get("identity", name))
+        if identity and identity not in hidden:
+            result[identity] = {"id": identity, "name": str(name), "content_type": "game", "revision": "builtin"}
+    for key, entry in games.items():
+        if not isinstance(entry, dict):
+            continue
+        identity = str(entry.get("library_id", key))
+        result[identity] = {"id": identity, "name": str(entry.get("game", key)),
+                            "content_type": str(entry.get("content_type", "game")),
+                            "revision": str(entry.get("revision", 0))}
+    return list(result.values())
+
+
+def resolve_glossary_identity(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    catalog = glossary_catalog()
+    exact = [row["id"] for row in catalog if row["id"] == value]
+    if exact:
+        return exact[0]
+    matching = [row["id"] for row in catalog
+                if runtime_game_identity(row["name"]) == runtime_game_identity(value)]
+    return matching[0] if len(matching) == 1 else ""
+
+
+def glossary_display_name(value):
+    identity = resolve_glossary_identity(value)
+    return next((row["name"] for row in glossary_catalog() if row["id"] == identity), str(value or ""))
+
+
+def _touch_glossary_entry(entry, key):
+    entry["library_id"] = str(entry.get("library_id", key))
+    entry["revision"] = int(entry.get("revision", 0) or 0) + 1
+
+
+def create_learned_content(game_name, content_type="game", *, create_new=False):
+    name = canonicalize_runtime_game_name(game_name)
+    if not name:
+        return ""
+    payload = load_learned_term_payload(strict=True)
+    games = payload.setdefault("games", {})
+    identity = _glossary_entry_key(game_name, games)
+    if not identity and not create_new:
+        identity = _glossary_write_key(game_name, games)
+        if identity not in games:
+            identity = ''
+    if not identity or create_new:
+        identity = ("library:" + uuid.uuid4().hex) if create_new else runtime_game_identity(name)
+        if identity in games:
+            identity = "library:" + uuid.uuid4().hex
+        games[identity] = {"game": name, "mappings": []}
+    entry = games[identity]
+    entry["content_type"] = str(content_type) if content_type in {"game", "event", "series", "creator", "other"} else "other"
+    _touch_glossary_entry(entry, identity)
+    payload["schema"] = max(2, int(payload.get("schema", 1) or 1))
+    payload["hidden_profile_ids"] = [key for key in payload.get("hidden_profile_ids", []) if key != identity]
+    os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
+    atomic_write_json(LEARNED_TERMS_PATH, payload)
+    return entry["library_id"]
+
+
+def rename_learned_content(library_id, new_name):
+    name = canonicalize_runtime_game_name(new_name)
+    payload = load_learned_term_payload(strict=True)
+    games = payload.get("games", {})
+    identity = _glossary_entry_key(library_id, games)
+    if not identity or not name:
+        return False
+    games[identity]["game"] = name
+    _touch_glossary_entry(games[identity], identity)
+    atomic_write_json(LEARNED_TERMS_PATH, payload)
+    return True
+
+
 TERM_PROVENANCE_BUILTIN = "builtin"
 TERM_PROVENANCE_OFFICIAL = "official"
 TERM_PROVENANCE_USER_CONFIRMED = "user_confirmed"
@@ -1026,7 +1190,7 @@ def hidden_reference_terms_for_game(game_name):
     identity = runtime_game_identity(canonicalize_runtime_game_name(game_name))
     if not identity:
         return set()
-    entry = load_learned_term_payload().get("games", {}).get(identity, {})
+    entry = _learned_term_payload_view().get("games", {}).get(identity, {})
     if not isinstance(entry, dict):
         return set()
     return {
@@ -1065,7 +1229,7 @@ def set_reference_terms_hidden(game_name, names, hidden: bool) -> int:
 
 
 def hidden_runtime_game_profile_ids():
-    payload = load_learned_term_payload()
+    payload = _learned_term_payload_view()
     return {
         str(item)
         for item in payload.get("hidden_profile_ids", [])
@@ -1182,16 +1346,21 @@ def runtime_enabled_glossary_ids():
 def learned_mappings_for_game(game_name=None):
     """已确认/学习映射。game_name 显式传参时只看该库（浏览语义）；
     不传时按本批启用的词库集合合并（pipeline 语义）。"""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if not game_name and snapshot is not None:
+        return [{"from": alias, "to": term.canonical, "confirmed": term.confirmed,
+            "provenance": term.provenance, "origin": term.origin, "category": term.category}
+            for library in snapshot.libraries for term in library.terms
+            if term.provenance != "builtin" for alias in (term.aliases or (term.canonical,))]
     if game_name:
-        game_name = canonicalize_runtime_game_name(game_name)
-        ids = [runtime_game_identity(game_name)]
+        ids = [str(game_name)]
     else:
         ids = runtime_enabled_glossary_ids()
-    payload = load_learned_term_payload().get("games", {})
+    payload = _learned_term_payload_view().get("games", {})
     merged = []
     seen = set()
     for identity in ids:
-        entry = payload.get(identity, {})
+        entry = payload.get(_glossary_entry_key(identity, payload), {})
         mappings = entry.get("mappings", []) if isinstance(entry, dict) else []
         for item in mappings:
             if not (isinstance(item, dict) and item.get("from") and item.get("to")):
@@ -1200,56 +1369,38 @@ def learned_mappings_for_game(game_name=None):
             if key in seen:
                 continue
             seen.add(key)
-            merged.append(_normalized_learned_mapping(item))
+            merged.append(_normalized_learned_mapping(copy.deepcopy(item)))
     return merged
 
 
 def user_confirmed_mappings_for_game(game_name=None):
+    from twobyteasr.terminology import mapping_is_confirmed
     return [
         item for item in learned_mappings_for_game(game_name)
         if learned_mapping_provenance(item) == TERM_PROVENANCE_USER_CONFIRMED
-        and bool(item.get("confirmed", True))
+        and mapping_is_confirmed(item, inferred_manual=True)
     ]
 
 
 def learned_content_type(game_name=None):
-    game_name = canonicalize_runtime_game_name(game_name or RUNTIME_GAME_NAME)
-    entry = load_learned_term_payload().get("games", {}).get(
-        runtime_game_identity(game_name), {}
-    )
+    games = _learned_term_payload_view().get("games", {})
+    entry = games.get(_glossary_entry_key(game_name or RUNTIME_GAME_NAME, games), {})
     return str(entry.get("content_type", "game")) if isinstance(entry, dict) else "game"
 
 
 def ensure_learned_content(game_name, content_type="game"):
     """Create/update a content entry even before it has any learned mappings."""
-    game_name = canonicalize_runtime_game_name(game_name)
-    identity = runtime_game_identity(game_name)
-    if not game_name or not identity:
-        return False
-    allowed = {"game", "event", "series", "creator", "other"}
-    content_type = str(content_type) if str(content_type) in allowed else "other"
-    payload = load_learned_term_payload()
-    payload["schema"] = max(2, int(payload.get("schema", 1) or 1))
-    payload["hidden_profile_ids"] = [
-        str(item)
-        for item in payload.get("hidden_profile_ids", [])
-        if str(item).strip() and str(item) != identity
-    ]
-    entry = payload.setdefault("games", {}).setdefault(
-        identity, {"game": game_name, "mappings": []}
-    )
-    entry["game"] = game_name
-    entry["content_type"] = content_type
     try:
-        os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
-        atomic_write_json(LEARNED_TERMS_PATH, payload)
+        return bool(create_learned_content(game_name, content_type))
     except OSError:
         return False
-    return True
 
 
 def learned_canonical_terms(game_name=None):
     """Return saved canonical spellings as safe, evidence-gated glossary hints."""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if not game_name and snapshot is not None:
+        return list(snapshot.canonical_terms)
     result = []
     seen = set()
     for item in learned_mappings_for_game(game_name):
@@ -1262,6 +1413,9 @@ def learned_canonical_terms(game_name=None):
 
 def enabled_glossary_adjudication_evidence():
     """Structured, read-only evidence for cloud disagreement adjudication."""
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        return snapshot.evidence()
     enabled_ids = runtime_enabled_glossary_ids()
     enabled_set = set(enabled_ids)
     games = []
@@ -1284,7 +1438,7 @@ def enabled_glossary_adjudication_evidence():
                 alias = clean_subtitle_text(alias)
                 if alias and alias != canonical:
                     aliases.append({"alias": alias, "canonical": canonical})
-    payload_games = load_learned_term_payload().get("games", {})
+    payload_games = _learned_term_payload_view().get("games", {})
     for identity in enabled_ids:
         entry = payload_games.get(identity, {}) if isinstance(payload_games, dict) else {}
         if not isinstance(entry, dict):
@@ -1319,27 +1473,76 @@ def enabled_glossary_adjudication_evidence():
 
 
 def add_learned_mapping(game_name, source, target, *, category="其他", origin="手动", evidence_metadata=None):
-    """手动新增一条已学习映射；from==to 表示确认专名正确写法。返回是否新增。"""
-    game_name = canonicalize_runtime_game_name(game_name)
-    identity = runtime_game_identity(game_name)
-    source = content_only(source)
-    target = content_only(target)
+    """Add a confirmed mapping; manual canonical reentry may revise its case.
+
+    Return whether storage changed. Imports and accepted AI evidence preserve an
+    existing user spelling; direct manual canonical input is explicit intent.
+    """
+    from twobyteasr.terminology import mapping_is_confirmed
+    def confirmed(item):
+        return mapping_is_confirmed(item,
+            inferred_manual=learned_mapping_provenance(item) == TERM_PROVENANCE_USER_CONFIRMED)
+    source = clean_subtitle_text(source)
+    target = clean_subtitle_text(target)
     if not source or not target:
         return False
     payload = load_learned_term_payload(strict=True)
+    games = payload.setdefault("games", {})
+    identity = _glossary_write_key(game_name, games)
+    name = canonicalize_runtime_game_name(game_name)
     payload["schema"] = max(2, int(payload.get("schema", 1) or 1))
     payload["hidden_profile_ids"] = [
         str(item)
         for item in payload.get("hidden_profile_ids", [])
         if str(item).strip() and str(item) != identity
     ]
-    entry = payload.setdefault("games", {}).setdefault(
-        identity, {"game": game_name, "mappings": []}
+    entry = games.setdefault(
+        identity, {"game": name, "mappings": []}
     )
     mappings = entry.setdefault("mappings", [])
+    manual_canonical = (source.casefold() == target.casefold()
+                        and clean_subtitle_text(origin) == "手动"
+                        and evidence_metadata is None)
+    if manual_canonical:
+        # Check alias ownership before revising the display spelling. A name
+        # already mapped to a different canonical must remain an explicit conflict.
+        for item in mappings:
+            if (confirmed(item)
+                    and str(item.get("from", "")).casefold() == source.casefold()
+                    and str(item.get("to", "")).casefold() != target.casefold()):
+                raise ValueError(f"别名冲突：{source} 已指向 {item.get('to')}，不能同时指向 {target}。请先编辑原映射。")
+        canonical_row = next((item for item in mappings
+                              if str(item.get("from", "")).casefold() == source.casefold()
+                              and str(item.get("to", "")).casefold() == target.casefold()), None)
+        if canonical_row is not None:
+            related = [item for item in mappings
+                       if str(item.get("to", "")).casefold() == target.casefold()]
+            if (canonical_row.get("from") != source
+                    or any(item.get("to") != target for item in related)
+                    or not confirmed(canonical_row)):
+                return edit_learned_mapping(game_name,
+                    (canonical_row.get("from"), canonical_row.get("to")), source, target,
+                    category=category, origin=origin)
+        else:
+            # Only aliases may exist in older libraries. Confirming the canonical
+            # itself also revises their targets in the same atomic write below.
+            for item in mappings:
+                if str(item.get("to", "")).casefold() == target.casefold():
+                    item["to"] = target
+    spellings = {str(item.get("to", "")) for item in mappings
+                 if confirmed(item) and str(item.get("to", "")).casefold() == target.casefold()}
+    if not manual_canonical and len(spellings) == 1:
+        target = next(iter(spellings))
     for item in mappings:
         if item.get("from") == source and item.get("to") == target:
             return False
+        if (str(item.get("from", "")).casefold() == source.casefold()
+                and confirmed(item)):
+            if str(item.get("to", "")).casefold() == target.casefold():
+                # A case variant import does not silently override an established
+                # spelling. Explicit edits use edit_learned_mapping instead.
+                return False
+            raise ValueError(f"别名冲突：{source} 已指向 {item.get('to')}，不能同时指向 {target}。请先编辑原映射。")
     record = {
             "from": source,
             "to": target,
@@ -1358,21 +1561,55 @@ def add_learned_mapping(game_name, source, target, *, category="其他", origin=
             if key in evidence_metadata:
                 record[key]=copy.deepcopy(evidence_metadata[key])
     mappings.append(record)
+    _touch_glossary_entry(entry, identity)
     os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
     atomic_write_json(LEARNED_TERMS_PATH, payload)
     return True
 
 
+def edit_learned_mapping(game_name, old_key, source, target, *, category="其他", origin=None):
+    """One atomic edit, including case-only edits and existing aliases."""
+    source, target = clean_subtitle_text(source), clean_subtitle_text(target)
+    if not source or not target:
+        return False
+    payload = load_learned_term_payload(strict=True)
+    games = payload.get("games", {})
+    identity = _glossary_entry_key(game_name, games)
+    entry = games.get(identity, {})
+    records = entry.get("mappings", [])
+    old = next((row for row in records if (row.get("from"), row.get("to")) == tuple(old_key)), None)
+    if old is None:
+        return False
+    for row in records:
+        if row is not old and str(row.get("from", "")).casefold() == source.casefold() and str(row.get("to", "")).casefold() != target.casefold():
+            raise ValueError(f"别名冲突：{source} 已指向 {row.get('to')}。")
+    previous_target = str(old.get("to", ""))
+    old.update({"from": source, "to": target, "category": clean_subtitle_text(category) or "其他",
+                "confirmed": True, "provenance": TERM_PROVENANCE_USER_CONFIRMED,
+                "updated": time.strftime("%Y-%m-%d")})
+    if origin is not None:
+        old["origin"] = clean_subtitle_text(origin)
+    if previous_target.casefold() == target.casefold():
+        for row in records:
+            if str(row.get("to", "")).casefold() == previous_target.casefold():
+                row["to"] = target
+    entry["mappings"] = list({(row.get("from"), row.get("to")): row for row in records}.values())
+    _touch_glossary_entry(entry, identity)
+    atomic_write_json(LEARNED_TERMS_PATH, payload)
+    return True
+
+
 def persist_learned_mappings(game_name, mappings):
+    from twobyteasr.terminology import mapping_is_confirmed
     if not game_name or not mappings:
         return
-    payload = load_learned_term_payload()
+    payload = load_learned_term_payload(strict=True)
     payload["schema"] = max(2, int(payload.get("schema", 1) or 1))
     games = payload.setdefault("games", {})
-    identity = runtime_game_identity(game_name)
+    identity = _glossary_write_key(game_name, games)
     entry = games.setdefault(identity, {"game": game_name, "mappings": []})
     existing = {
-        (content_only(item.get("from", "")), content_only(item.get("to", ""))): item
+        (str(item.get("from", "")).casefold(), str(item.get("to", "")).casefold()): item
         for item in entry.get("mappings", [])
         if isinstance(item, dict)
     }
@@ -1381,13 +1618,31 @@ def persist_learned_mappings(game_name, mappings):
         if runtime_game_identity(game_name) == runtime_game_identity(RUNTIME_GAME_NAME)
         else set()
     )
+    report = {"added": 0, "protected": 0, "conflicts": []}
     for mapping in mappings:
-        key = (content_only(mapping.get("from", "")), content_only(mapping.get("to", "")))
-        if not all(key) or key in blocked:
+        key = (str(mapping.get("from", "")).casefold(), str(mapping.get("to", "")).casefold())
+        if not all(key) or (content_only(key[0]), content_only(key[1])) in blocked:
             continue
+        protected = [row for row in existing.values()
+                     if learned_mapping_provenance(row) == TERM_PROVENANCE_USER_CONFIRMED
+                     and mapping_is_confirmed(row, inferred_manual=True)
+                     and str(row.get("from", "")).casefold() == key[0]]
+        if protected:
+            report['protected'] += 1
+            targets = list(dict.fromkeys(str(row.get('to', '')) for row in protected))
+            if any(target.casefold() != key[1] for target in targets):
+                report['conflicts'].append({'alias': str(mapping.get('from', '')),
+                                           'existing': targets, 'incoming': str(mapping.get('to', ''))})
+            continue
+        canonical_spellings = {str(row.get('to', '')) for row in existing.values()
+                               if learned_mapping_provenance(row) == TERM_PROVENANCE_USER_CONFIRMED
+                               and mapping_is_confirmed(row, inferred_manual=True)
+                               and str(row.get('to', '')).casefold() == key[1]}
+        canonical_target = next(iter(canonical_spellings)) if len(canonical_spellings) == 1 else clean_subtitle_text(mapping['to'])
+        report['added'] += key not in existing
         existing[key] = {
             "from": clean_subtitle_text(mapping["from"]),
-            "to": clean_subtitle_text(mapping["to"]),
+            "to": canonical_target,
             "reason": clean_subtitle_text(mapping.get("reason", "联网术语核验"))[:160],
             "sources": list(mapping.get("sources", ()))[:5],
             "verification": mapping.get("verification", "web_source"),
@@ -1413,24 +1668,29 @@ def persist_learned_mappings(game_name, mappings):
             "updated": time.strftime("%Y-%m-%d"),
         }
     entry["mappings"] = sorted(existing.values(), key=lambda item: (item["to"], item["from"]))
+    _touch_glossary_entry(entry, identity)
     try:
         os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
         atomic_write_json(LEARNED_TERMS_PATH, payload)
     except OSError as exc:
         # 本批已核验映射仍可使用；只是不带到下一批，不能因此重跑联网 API。
         print(f"   [警告] 已学习术语未能持久保存：{exc}")
+        report['save_error'] = str(exc)
+    if report['conflicts']:
+        print(f"   [术语冲突] {len(report['conflicts'])} 个别名指向不同规范词；已保留用户确认写法。")
+    return report
 
 
 def delete_learned_mappings(game_name, mapping_keys):
     """删除用户在管理窗口中明确选中的学习映射。"""
-    identity = runtime_game_identity(canonicalize_runtime_game_name(game_name))
-    payload = load_learned_term_payload()
+    payload = load_learned_term_payload(strict=True)
     games = payload.get("games", {})
+    identity = _glossary_entry_key(game_name, games)
     entry = games.get(identity)
     if not isinstance(entry, dict):
         return 0
     keys = {
-        (content_only(source), content_only(target))
+        (str(source), str(target))
         for source, target in mapping_keys
     }
     before = list(entry.get("mappings", []))
@@ -1438,13 +1698,14 @@ def delete_learned_mappings(game_name, mapping_keys):
         item
         for item in before
         if (
-            content_only(item.get("from", "")),
-            content_only(item.get("to", "")),
+            str(item.get("from", "")),
+            str(item.get("to", "")),
         )
         not in keys
     ]
     removed = len(before) - len(entry["mappings"])
     if removed:
+        _touch_glossary_entry(entry, identity)
         os.makedirs(os.path.dirname(LEARNED_TERMS_PATH), exist_ok=True)
         atomic_write_json(LEARNED_TERMS_PATH, payload)
     return removed
@@ -1452,11 +1713,11 @@ def delete_learned_mappings(game_name, mapping_keys):
 
 def delete_learned_game(game_name):
     """Remove one user-created content entry and all of its learned mappings."""
-    identity = runtime_game_identity(canonicalize_runtime_game_name(game_name))
+    payload = load_learned_term_payload(strict=True)
+    games = payload.get("games", {})
+    identity = _glossary_entry_key(game_name, games)
     if not identity:
         return False
-    payload = load_learned_term_payload()
-    games = payload.get("games", {})
     if not isinstance(games, dict) or identity not in games:
         return False
     del games[identity]
@@ -1470,6 +1731,10 @@ def delete_learned_game(game_name):
 
 def prepared_learned_mappings(segments, game_name=None):
     """把已核验学习词转换成本次稿件可安全应用的映射。"""
+    if not game_name and getattr(get_runtime_context(), "glossary_snapshot", None) is not None:
+        # Confirmed mappings execute through the literal shared resolver;
+        # unconfirmed suggestions must not enter the old substring loop.
+        return []
     result = []
     blocked = active_blocked_mapping_pairs()
     for item in learned_mappings_for_game(game_name):
@@ -1503,6 +1768,10 @@ def prepared_learned_mappings(segments, game_name=None):
 
 
 def active_canonical_replacements():
+    if getattr(get_runtime_context(), "glossary_snapshot", None) is not None:
+        # Segment normalization owns aligned replacement. Running a second
+        # substring implementation here would reintroduce chains/conflicts.
+        return ()
     if not RUNTIME_ENABLE_DOMAIN_TERMS:
         return ()
     pairs = [
@@ -1535,13 +1804,21 @@ def apply_active_canonical_replacements(text):
 
 
 def runtime_content_profile_signature():
-    return {
+    from twobyteasr.number_fidelity import RULE_VERSION, preference
+    signature = {
         "game": clean_subtitle_text(RUNTIME_GAME_NAME),
         "domain_terms": bool(RUNTIME_ENABLE_DOMAIN_TERMS),
         "enabled_glossary_ids": sorted(runtime_enabled_glossary_ids()),
         "expected_speakers": int(RUNTIME_EXPECTED_SPEAKERS),
         "dialogue_coverage_mode": str(RUNTIME_DIALOGUE_COVERAGE_MODE),
+        "numeric_policy": {"version": RULE_VERSION, "enabled": preference()},
     }
+    snapshot = getattr(get_runtime_context(), "glossary_snapshot", None)
+    if snapshot is not None:
+        signature["terminology_snapshot"] = snapshot.summary()
+    from twobyteasr.content_scene import runtime_content_scene
+    signature["resolved_context"] = runtime_content_scene().to_dict()
+    return signature
 
 
 def runtime_settings_snapshot():
@@ -1595,7 +1872,8 @@ def runtime_settings_snapshot():
             "parallel_cloud_batches": bool(PARALLEL_CLOUD_BATCHES),
             "cloud_batch_workers": int(CLOUD_BATCH_WORKERS),
             "parallel_cpu_vad": bool(PARALLEL_CPU_VAD),
-            "moss_parallel_workers": int(MOSS_PARALLEL_WORKERS),
+            "moss_parallel_workers": 1,
+            "moss_inference_mode": "full_context",
             "moss_parallel_min_vram_gb": float(MOSS_PARALLEL_MIN_VRAM_GB),
             "qwen_asr_batch_size": int(QWEN_ASR_BATCH_SIZE),
             "parallel_gpu_asr": bool(PARALLEL_GPU_ASR),
@@ -2365,25 +2643,10 @@ def load_glossary():
 
 
 def load_content_context(media_title=""):
-    """按本次弹窗选择生成背景；不再要求剪辑者逐期修改文本文件。"""
-    if not RUNTIME_GAME_NAME:
-        context = (
-            "普通中文直播、对话或游戏视频。不要沿用任何旧游戏的角色、技能或机制词；"
-            "只根据本期声音证据校对普通同音字，无法确认时保留 MOSS 主稿。"
-            f"素材标题：{media_title}。"
-        )
-    elif RUNTIME_ENABLE_DOMAIN_TERMS:
-        context = (
-            f"当前素材与《{RUNTIME_GAME_NAME}》有关。可联网核对该游戏的官方角色、生物、"
-            "技能、机制、队伍和战斗术语；只在读音、上下文和多处证据共同支持时修正，"
-            f"无法确认时保留 MOSS 主稿。素材标题：{media_title}。"
-        )
-    else:
-        context = (
-            f"当前素材与《{RUNTIME_GAME_NAME}》有关，但游戏名只作为弱背景；"
-            "本次未启用联网术语增强，不要主动套用角色、技能或机制词，"
-            f"无法确认时保留 MOSS 主稿。素材标题：{media_title}。"
-        )
+    """One task-owned, locally resolved scene; no implicit web permission."""
+    from twobyteasr.content_scene import runtime_content_scene
+    scene = runtime_content_scene()
+    context = f"{scene.summary()}; 素材标题：{media_title}。已确认且语境适用的别名按词库规范名称；其他纠错需输入证据，未知或混合领域不擅自选游戏。"
     print(f"   [项目背景] {context}")
     return context
 
@@ -2506,6 +2769,15 @@ def repair_with_verified_game_terms(segments, verified_terms):
             if best is None:
                 break
             _, similarity, _, _, start, source, target, basis = best
+            if getattr(get_runtime_context(), "glossary_snapshot", None) is not None:
+                # A fuzzy dictionary hit is a review candidate, including when
+                # another model supports it. Only explicit confirmed mappings
+                # and case variants execute in the shared local resolver.
+                add_review_item(segment.start, "术语候选", f"{source} → {target}；{basis}，需确认纠错映射",
+                    segment.text, priority=1, severity="review")
+                record_run_event("terminology_fuzzy_candidate", segment_id=segment.segment_id,
+                    source=source, target=target, basis=basis, similarity=round(similarity, 4), applied=False)
+                break
             before = segment.text
             # segment.text 已被 normalize 成紧凑正文，content_only 的位置在这里一致。
             segment.text = clean_subtitle_text(

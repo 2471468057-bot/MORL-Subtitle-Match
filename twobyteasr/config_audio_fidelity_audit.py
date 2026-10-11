@@ -75,7 +75,7 @@ def start(window, out):
             wait(lambda: page.project is not None and page._readiness.ready)
             if phase == 'initial':
                 window._open_model_workshop(); pump(.2)
-                window.workshop_page._perform_action('nemotron', role='speaker')
+                window._apply_workshop_backend('speaker', 'single')
                 check('workshop closes speaker', window.legacy.RUNTIME_SETTINGS['models']['speaker_source'] == 'single')
                 values = {'service': 'deepseek', 'provider': 'deepseek', 'transport': 'openai_compatible',
                     'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-v4-pro', 'protocol': 'auto'}

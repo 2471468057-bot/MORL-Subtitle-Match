@@ -475,23 +475,34 @@ def active_video_clips(
 ) -> list[tuple[VideoTrack, VideoClip]]:
     """Return active clips in stable bottom-to-top z-order."""
 
+    import copy
+    from .studio_transitions import transition_windows,transition_records
+    windows = transition_windows(project, 'video')
+    transitions = transition_records(project,'video')
     time_ms = max(0, int(timeline_ms))
-    ordered = sorted(project.video_tracks, key=lambda item: item.z_index)
     assets = {asset.asset_id: asset for asset in project.media_pool}
-    matches: list[tuple[VideoTrack, VideoClip]] = []
-    for track in ordered:
+    matches = []
+    for track in sorted(project.video_tracks, key=lambda item: item.z_index):
         if not track.enabled:
             continue
-        for clip in reversed(track.clips):
-            asset = assets.get(clip.asset_id)
-            if (
-                clip.enabled
-                and asset is not None
-                and not asset.offline
-                and clip.timeline_in_ms <= time_ms < clip.timeline_out_ms
-            ):
-                matches.append((track, clip))
-                break
+        track_matches = []
+        for original in track.clips:
+            asset = assets.get(original.asset_id)
+            window = windows.get((track.id,original.id), windows.get(original.id))
+            clip = original
+            if window:
+                clip = copy.copy(original)
+                for key in ('source_in_ms','source_out_ms','timeline_in_ms','timeline_out_ms'):
+                    setattr(clip,key,window[key])
+            if clip.enabled and asset is not None and not asset.offline and clip.timeline_in_ms <= time_ms < clip.timeline_out_ms:
+                track_matches.append((track, clip))
+        # Retain the existing topmost-overlap rule except for both endpoints
+        # of a currently sampled seam transition.
+        seam_ids={c for item in transitions if item.get('track_id')==track.id
+            and item.get('edge')=='seam' and item['start_ms']<=time_ms<item['end_ms']
+            for c in (item['left_clip_id'],item['right_clip_id'])}
+        seam_matches=[pair for pair in track_matches if pair[1].id in seam_ids]
+        matches.extend(seam_matches if seam_matches else track_matches[-1:])
     return matches
 
 

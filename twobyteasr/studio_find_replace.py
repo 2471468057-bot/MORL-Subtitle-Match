@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+import copy
+
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -42,11 +47,84 @@ from .studio_text_tools import (
     scope_cue_ids,
     tidy_occurrences,
     values_from_occurrences,
+    occurrence_conflicts,
 )
 
 from .i18n import bind_text
 
 from .i18n import tr
+
+
+@dataclass(frozen=True)
+class PreviewBinding:
+    project: object
+    project_id: str
+    revision: int
+    fingerprint: str
+    document_fingerprint: str
+
+    @staticmethod
+    def _document_payload(project):
+        # asdict reads persisted edit data without to_dict's validate/persist
+        # side effects. Runtime selection/render caches are not dataclass
+        # fields; the following known bookmarks are view state only.
+        payload = asdict(project)
+        payload.pop('updated_at', None)
+        state = payload.get('studio_state', {})
+        for key in ('review_risks', 'last_selected_cue', 'playhead_ms', 'zoom',
+                'scroll_ms', 'bilingual_mode', 'follow_playhead',
+                'timeline_snap_enabled', 'timeline_tool',
+                'timeline_track_heights', 'layout'):
+            state.pop(key, None)
+        return payload
+
+    @classmethod
+    def _document_fingerprint(cls, project):
+        return hashlib.sha256(json.dumps(cls._document_payload(project), ensure_ascii=False,
+            sort_keys=True).encode('utf8')).hexdigest()
+
+    @staticmethod
+    def _fingerprint(project):
+        rows = [(c.id, c.text, c.start_ms, c.end_ms, c.speaker_id) for c in project.cues]
+        # Ordinary previews retain their existing object/revision/text fence;
+        # relinking/replacing source media also invalidates pending decisions.
+        media = (project.media.path, project.media.fingerprint,
+                 [(a.asset_id,a.canonical_source,getattr(a,'fingerprint',''))
+                  for a in project.media_pool])
+        return hashlib.sha256(json.dumps((media,rows), ensure_ascii=False).encode('utf8')).hexdigest()
+
+    @classmethod
+    def capture(cls, project):
+        from .studio_runtime_state import state_for
+        return cls(project, project.project_id, state_for(project).revision,
+            cls._fingerprint(project), cls._document_fingerprint(project))
+
+    def matches(self, project):
+        from .studio_runtime_state import state_for
+        return (project is self.project and project.project_id == self.project_id
+                and state_for(project).revision == self.revision
+                and self._fingerprint(project) == self.fingerprint
+                and self._document_fingerprint(project) == self.document_fingerprint)
+
+
+class _GlossaryReviewThread(QThread):
+    ready = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, project, cue_ids, snapshot, settings, parent):
+        super().__init__(parent)
+        from .service import CancellationToken
+        self.token = CancellationToken()
+        self.inputs = (project, cue_ids, snapshot, settings)
+
+    def run(self):
+        try:
+            from .service import preview_glossary_correction
+            result = preview_glossary_correction(*self.inputs, cancel_token=self.token)
+            self.token.raise_if_cancelled()
+            self.ready.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 def _locked_ids(page) -> list[str]:
@@ -153,9 +231,20 @@ def apply_occurrences(
     *,
     title: str,
     learn_pair: tuple[str, str] | None = None,
+    binding: PreviewBinding | None = None,
+    glossary_ids=None,
+    review_receipt=None,
 ) -> tuple[int, int]:
     if page.session.project is None or not hits:
         return 0, 0
+    if binding is not None and not binding.matches(page.session.project):
+        return 0, 0
+    if occurrence_conflicts(hits):
+        return 0, 0
+    if review_receipt is not None:
+        review_receipt={**copy.deepcopy(review_receipt),'applied_changes':len(hits),
+            'selected_changes':[{'cue_id':hit.cue_id,'span':list(hit.span),'from':hit.original,
+                'to':hit.replacement,'source':hit.source,'default_selected':hit.default_selected} for hit in hits]}
     values = values_from_occurrences(page.session.project, hits)
     if not values:
         return 0, 0
@@ -175,6 +264,8 @@ def apply_occurrences(
             else None
         ),
         learning_meta=learning_meta,
+        glossary_ids=glossary_ids,
+        review_receipt=review_receipt,
     ))
     return len(hits), len(values)
 
@@ -190,6 +281,13 @@ class FindReplaceDialog(QDialog):
         self.setMinimumSize(680, 540)
         self.resize(800, 640)
         self._preview_hits: list[TextOccurrence] = []
+        self._preview_binding = None
+        self._preview_library_ids = None
+        self._preview_snapshot_digest = None
+        self._glossary_review_receipt = None
+        self._glossary_review_worker = None
+        self._review_close_pending = False
+        self._review_generation = 0
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
@@ -201,6 +299,7 @@ class FindReplaceDialog(QDialog):
         self.tabs.addTab(self._find_tab(), "查找 / 替换")
         self.tabs.addTab(self._tidy_tab(), "文本整理")
         self.tabs.addTab(self._ai_tab(), "AI 清理")
+        self.tabs.addTab(self._terms_tab(), "应用术语库")
         layout.addWidget(self.tabs, 0)
 
         results = QFrame()
@@ -219,6 +318,8 @@ class FindReplaceDialog(QDialog):
         self.preview.setAlternatingRowColors(True)
         self.preview.setWordWrap(True)
         self.preview.itemClicked.connect(self._preview_item_clicked)
+        self.preview.itemChanged.connect(self._refresh_status)
+        self.preview.currentItemChanged.connect(self._update_association_button)
         results_layout.addWidget(self.preview, 1)
         layout.addWidget(results, 1)
 
@@ -264,7 +365,7 @@ class FindReplaceDialog(QDialog):
         combo.addItem("全工程", SCOPE_ALL)
         combo.setCurrentIndex(combo.findData(SCOPE_ALL))
         selected_count = len(self._page.selected_cue_ids()) if self._page is not None else 0
-        if selected_count < 2:
+        if selected_count < 1:
             combo.model().item(combo.findData(SCOPE_SELECTED)).setEnabled(False)
         return combo
 
@@ -311,6 +412,9 @@ class FindReplaceDialog(QDialog):
             box.toggled.connect(self._queue_live_search)
             options.addWidget(box, index // 3, index % 3)
         layout.addLayout(options)
+        self.project_entity_box = QCheckBox(tr('记录为本工程已确认实体'))
+        bind_text(self.project_entity_box, '确认只用于本素材；其它出现位置仍需逐项预览，不写入全局词库。', property='toolTip')
+        layout.addWidget(self.project_entity_box)
         return tab
 
     def _tidy_tab(self) -> QWidget:
@@ -391,17 +495,102 @@ class FindReplaceDialog(QDialog):
 
     def _current_scope(self) -> str:
         tab = self.tabs.currentIndex()
-        combo = self.scope_combo if tab == 0 else (self.tidy_scope if tab == 1 else self.ai_scope)
+        combo = (self.scope_combo, self.tidy_scope, self.ai_scope, self.terms_scope)[tab]
         return str(combo.currentData() or SCOPE_ALL)
 
-    def _fill_preview(self, hits: list[TextOccurrence]) -> None:
+    def _terms_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        note = QLabel("使用当前工程词库；预览后可取消个别修改，确认后可一次撤销。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.terms_scope = self._scope_box()
+        self.terms_scope.setCurrentIndex(self.terms_scope.findData(SCOPE_ALL))
+        layout.addWidget(self.terms_scope)
+        self.terms_libraries = QListWidget()
+        self.terms_libraries.setMaximumHeight(100)
+        project = self._page.session.project
+        if project:
+            import subtitle_core as legacy
+            catalog = getattr(legacy, 'glossary_catalog', lambda: [])()
+            for row in catalog:
+                identity, display = row['id'], row['name']
+                item = QListWidgetItem(display)
+                item.setData(Qt.UserRole, identity)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if identity in project.glossary_ids else Qt.Unchecked)
+                self.terms_libraries.addItem(item)
+        if not self.terms_libraries.count():
+            note.setText("尚无词库。请先在术语库中建立规范词或已确认纠错。")
+        elif project and not project.glossary_ids:
+            note.setText("当前工程尚未启用词库。勾选词库并预览，确认应用后保存到本工程。")
+        layout.addWidget(self.terms_libraries)
+        self.terms_ai_button = QPushButton("按当前词库生成 AI 校对预览")
+        self.terms_ai_button.setToolTip("复用原始转写，以当前所选词库和已配置校对模型生成差异；确认后应用，可一次撤销。")
+        self.terms_ai_button.clicked.connect(self._do_terms_ai_preview)
+        layout.addWidget(self.terms_ai_button)
+        self.project_entities_button = QPushButton(tr('复核本工程已确认实体'))
+        self.project_entities_button.clicked.connect(self._do_project_entities_preview)
+        layout.addWidget(self.project_entities_button)
+        self.associate_button = QPushButton('确认所选名称关联…')
+        self.associate_button.setObjectName('glossaryAssociateButton')
+        self.associate_button.setEnabled(False)
+        self.associate_button.clicked.connect(self._open_term_association)
+        layout.addWidget(self.associate_button)
+        self.terms_libraries.itemChanged.connect(self._invalidate_term_preview)
+        self.terms_scope.currentIndexChanged.connect(self._invalidate_term_preview)
+        return tab
+
+    def _invalidate_term_preview(self, *_args):
+        self._review_generation += 1
+        self._preview_binding = None
+        self._preview_hits = []
+        self._preview_library_ids = None
+        self._preview_snapshot_digest = None
+        self._glossary_review_receipt = None
+        if hasattr(self, 'preview'):
+            self.preview.clear()
+            self.status_label.setText("词库或范围已改变，请重新预览。")
+            self._refresh_status()
+
+    def _do_project_entities_preview(self):
+        from .project_entity_confirmations import confirmed_entity_occurrences
+        project = self._page.session.project
+        if project is None:
+            return
+        self._preview_snapshot_digest = None
+        self._preview_library_ids = tuple(project.glossary_ids)
+        self._glossary_review_receipt = {'kind': 'project_entity_confirmation_review',
+            'source': 'user_confirmed', 'media_fingerprint': project.media.fingerprint,
+            'audio_verified_by_model': False}
+        cue_ids = set(_scope_cue_ids(self._page,self._current_scope()))
+        conflicts = []
+        hits = confirmed_entity_occurrences(project, locked_ids=_locked_ids(self._page),diagnostics=conflicts)
+        self._fill_preview([h for h in hits if h.cue_id in cue_ids],
+            PreviewBinding.capture(project))
+        if conflicts:
+            bind_text(self.status_label, '同一实体有不同确认写法，已跳过：{aliases}。请逐条确认。', aliases='、'.join(conflicts))
+
+    def _fill_preview(self, hits: list[TextOccurrence], binding=None) -> None:
         self._preview_hits = list(hits)
+        self._preview_binding = binding or PreviewBinding.capture(self._page.session.project)
         self.preview.clear()
         for hit in hits:
             item = QListWidgetItem(format_preview_row(hit))
+            if self.tabs.currentIndex() == 3:
+                cue = next((c for c in self._page.session.project.cues if c.id == hit.cue_id), None)
+                if cue is not None:
+                    changed = cue.text[:hit.span[0]] + hit.replacement + cue.text[hit.span[1]:]
+                    reason = {'case_normalization':'大小写规范化','confirmed_alias':'已确认别名/纠错',
+                              'user_confirmed':'用户确认（本工程）'}.get(hit.reason, hit.reason)
+                    state = ('已确认规范化' if hit.source=='local_confirmed' else 'AI 自动通过（已选）') if hit.default_selected else '待确认（默认未选）'
+                    extra = ' · '.join(x for x in (hit.evidence, hit.missing_evidence) if x)
+                    item.setText(f"{cue.text} → {changed}\n命中：{hit.original} → {hit.replacement} · {reason} · {state}" + ('\n'+extra if extra else ''))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
+            item.setCheckState(Qt.CheckState.Checked if hit.default_selected else Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, hit.cue_id)
+            item.setData(Qt.ItemDataRole.UserRole+1, {'surface':hit.original,'canonical_options':[hit.replacement],
+                'state':'proposal','cue_id':hit.cue_id})
             self.preview.addItem(item)
         if hits:
             bind_text(self.status_label, '找到 {value0} 处', value0=len(hits))
@@ -409,11 +598,110 @@ class FindReplaceDialog(QDialog):
             bind_text(self.status_label, '输入查找文字后显示匹配数量')
         else:
             bind_text(self.status_label, '没有匹配的字幕')
+        self._refresh_status()
+
+    def _show_terms_result(self, result, binding, snapshot, identities):
+        self._fill_preview(list(result.hits), binding)
+        self._preview_library_ids = tuple(identities)
+        self._preview_snapshot_digest = snapshot.digest
+        self._glossary_review_receipt = result.receipt
+        for row in result.receipt.get('pending_rows', ()):
+            title = '缺失名称关联（不会自动修改）' if row['state']=='missing_alias_or_candidate' else '已拒绝无效输出（不会应用）'
+            item = QListWidgetItem(f"{row['original']}\n{title}：{row['surface']} · {row['reason']}")
+            item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+            item.setData(Qt.ItemDataRole.UserRole, row['cue_id'])
+            item.setData(Qt.ItemDataRole.UserRole+1, row)
+            self.preview.addItem(item)
+        self._update_terms_status()
+        self._refresh_status()
+
+    def _update_terms_status(self):
+        row = self._glossary_review_receipt
+        if not row or row.get('kind')!='current_glossary_text_review':
+            return
+        states = {'request_failed':'调用失败；已保留本地预览', 'library_read_error':'所选词库未找到，请检查',
+            'needs_confirmation':'待确认候选默认未选', 'missing_associations':'请选择缺失名称行并确认关联',
+            'invalid_output':'无效输出已拒绝', 'changes_ready':'请确认所选修改',
+            'no_changes':'已核对当前词库，范围内没有文字变化'}
+        selected=len(self._checked_hits())
+        summary=row['snapshot_summary']
+        revisions='、'.join(f"{x['name']} r{x['revision']}" for x in row['snapshot'].get('libraries',()))
+        self.status_label.setText(f"{revisions} · 有效 {summary['effective_terms']} 个规范词\n"
+            f"已核对 {row.get('checked_cues',0)} 条 · AI 返回 {row.get('successful_cues',0)} 条 · 回退 {row.get('fallback_cues',0)} 条 · "
+            f"自动可选 {row.get('automatic_changes',0)} 处 · 待确认 {row.get('confirmation_changes',0)} 处 · "
+            f"拒绝 {row.get('rejected_changes',0)} 处 · 缺失关联 {row.get('missing_associations',0)} 处 · 当前选中 {selected} 处\n"
+            + states.get(row.get('empty_state'),'请逐项确认')+'；未核验原音。')
+        self.status_label.setToolTip('诊断：'+str(row.get('diagnostic_path',''))+'\n'+'\n'.join(row.get('request_errors',())))
+
+    def _selected_library_ids(self):
+        return tuple(str(self.terms_libraries.item(i).data(Qt.UserRole)) for i in range(self.terms_libraries.count())
+            if self.terms_libraries.item(i).checkState()==Qt.Checked)
+
+    def _read_selected_snapshot(self):
+        import subtitle_core as legacy
+        from .terminology import snapshot_glossaries
+        # A damaged DB must not silently become an empty library or a write target.
+        legacy.load_learned_term_payload(strict=True)
+        identities=self._selected_library_ids()
+        return identities,snapshot_glossaries(legacy,identities)
+
+    def _update_association_button(self, *_args):
+        if not hasattr(self,'associate_button') or not hasattr(self,'preview'):
+            return
+        item=self.preview.currentItem()
+        row=item.data(Qt.ItemDataRole.UserRole+1) if item else None
+        self.associate_button.setEnabled(self.tabs.currentIndex()==3 and bool(row)
+            and row.get('state') in {'proposal','missing_alias_or_candidate'}
+            and bool(row.get('surface')) and bool(self._selected_library_ids())
+            and not (self._glossary_review_worker and self._glossary_review_worker.isRunning()))
+
+    def _open_term_association(self):
+        item=self.preview.currentItem()
+        row=item.data(Qt.ItemDataRole.UserRole+1) if item else None
+        if not row or row.get('state') not in {'proposal','missing_alias_or_candidate'}:
+            return
+        try:
+            identities,snapshot=self._read_selected_snapshot()
+        except (OSError,ValueError) as exc:
+            self.status_label.setText('词库读取失败，未写入：'+str(exc)); return
+        if not identities or (self._preview_snapshot_digest and snapshot.digest!=self._preview_snapshot_digest):
+            self.status_label.setText('词库已改变，请重新预览后确认名称。'); return
+        dialog=TermAssociationDialog(row, snapshot, self)
+        self._association_dialog=dialog
+        dialog.saved.connect(self._term_association_saved)
+        dialog.open()
+
+    def _term_association_saved(self, identity, source, canonical):
+        owner=self._page.window()
+        library=getattr(getattr(owner,'term_library_page',None),'library',None)
+        notify=getattr(library,'_notify_library_changed',None)
+        if callable(notify):notify()
+        else:
+            refresh=getattr(owner,'_refresh_content_choices',None)
+            if callable(refresh):refresh()
+        self._invalidate_term_preview()
+        self._do_preview()
 
     def _preview_item_clicked(self, item: QListWidgetItem) -> None:
         cue_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
         if cue_id and self._page is not None:
+            binding = self._preview_binding
+            project = self._page.session.project
+            was_current = binding is not None and binding.matches(project)
             self._page.select_cue(cue_id)
+            if not was_current or self._page.session.project is not project:
+                return
+            from .studio_runtime_state import DirtyDomain, state_for
+            runtime = state_for(project)
+            deltas = [delta for delta in runtime.delta_history if delta.revision > binding.revision]
+            navigation = DirtyDomain.CUE_SELECTION | DirtyDomain.TIMELINE_PIXELS | DirtyDomain.TRANSFORM
+            # The TRANSFORM flag retires selection handles here. It never
+            # permits a manual transform: every editable field must match.
+            if (len(deltas) == runtime.revision - binding.revision
+                    and all(delta.action_id == 'select_cue' and not delta.dirty & ~navigation for delta in deltas)
+                    and PreviewBinding._document_fingerprint(project) == binding.document_fingerprint
+                    and PreviewBinding._fingerprint(project) == binding.fingerprint):
+                self._preview_binding = PreviewBinding.capture(project)
 
     def _checked_hits(self) -> list[TextOccurrence]:
         hits = []
@@ -427,7 +715,7 @@ class FindReplaceDialog(QDialog):
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
         for index in range(self.preview.count()):
             item = self.preview.item(index)
-            if item is not None:
+            if item is not None and item.flags() & Qt.ItemIsUserCheckable:
                 item.setCheckState(state)
 
     def _queue_live_search(self, *_args) -> None:
@@ -439,15 +727,30 @@ class FindReplaceDialog(QDialog):
             self._do_preview()
 
     def _tab_changed(self, index: int) -> None:
+        self._review_generation += 1
+        self._preview_hits = []
+        self._preview_binding = None
+        self.preview.clear()
+        self._preview_library_ids = None
+        self._preview_snapshot_digest = None
+        self._glossary_review_receipt = None
+        self._refresh_status()
+        self._update_association_button()
         if index == 0:
             self._queue_live_search()
 
     def _refresh_status(self, *_args) -> None:
+        if self._glossary_review_worker is not None and self._glossary_review_worker.isRunning():
+            self.next_button.setEnabled(False)
+            self.all_button.setEnabled(False)
+            return
         needle = self.find_edit.text()
         enabled = bool(needle) and self._page.session.project is not None
         self.next_button.setEnabled(enabled)
-        self.all_button.setEnabled(True)
+        self.all_button.setEnabled(bool(self._checked_hits()))
+        self._update_association_button()
         if self.tabs.currentIndex() != 0:
+            if self.tabs.currentIndex()==3:self._update_terms_status()
             return
         if not enabled:
             bind_text(self.status_label, '输入查找文字后显示匹配数量')
@@ -475,9 +778,17 @@ class FindReplaceDialog(QDialog):
         project = self._page.session.project
         if project is None:
             return
+        self._preview_snapshot_digest = None
+        self._glossary_review_receipt = None
         tab = self.tabs.currentIndex()
+        if tab == 3 or (tab == 1 and self.glossary_box.isChecked()):
+            prepare = getattr(self._page.window(), '_prepare_glossary_for_task', None)
+            if callable(prepare) and not prepare():
+                self.status_label.setText('词库输入尚未提交，请先保存或放弃输入后重试。')
+                return
         cue_ids = _scope_cue_ids(self._page, self._current_scope())
         locked = _locked_ids(self._page)
+        binding = PreviewBinding.capture(project)
         if tab == 0:
             if not self.find_edit.text().strip():
                 self._fill_preview([])
@@ -500,11 +811,40 @@ class FindReplaceDialog(QDialog):
                 skip_locked=True, locked_ids=locked,
             )
             if self.glossary_box.isChecked():
-                hits.extend(glossary_occurrences(project, cue_ids, locked_ids=locked))
-        else:
+                from .terminology import TermResolver, snapshot_glossaries
+                import subtitle_core as legacy
+                snapshot = snapshot_glossaries(legacy, project.glossary_ids)
+                resolver = TermResolver(snapshot)
+                from .content_scene import resolve_content_scene
+                from types import SimpleNamespace
+                scene = resolve_content_scene(SimpleNamespace(enable_domain_terms=bool(snapshot.libraries),
+                    glossary_snapshot=snapshot, game_name=''), snapshot)
+                tidied = {hit.cue_id: hit.replacement for hit in hits}
+                hits = [TextOccurrence(cue.id, cue.start_ms, cue.text, cleaned,
+                                       (0,len(cue.text)), reason='文本整理与术语规范化')
+                        for cue in project.cues if cue.id in cue_ids and cue.id not in locked
+                        for cleaned in [resolver.resolve(tidied.get(cue.id,cue.text), scene=scene).text]
+                        if cleaned != cue.text]
+        elif tab == 2:
             bind_text(self.status_label, '请使用「生成 AI 预览」')
             return
-        self._fill_preview(hits)
+        else:
+            from .studio_glossary_service import preview_glossary_correction
+            try:
+                identities,snapshot=self._read_selected_snapshot()
+                result=preview_glossary_correction(project,cue_ids,snapshot,{},use_ai=False)
+            except Exception as exc:
+                self._fill_preview([],binding)
+                self.status_label.setText('当前词库本地预览未完成：'+str(exc)); return
+            self._show_terms_result(result,binding,snapshot,identities)
+            return
+        self._fill_preview(hits, binding)
+        if tab == 3:
+            summary = snapshot.summary()
+            warning = ('；冲突映射已跳过，请在词库中处理' if summary['conflicts'] else
+                       '；所选词库无已确认有效词' if not summary['effective_terms'] else
+                       '；范围内无可执行替换（规范词可能已正确，未确认错词不会强制修改）' if not hits else '')
+            self.status_label.setText(f"有效 {summary['effective_terms']} 个规范词 · 命中 {len(hits)} 处 · 修改 {len({h.cue_id for h in hits})} 条字幕{warning}")
 
     def _do_replace_next(self) -> None:
         needle = self.find_edit.text()
@@ -523,33 +863,126 @@ class FindReplaceDialog(QDialog):
         self._do_apply_preview()
 
     def _do_apply_preview(self) -> None:
+        if self._preview_binding is None or not self._preview_binding.matches(self._page.session.project):
+            self.status_label.setText("工程或文字已改变，请重新预览；本次没有修改字幕。")
+            return
+        if self._preview_snapshot_digest is not None:
+            from .terminology import snapshot_glossaries
+            import subtitle_core as legacy
+            if snapshot_glossaries(legacy, self._preview_library_ids or ()).digest != self._preview_snapshot_digest:
+                self.status_label.setText("词库已更新，请按当前词库重新生成预览；本次没有修改字幕。")
+                return
         hits = self._checked_hits()
         if not hits:
             bind_text(self.status_label, '没有可应用的预览')
             return
+        if occurrence_conflicts(hits):
+            self.status_label.setText('同一位置选中了不同候选，请只保留一个后再应用；本次没有修改字幕。')
+            return
         learn_pair = None
+        entity_receipt = None
         if self.tabs.currentIndex() == 0 and not self.regex_box.isChecked():
             # Only the plain find & replace tab is manual term evidence;
             # regex patterns, tidy rules and AI cleanup are not corrections.
             needle = self.find_edit.text().strip()
             replacement = self.replace_edit.text().strip()
             if needle and replacement:
-                learn_pair = (needle, replacement)
+                if self.project_entity_box.isChecked():
+                    from .project_entity_confirmations import confirmation_receipt
+                    entity_receipt = confirmation_receipt(self._page.session.project,
+                        needle, replacement, {h.cue_id for h in hits})
+                else:
+                    learn_pair = (needle, replacement)
         total, cue_count = apply_occurrences(
             self._page, hits,
             title=self.find_edit.text() or "字幕文本工具",
             learn_pair=learn_pair,
+            binding=self._preview_binding,
+            glossary_ids=(self._page.session.project.glossary_ids if entity_receipt else
+                self._preview_library_ids if self.tabs.currentIndex() == 3 else None),
+            review_receipt=entity_receipt or (self._glossary_review_receipt if self.tabs.currentIndex() == 3 else None),
         )
         if total:
             self._page._show_studio_hint(tr('已替换 {value0} 处，涉及 {value1} 条字幕（可 Ctrl+Z 一次撤销）', value0=total, value1=cue_count))
         self._do_preview()
         self._refresh_status()
 
+    def _do_terms_ai_preview(self) -> None:
+        if self._glossary_review_worker is not None and self._glossary_review_worker.isRunning():
+            return
+        prepare = getattr(self._page.window(), '_prepare_glossary_for_task', None)
+        if callable(prepare) and not prepare():
+            self.status_label.setText('词库输入尚未提交，请先保存或放弃输入后重试。')
+            return
+        project = self._page.session.project
+        if project is None:
+            return
+        import subtitle_core as legacy
+        try:
+            identities,snapshot=self._read_selected_snapshot()
+        except (OSError,ValueError) as exc:
+            self._fill_preview([])
+            self.status_label.setText('词库读取失败，未调用 AI：'+str(exc)); return
+        if not snapshot.canonical_terms:
+            self.status_label.setText("请先选择有已确认规范词的词库。")
+            return
+        binding = PreviewBinding.capture(project)
+        generation = self._review_generation
+        settings = copy.deepcopy(legacy.RUNTIME_SETTINGS)
+        from .studio_project import SubtitleProject
+        copied = SubtitleProject.from_dict(copy.deepcopy(project.to_dict()))
+        cue_ids = _scope_cue_ids(self._page, str(self.terms_scope.currentData() or SCOPE_ALL))
+        self._preview_hits = []
+        self._preview_binding = None
+        self._preview_snapshot_digest = None
+        self._glossary_review_receipt = None
+        self.preview.clear()
+        self.terms_ai_button.setEnabled(False)
+        self.all_button.setEnabled(False)
+        self.status_label.setText("正在按当前词库校对已有转写，完成后显示差异…")
+        worker = _GlossaryReviewThread(copied, cue_ids, snapshot, settings, self)
+        self._glossary_review_worker = worker
+
+        def ready(result):
+            if self._review_close_pending:
+                return
+            if generation != self._review_generation or not binding.matches(self._page.session.project):
+                self.status_label.setText("工程、文字或选择已改变，本次校对结果未应用；请重新预览。")
+                return
+            self._show_terms_result(result,binding,snapshot,identities)
+
+        def failed(message):
+            if not self._review_close_pending:
+                self.status_label.setText("当前词库校对未完成：" + message)
+
+        def finished():
+            self.terms_ai_button.setEnabled(True)
+            self._glossary_review_worker = None
+            self._refresh_status()
+            worker.deleteLater()
+            if self._review_close_pending:
+                super(FindReplaceDialog,self).reject()
+
+        worker.ready.connect(ready)
+        worker.failed.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def reject(self) -> None:
+        worker = self._glossary_review_worker
+        if worker is not None and worker.isRunning():
+            self._review_close_pending = True
+            worker.token.cancel()
+            self.status_label.setText("正在取消校对，请稍候…")
+            return
+        super().reject()
+
     def _do_ai_preview(self) -> None:
         project = self._page.session.project
         if project is None:
             return
         options = [key for key, box in self.ai_option_boxes.items() if box.isChecked()]
+        binding = PreviewBinding.capture(project)
         bind_text(self.status_label, '正在调用已配置的 AI…')
         try:
             hits = request_text_cleanup(
@@ -560,7 +993,7 @@ class FindReplaceDialog(QDialog):
         except Exception as exc:
             bind_text(self.status_label, 'AI 清理无法调用：{exc}', exc=exc)
             return
-        self._fill_preview(hits)
+        self._fill_preview(hits, binding)
 
     def _accept_selected(self) -> None:
         item = self.preview.currentItem()
@@ -571,3 +1004,78 @@ class FindReplaceDialog(QDialog):
         item = self.preview.currentItem()
         if item is not None:
             item.setCheckState(Qt.CheckState.Unchecked)
+
+
+class TermAssociationDialog(QDialog):
+    """Explicit user confirmation in the selected current library, with free canonical input."""
+    saved = Signal(str,str,str)
+
+    def __init__(self,row,snapshot,parent):
+        super().__init__(parent)
+        self.setWindowTitle('确认名称关联')
+        self.setObjectName('termAssociationDialog')
+        self.setMinimumWidth(520)
+        self._snapshot=snapshot
+        self._selected_ids=tuple(library.id for library in snapshot.libraries)
+        layout=QVBoxLayout(self)
+        note=QLabel('将别名保存为当前所选词库中的用户确认映射。可以选择已有规范词，也可以明确新增；字幕随后重新预览。')
+        note.setWordWrap(True);layout.addWidget(note)
+        grid=QGridLayout()
+        self.library_combo=QComboBox();self.library_combo.setObjectName('termAssociationLibrary')
+        for library in snapshot.libraries:self.library_combo.addItem(library.name,library.id)
+        self.alias_edit=QLineEdit(str(row.get('surface','')))
+        self.alias_edit.setObjectName('termAssociationAlias')
+        self.canonical_combo=QComboBox();self.canonical_combo.setEditable(True)
+        self.canonical_combo.setObjectName('termAssociationCanonical')
+        self.canonical_combo.setInsertPolicy(QComboBox.NoInsert)
+        options=list(dict.fromkeys([*row.get('canonical_options',()),*snapshot.canonical_terms]))
+        self.canonical_combo.addItems(options)
+        # A roster is context, not a guessed canonical. Require an explicit value.
+        self.canonical_combo.setCurrentIndex(-1)
+        self.canonical_combo.setEditText('')
+        self.canonical_combo.lineEdit().setPlaceholderText('选择已有规范词，或输入新规范词（保留大小写）')
+        for index,(label,field) in enumerate((('词库',self.library_combo),('当前别名',self.alias_edit),('规范词',self.canonical_combo))):
+            grid.addWidget(QLabel(label),index,0);grid.addWidget(field,index,1)
+        layout.addLayout(grid)
+        self.status=QLabel('');self.status.setWordWrap(True);layout.addWidget(self.status)
+        actions=QHBoxLayout()
+        self.save_button=QPushButton('确认并保存关联');self.save_button.setObjectName('termAssociationSave')
+        self.save_button.clicked.connect(self._save)
+        close=QPushButton('取消');close.clicked.connect(self.reject)
+        actions.addStretch(1);actions.addWidget(self.save_button);actions.addWidget(close);layout.addLayout(actions)
+        self.canonical_combo.editTextChanged.connect(self._update_status)
+        self.alias_edit.textChanged.connect(self._update_status)
+        self.library_combo.currentIndexChanged.connect(self._update_status)
+        self._update_status()
+
+    def _update_status(self,*_args):
+        canonical=self.canonical_combo.currentText().strip()
+        source=self.alias_edit.text().strip()
+        identity=str(self.library_combo.currentData() or '')
+        library=next((library for library in self._snapshot.libraries if library.id==identity),None)
+        targets={term.canonical for term in library.terms} if library else set()
+        existing=canonical in targets
+        self.status.setText(('已存在规范词：' if existing else '将新增规范词：')+canonical if canonical else '请输入并确认规范词；当前没有自动选择。')
+        self.save_button.setEnabled(bool(source and canonical and source!=canonical and library and library.found))
+
+    def _save(self):
+        import subtitle_core as legacy
+        from .terminology import snapshot_glossaries
+        source=self.alias_edit.text().strip();canonical=self.canonical_combo.currentText().strip()
+        identity=str(self.library_combo.currentData() or '')
+        if not self.save_button.isEnabled():return
+        try:
+            legacy.load_learned_term_payload(strict=True)
+            current=snapshot_glossaries(legacy,self._selected_ids)
+            if current.digest!=self._snapshot.digest:
+                raise ValueError('词库已经更新，请关闭此窗口并重新预览')
+            library=next((x for x in current.libraries if x.id==identity and x.found),None)
+            if library is None:raise ValueError('所选词库未找到，未写入')
+            if any(term.canonical.casefold()==source.casefold() and term.canonical.casefold()!=canonical.casefold()
+                    for term in library.terms):
+                raise ValueError('当前别名也是独立规范词；请在术语库明确编辑，不能在此合并身份')
+            legacy.add_learned_mapping(identity,source,canonical,category='选手ID',origin='手动')
+        except (OSError,ValueError,TypeError) as exc:
+            self.status.setText('未保存：'+str(exc));return
+        self.saved.emit(identity,source,canonical)
+        self.accept()

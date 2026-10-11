@@ -70,7 +70,7 @@ def recovery_preview(project, snapshot, roles):
 
 
 def anonymous_snapshot(snapshot):
-    return snapshot.get('source') in {'nemotron','native','filetrans'} or snapshot.get('processing',{}).get('mode') in {'nemotron','native','filetrans'} or any(
+    return snapshot.get('source') in {'nemotron','native','filetrans','diarizen'} or snapshot.get('processing',{}).get('mode') in {'nemotron','native','filetrans','diarizen'} or any(
         row.get('speaker_evidence',{}).get('source')=='nemotron' for row in snapshot.get('raw_segments',[]))
 
 
@@ -86,7 +86,7 @@ def candidate_snapshot(rows, retained=(), expected=0, *, source=None):
     counts=utterance_counts(raw)
     sustained = {item["label"] for item in candidate_statistics(raw) if item["sustained"]}
     pending = len(labels)>1 or bool(sustained - retained) or (expected > 0 and len(retained) != expected)
-    anonymous = source in {'moss','nemotron','native','filetrans'} or any(
+    anonymous = source in {'moss','nemotron','native','filetrans','diarizen'} or any(
         row.get('speaker_evidence',{}).get('source')=='nemotron' for row in raw)
     return {
         "version": 1, "raw_segments": raw, "source": source or 'moss',

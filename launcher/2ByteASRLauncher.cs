@@ -161,6 +161,7 @@ internal static class TwoByteAsrLauncher
         startInfo.WorkingDirectory = root;
         startInfo.UseShellExecute = false;
         startInfo.CreateNoWindow = true;
+        startInfo.EnvironmentVariables["TWOBYTEASR_INVOKER_CWD"] = Environment.CurrentDirectory;
         startInfo.EnvironmentVariables["TWOBYTEASR_PROCESS_START_MS"] =
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         startInfo.EnvironmentVariables["TWOBYTEASR_STARTUP_RUN_ID"] =
@@ -239,17 +240,9 @@ internal static class TwoByteAsrLauncher
 
     private static Process LaunchProcess(ProcessStartInfo info)
     {
-        // The static Start overload is invoked reflectively so the source
-        // never contains a direct process-execution call site. Every input
-        // here is a hardcoded path or literal derived from the assembly
-        // location; no user-supplied string reaches this API.
-        MethodInfo start = typeof(Process).GetMethod(
-            "Start", new[] { typeof(ProcessStartInfo) });
-        if (start == null)
-        {
-            throw new InvalidOperationException("Process.Start is unavailable.");
-        }
-        return (Process)start.Invoke(null, new object[] { info });
+        // UseShellExecute=false launches the executable directly; arguments
+        // are encoded for CommandLineToArgvW and never interpreted by cmd.exe.
+        return Process.Start(info);
     }
 
     private static string Quote(string value)
@@ -258,9 +251,28 @@ internal static class TwoByteAsrLauncher
         {
             return "\"\"";
         }
-        // Windows filenames cannot contain a quote. Media arguments are file
-        // paths rather than directory paths, so wrapping is sufficient and
-        // preserves every original backslash exactly once.
-        return "\"" + value.Replace("\"", "\\\"") + "\"";
+        StringBuilder quoted = new StringBuilder("\"");
+        int slashes = 0;
+        foreach (char current in value)
+        {
+            if (current == '\\')
+            {
+                slashes++;
+                continue;
+            }
+            if (current == '"')
+            {
+                quoted.Append('\\', slashes * 2 + 1);
+            }
+            else
+            {
+                quoted.Append('\\', slashes);
+            }
+            quoted.Append(current);
+            slashes = 0;
+        }
+        quoted.Append('\\', slashes * 2);
+        quoted.Append('"');
+        return quoted.ToString();
     }
 }

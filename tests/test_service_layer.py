@@ -1,10 +1,15 @@
 ﻿from contextlib import contextmanager
 from pathlib import Path
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
 
-from twobyteasr.service import CancellationToken, RunOptions, run_media_queue
+from twobyteasr.service import CancellationToken, RunOptions, run_media_queue as _run_media_queue
+
+# These tests own FakePipeline/runtime doubles. Production keeps the mandatory
+# environment gate; use its explicit test opt-out so assertions reach the fake.
+run_media_queue = partial(_run_media_queue, _skip_environment_preflight=True)
 
 
 class FakeLegacy:
@@ -301,7 +306,9 @@ def test_runtime_event_observer_is_structured_and_nonfatal():
     received = []
     with subtitle_core.run_event_observer(lambda kind, payload: received.append((kind, payload))):
         subtitle_core.record_run_event("test_event", value="safe")
-    assert received == [("test_event", {"value": "safe"})]
+    assert len(received) == 1 and received[0][0] == "test_event"
+    assert received[0][1]["value"] == "safe"
+    assert received[0][1]["monotonic_seconds"] >= 0
 
     def broken_observer(kind, payload):
         raise RuntimeError("UI observer failure")

@@ -174,7 +174,13 @@ def install_cover_button(page, layout):
     button = QToolButton()
     bind_text(button, '制作封面')
     bind_text(button, '本地封面编辑：当前截图、新建封面或选择模板', property='toolTip')
+    button.setObjectName('rangeAction')
+    from .themed_icons import install_themed_icon
+    install_themed_icon(button, 'fa5s.image', 'secondary')
+    from PySide6.QtCore import Qt
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.setPopupMode(QToolButton.InstantPopup)
+    button.setProperty('menuOnly', True)
     menu = QMenu(button)
     menu.addAction('当前截图', controller.create)
     menu.addAction('新建封面', controller.new_cover)

@@ -8,8 +8,23 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-GROUP_PROMPT_VERSION = "numeric-boundaries-v2-cohesion"
-GROUP_CACHE_VERSION = "snapshot-validated-grouped-v2-fidelity"
+from .grouping_request import GROUPING_PROMPT_VERSION
+
+GROUP_PROMPT_VERSION = "numeric-boundaries-v5-shared-scene-compact-short-material:" + GROUPING_PROMPT_VERSION
+GROUP_CACHE_VERSION = "snapshot-validated-grouped-v5-shared-scene-full-context"
+POLISH_PROMPT_VERSION = "correction-edits-v13-optional-suspect-local-quarantine"
+
+
+def _numeric_rule_version():
+    # Pure policy modules are imported only when constructing a snapshot;
+    # importing polishing here would reopen the subtitle_core facade cycle.
+    from .number_fidelity import RULE_VERSION
+    return RULE_VERSION
+
+
+def _terminology_rule_version():
+    from .terminology_retrieval import RULE_VERSION
+    return RULE_VERSION
 
 
 def digest(value: Any) -> str:
@@ -54,8 +69,13 @@ class ProviderSnapshot:
     configuration_source: str = "legacy-provider-profile"
     speaker_source: str = "single"
     prefer_arabic_numbers: bool = True
+    json_mode: bool = True
+    structured_output: bool = True
     timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
-    prompt_versions: tuple[tuple[str, str], ...] = (("polished", "correction-edits-v3-coverage"), ("grouped", GROUP_PROMPT_VERSION))
+    prompt_versions: tuple[tuple[str, str], ...] = field(default_factory=lambda: (
+        ("polished", POLISH_PROMPT_VERSION), ("grouped", GROUP_PROMPT_VERSION)))
+    numeric_rules: str = field(default_factory=_numeric_rule_version)
+    terminology_retrieval_rules: str = field(default_factory=_terminology_rule_version)
     _endpoint: tuple[tuple[str, str], ...] = field(default=(), repr=False, compare=False)
 
     @property
@@ -70,7 +90,9 @@ class ProviderSnapshot:
                 "capabilities": self.capabilities, "timeout_policy": asdict(self.timeout_policy),
                 "prompt_versions": dict(self.prompt_versions), "role": self.role,
                 "configuration_source": self.configuration_source, "speaker_source": self.speaker_source,
-                "numeric_rules": 'numeric-events-v1', "prefer_arabic_numbers": self.prefer_arabic_numbers}
+                "numeric_rules": self.numeric_rules, "terminology_retrieval_rules": self.terminology_retrieval_rules,
+                "prefer_arabic_numbers": self.prefer_arabic_numbers,
+                "json_mode": self.json_mode, "structured_output": self.structured_output}
 
     def public_identity(self) -> dict:
         return {**self.cache_identity(), "fingerprint": self.fingerprint}
@@ -85,7 +107,8 @@ class ProviderSnapshot:
             f"{stage}_{key}": value for stage in ("polish", "group")
             for key, value in (("provider", self.provider), ("model", self.model),
                                ("transport", self.transport), ("protocol", self.protocol),
-                               ("capabilities", list(self.capabilities)))}}
+                               ("capabilities", list(self.capabilities)),
+                               ("json_mode", self.json_mode), ("structured_output", self.structured_output))}}
 
 
 def snapshot_in_settings(settings) -> ProviderSnapshot | None:
@@ -123,9 +146,12 @@ def resolve_provider_snapshot(settings, *, timeout_policy=None, stage="group") -
     if transport not in allowed:
         raise ValueError("Unsupported explicitly configured ASR transport")
     capabilities = tuple(str(x) for x in values.get("capabilities", ("text", "structured_output")))
+    json_mode = bool(models.get(f'{prefix}_json_mode', values.get('json_mode', True)))
+    structured_output = bool(models.get(f'{prefix}_structured_output', values.get('structured_output', True)))
     public = {"profile": profile_id, "provider": endpoint["provider"], "model": endpoint["model"],
               "endpoint": endpoint_identity(endpoint.get("base_url", "")),
-              "protocol": endpoint["protocol"], "transport": transport, "capabilities": capabilities}
+              "protocol": endpoint["protocol"], "transport": transport, "capabilities": capabilities,
+              "json_mode": json_mode, "structured_output": structured_output}
     return ProviderSnapshot(provider=endpoint["provider"], profile_id=profile_id,
         profile_revision=digest(public), model=endpoint["model"],
         kind="cli" if transport.endswith("_cli") else "http", transport=transport,
@@ -133,6 +159,7 @@ def resolve_provider_snapshot(settings, *, timeout_policy=None, stage="group") -
         role=stage, configuration_source=f'models.{prefix}_*' if complete_role else 'legacy-provider-profile',
         speaker_source=str(models.get('speaker_source', 'single')),
         prefer_arabic_numbers=bool(frozen.get('switches',{}).get('prefer_arabic_numbers',True)),
+        json_mode=json_mode, structured_output=structured_output,
         timeout_policy=timeout_policy or TimeoutPolicy(),
         _endpoint=tuple((str(k), str(v)) for k, v in endpoint.items()))
 

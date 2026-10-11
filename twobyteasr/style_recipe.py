@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import marshal
 import os
 import tempfile
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
@@ -15,6 +18,37 @@ from typing import Any, Mapping
 from .effect_dsl import EFFECT_TYPES, TEXT_EFFECT_TYPES, builtin_effects, validate_effect
 from .studio_project import SubtitleStyle
 from .visual_runtime import VisualRenderer, renderer_capability_gaps
+
+
+# Recipe validation is a pure function of the recipe's content. Studio
+# re-validates the same few recipes many times per click or drag (snapshots,
+# inspectors), and each pass deep-copied and re-checked the whole visual
+# graph. Canonical results are remembered by exact content: repr() keeps key
+# order and distinguishes tuples, bools and numbers. marshal gives every
+# caller a private, type-exact copy, so no mutable state is shared.
+_VALIDATED_RECIPES: "OrderedDict[str, bytes]" = OrderedDict()
+_VALIDATED_RECIPES_LOCK = threading.Lock()
+_VALIDATED_RECIPES_LIMIT = 512
+
+
+def _validated_recipe_lookup(key: str | None) -> bytes | None:
+    if key is None:
+        return None
+    with _VALIDATED_RECIPES_LOCK:
+        blob = _VALIDATED_RECIPES.get(key)
+        if blob is not None:
+            _VALIDATED_RECIPES.move_to_end(key)
+        return blob
+
+
+def _validated_recipe_store(blob: bytes, *keys: str | None) -> None:
+    with _VALIDATED_RECIPES_LOCK:
+        for key in keys:
+            if key is not None:
+                _VALIDATED_RECIPES[key] = blob
+                _VALIDATED_RECIPES.move_to_end(key)
+        while len(_VALIDATED_RECIPES) > _VALIDATED_RECIPES_LIMIT:
+            _VALIDATED_RECIPES.popitem(last=False)
 
 
 RECIPE_FIELDS = (
@@ -493,7 +527,53 @@ class StyleRecipe:
         if spec.kind != "solid":
             self.engine = "remotion"
 
+    def _state_key(self) -> str | None:
+        try:
+            return "state:" + repr((
+                self.name, self.engine, self.typography, self.layout, self.colors,
+                self.outline, self.background, self.motion, self.word_highlight,
+                self.effects, self.ass, self.visual_graph, self.web_theme,
+            ))
+        except Exception:
+            return None
+
+    def _adopt_canonical(self, payload: dict[str, Any]) -> None:
+        """Install an already validated ``to_dict`` payload (a private copy)."""
+        self.name = payload["name"]
+        self.engine = payload["engine"]
+        self.typography = payload["typography"]
+        self.layout = payload["layout"]
+        self.colors = payload["colors"]
+        self.outline = payload["outline"]
+        self.background = payload["background"]
+        self.motion = payload["motion"]
+        self.word_highlight = payload["wordHighlight"]
+        self.effects = payload["effects"]
+        self.ass = ASSRecipe(payload["ass"]["enabled"], payload["ass"]["tags"])
+        self.visual_graph = payload.get("visualGraph", {})
+        self.web_theme = payload.get("webTheme", {})
+
+    def _validated_blob(self, *, alias: str | None = None) -> bytes | None:
+        key = self._state_key()
+        blob = _validated_recipe_lookup(key)
+        if blob is not None:
+            self._adopt_canonical(marshal.loads(blob))
+            if alias is not None:
+                _validated_recipe_store(blob, alias)
+            return blob
+        self._validate_uncached()
+        try:
+            blob = marshal.dumps(self.to_dict(validate=False))
+        except ValueError:
+            return None
+        # The canonical state validates to itself; remember it under both keys.
+        _validated_recipe_store(blob, key, self._state_key(), alias)
+        return blob
+
     def validate(self) -> None:
+        self._validated_blob()
+
+    def _validate_uncached(self) -> None:
         self.name = str(self.name or "").strip()
         if not self.name:
             raise StyleRecipeValidationError("name must not be empty")
@@ -540,7 +620,9 @@ class StyleRecipe:
 
     def to_dict(self, *, validate: bool = True) -> dict[str, Any]:
         if validate:
-            self.validate()
+            blob = self._validated_blob()
+            if blob is not None:
+                return marshal.loads(blob)
         payload = {
             "name": self.name,
             "engine": self.engine,
@@ -564,6 +646,15 @@ class StyleRecipe:
     def from_dict(cls, payload: Mapping[str, Any]) -> "StyleRecipe":
         if not isinstance(payload, Mapping):
             raise StyleRecipeValidationError("recipe root must be an object")
+        try:
+            alias = "payload:" + type(payload).__name__ + repr(payload)
+        except Exception:
+            alias = None
+        blob = _validated_recipe_lookup(alias)
+        if blob is not None:
+            recipe = cls(name="")
+            recipe._adopt_canonical(marshal.loads(blob))
+            return recipe
         unknown = set(payload) - set(RECIPE_FIELDS)
         if unknown:
             raise StyleRecipeValidationError(f"unknown recipe fields: {sorted(unknown)}")
@@ -582,7 +673,7 @@ class StyleRecipe:
             visual_graph=_section(payload.get("visualGraph"), "visualGraph"),
             web_theme=_section(payload.get("webTheme"), "webTheme"),
         )
-        recipe.validate()
+        recipe._validated_blob(alias=alias)
         return recipe
 
 

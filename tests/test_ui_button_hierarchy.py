@@ -38,7 +38,8 @@ def test_explicit_size_survives_legacy_id_and_theme_switch(app):
             apply_theme(key, app)
             app.processEvents()
             assert primary.font().pixelSize() >= 15, key
-            assert primary.font().weight() >= 700, key
+            # 2026-10-07 weight rule: primary is the single 600 emphasis.
+            assert primary.font().weight() >= 600, key
             assert primary.height() >= 48, key
             assert primary.height() > secondary.height() > tool.height(), key
             assert tool.height() <= 32, key

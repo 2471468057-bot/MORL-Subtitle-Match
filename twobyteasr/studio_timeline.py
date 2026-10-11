@@ -14,6 +14,7 @@ from time import perf_counter
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QFontMetrics,
     QKeyEvent,
@@ -38,7 +39,6 @@ from .studio_edit_sequence import runtime_of, sequence_of, timeline_duration_ms
 from .studio_helpers import _format_ms
 from .studio_project import StudioCue, SubtitleProject
 from .studio_sequence_mapper import source_to_timeline
-from .studio_timing import resolve_split
 from .studio_video_track import (
     CANDIDATE_LANE_HEIGHT,
     VIDEO_TRACK_HEIGHT,
@@ -61,6 +61,21 @@ from .i18n import bind_text, tr
 # [-1, 1]; the display maps |amplitude| through a fixed dBFS curve so the same
 # audio keeps the same visual strength at every zoom level (no per-view AGC).
 WAVEFORM_FLOOR_DB = 48.0
+
+
+_RESOLVED_SOURCES: dict[str, str] = {}
+
+
+def _resolved_source(path: str) -> str:
+    """Path.resolve() opens every component on Windows; the timeline asked
+    for the same few media paths three times per paint (every playback frame)."""
+    resolved = _RESOLVED_SOURCES.get(path)
+    if resolved is None:
+        resolved = str(Path(path).resolve())
+        if len(_RESOLVED_SOURCES) > 256:
+            _RESOLVED_SOURCES.clear()
+        _RESOLVED_SOURCES[path] = resolved
+    return resolved
 
 
 def waveform_db_heights(values, floor_db: float = WAVEFORM_FLOOR_DB):
@@ -202,6 +217,11 @@ class WaveformTimeline(QWidget):
     interaction_changed = Signal(bool)
     subtitle_visibility_changed = Signal(str, bool)
     snap_changed = Signal(bool)
+    group_move_committed = Signal(object, int)
+    group_copy_committed = Signal(object, int)
+    selection_count_changed = Signal(int)
+    transition_selected = Signal(str)
+    subtitle_lock_changed = Signal()
 
     TRACK_HEADER_WIDTH = 228
     RULER_HEIGHT = 34
@@ -211,6 +231,9 @@ class WaveformTimeline(QWidget):
     TRANSLATION_TRACK_HEIGHT = 44
     WAVEFORM_TRACK_HEIGHT = 52
     AUDIO_TRACK_HEIGHT = 36
+    # 2026-10-09 (M16): spare height grows waveform rows up to this before
+    # the subtitle lanes step up (only when the user set no audio height).
+    AUDIO_TRACK_AUTO_MAX = 72
     VIDEO_TRACK_HEIGHT = VIDEO_TRACK_HEIGHT
     CANDIDATE_LANE_HEIGHT = CANDIDATE_LANE_HEIGHT
     # 2026-09-18 VIII：三类轨高独立可调（右侧 rail + 泳道分界线拖动）。
@@ -260,6 +283,7 @@ class WaveformTimeline(QWidget):
         self._drag_preview: tuple[int, int] | None = None
         self._drag_speaker_preview = ""
         self._drag_originals: dict[str, CueInterval] = {}
+        self._ctrl_duration_drag = False
         self._timing_preview: dict[str, CueInterval] = {}
         self._drag_origin_time = 0
         self._pending_timing_pointer = None
@@ -268,17 +292,37 @@ class WaveformTimeline(QWidget):
         self._timing_frame_timer.setInterval(0)
         self._timing_frame_timer.timeout.connect(self._flush_timing_preview)
         self.timing_preview_metrics = []
+        self.selected_audio_clip_ids: set[str] = set()
+        self._unified_selection = False
+        self._group_drag = None
+        self.selection_feedback_metrics = []
+        self._selection_feedback_pending = None
+        self._marquee_base = None
+        self._marquee_modifiers = Qt.NoModifier
+        self._marquee_candidates = []
+        self.selected_transition_id = ""
+        self.selected_clip_edge = None
         self._marquee_origin: QPoint | None = None
         self._marquee_rect: QRectF | None = None
         self.tool_mode = "selection"
-        # Razor/merge drag interaction state. The razor preview must show the
-        # exact split the controller would commit, so both go through
-        # resolve_split(); see _razor_preview / _merge_state. Hovering alone
-        # never paints a preview (user feedback 2026-09-03: it reads as if the
-        # cue had already been cut).
+        # Razor/merge interaction state. The razor preview must show the exact
+        # split the controller would commit, so both go through
+        # describe_split(); see timeline_razor and _merge_state. Since
+        # 2026-10-10 hovering shows the cut inside the cue block (two halves,
+        # measured words, thin line); the card that covered the waveform is
+        # gone. Hover/drag only repaint their own region.
         self._razor_drag: dict[str, object] | None = None
+        self._razor_hover: dict[str, object] | None = None
+        self._razor_alignment_cache: dict[tuple, tuple] = {}
+        self._razor_resolved: tuple | None = None
+        self._razor_painted = QRegion()
+        self._razor_swallow_release = False
+        self.razor_committed_preview = None
         self._merge_anchor_id = ""
         self._merge_drag: dict[str, object] | None = None
+        self._merge_hover_id = ""
+        self._merge_painted = QRegion()
+        self._merge_swallow_release = False
         self.horizontal_scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
         self.horizontal_scrollbar.setObjectName("timelineHorizontalScroll")
         self.horizontal_scrollbar.valueChanged.connect(self._horizontal_scrolled)
@@ -333,7 +377,46 @@ class WaveformTimeline(QWidget):
 
     def _audio_track_height(self) -> int:
         override = self._track_height_overrides.get("audio")
-        return int(override) if override else self.AUDIO_TRACK_HEIGHT
+        return int(override) if override else self._auto_track_heights()[1]
+
+    def _auto_track_heights(self) -> tuple[int, int]:
+        """(subtitle, audio) lane heights when the user has not set one.
+
+        2026-10-09 (M16, user): tracks sit right under the ruler instead of
+        at the bottom of a tall empty area. Spare height first grows the
+        waveform rows (36 → 72) so the waveform reads better, then steps the
+        subtitle lanes up (52/68/84/96); the rest stays below the last lane.
+        Explicit heights (drag / reset) always win and stay independent.
+        """
+        speakers = max(1, len(self.speaker_ids()))
+        audio_rows = 0
+        if self.waveform_visible:
+            audio_rows = len(self.project.audio_tracks) if self.project else 1
+        video_rows = len(self.project.video_tracks) if self.project else 1
+        fixed = video_rows * self._video_track_height()
+        if self._candidate_lane_visible():
+            fixed += CANDIDATE_LANE_HEIGHT
+        translation = 44 if self.bilingual else 0
+        audio_override = self._track_height_overrides.get("audio")
+        subtitle_override = self._track_height_overrides.get("subtitle")
+        audio = int(audio_override) if audio_override else self.AUDIO_TRACK_HEIGHT
+        subtitle_base = int(subtitle_override) if subtitle_override else 52
+        available = max(0, self._canvas_bottom() - self.RULER_HEIGHT)
+        spare = available - fixed - translation - audio_rows * audio - speakers * subtitle_base
+        if not audio_override and audio_rows and spare > 0:
+            grow = min(self.AUDIO_TRACK_AUTO_MAX - self.AUDIO_TRACK_HEIGHT, int(spare * 0.5) // audio_rows)
+            audio += grow
+            spare -= grow * audio_rows
+        if subtitle_override:
+            return int(subtitle_override), audio
+        per_track = subtitle_base + max(0, spare) // speakers
+        if per_track >= 96:
+            return 96, audio
+        if per_track >= 84:
+            return 84, audio
+        if per_track >= 68:
+            return 68, audio
+        return 52, audio
 
     def track_heights(self) -> dict[str, int]:
         return dict(self._track_height_overrides)
@@ -625,14 +708,33 @@ class WaveformTimeline(QWidget):
         sequence = sequence_of(self.project) if self.project else None
         return bool(sequence is not None and sequence.clip_candidates)
 
-    def _pinned_bottom_height(self) -> int:
+    def _pinned_bottom_height(self, *, minimum: bool = False) -> int:
         track_count = len(self.project.video_tracks) if self.project else 1
         height = track_count * self._video_track_height()
         if self.waveform_visible:
-            height += (len(self.project.audio_tracks) if self.project else 1) * self._audio_track_height()
+            # The widget minimum uses the base audio height: auto growth
+            # must never ratchet the minimum up with the current size.
+            override = self._track_height_overrides.get("audio")
+            audio = (int(override) if override else self.AUDIO_TRACK_HEIGHT) if minimum else self._audio_track_height()
+            height += (len(self.project.audio_tracks) if self.project else 1) * audio
         if self._candidate_lane_visible():
             height += CANDIDATE_LANE_HEIGHT
         return height
+
+    def _subtitle_content_height(self) -> int:
+        speaker_height = self._speaker_track_height()
+        height = len(self.speaker_ids()) * speaker_height
+        if self.bilingual:
+            height += max(self.TRANSLATION_TRACK_HEIGHT, min(74, speaker_height))
+        return height
+
+    def _stack_bottom(self) -> int:
+        """Bottom edge of the track stack (M16): lanes start under the ruler
+        and spare canvas height stays below the last lane. When the lanes
+        overflow, the media group is pinned to the canvas bottom as before
+        and the subtitle lanes scroll."""
+        content = self._subtitle_content_height() + self._pinned_bottom_height()
+        return min(self._canvas_bottom(), self.RULER_HEIGHT + content)
 
     def _sync_track_minimum_height(self) -> None:
         # Keep every pinned video lane below the scrollable subtitle viewport.
@@ -646,13 +748,13 @@ class WaveformTimeline(QWidget):
         )
         minimum = (
             self.RULER_HEIGHT
-            + self._pinned_bottom_height()
+            + self._pinned_bottom_height(minimum=True)
             + subtitle_minimum
         )
         self.setMinimumHeight(max(180, minimum))
 
     def _video_track_rects(self) -> dict[str, QRectF]:
-        bottom = self._canvas_bottom()
+        bottom = self._stack_bottom()
         if self._candidate_lane_visible():
             bottom -= CANDIDATE_LANE_HEIGHT
         video_height = self._video_track_height()
@@ -704,7 +806,7 @@ class WaveformTimeline(QWidget):
             for index, (video_id, rect) in enumerate(video_rects.items())
         }
         standalone = [t for t in self.project.audio_tracks if t.id not in audio_by_video.values()]
-        bottom = self._canvas_bottom() - (CANDIDATE_LANE_HEIGHT if self._candidate_lane_visible() else 0)
+        bottom = self._stack_bottom() - (CANDIDATE_LANE_HEIGHT if self._candidate_lane_visible() else 0)
         for index,track in enumerate(standalone):
             result[track.id] = QRectF(0,bottom-(len(standalone)-index)*audio_height,self.width(),audio_height)
         return result
@@ -922,7 +1024,7 @@ class WaveformTimeline(QWidget):
     def _candidate_lane_rect(self) -> QRectF | None:
         if not self._candidate_lane_visible():
             return None
-        bottom = self._canvas_bottom()
+        bottom = self._stack_bottom()
         y = bottom - CANDIDATE_LANE_HEIGHT
         return QRectF(0, max(self.RULER_HEIGHT, y), self.width(), CANDIDATE_LANE_HEIGHT)
 
@@ -932,7 +1034,7 @@ class WaveformTimeline(QWidget):
             0,
             self.RULER_HEIGHT,
             self._content_right(),
-            max(0, self._canvas_bottom() - self.RULER_HEIGHT - pinned),
+            max(0, self._stack_bottom() - self.RULER_HEIGHT - pinned),
         )
 
     def _sync_scrollbars(self) -> None:
@@ -968,7 +1070,7 @@ class WaveformTimeline(QWidget):
             self.width() - scrollbar_width,
             self.RULER_HEIGHT,
             scrollbar_width,
-            max(0, self._canvas_bottom() - self.RULER_HEIGHT - self._pinned_bottom_height()),
+            max(0, round(self._track_viewport().height())),
         )
 
     def _horizontal_scrolled(self, value: int) -> None:
@@ -1050,29 +1152,41 @@ class WaveformTimeline(QWidget):
 
     def set_tool_mode(self, mode: str) -> None:
         self.selected_gap = None
-        normalized = mode if mode in {"razor", "merge"} else "selection"
+        normalized = mode if mode in {"razor", "merge", "track_forward"} else "selection"
         if normalized == self.tool_mode:
             return
         had_preview_state = (
-            self._razor_drag is not None
-            or self._merge_drag is not None
+            self._merge_drag is not None
             or bool(self._merge_anchor_id)
         )
+        self._clear_razor_preview()
         self.tool_mode = normalized
-        self._razor_drag = None
         self._merge_drag = None
         self._merge_anchor_id = ""
+        self._merge_hover_id = ""
+        self._merge_painted = QRegion()
         cursor = (
             Qt.CursorShape.CrossCursor if normalized == "razor"
             else Qt.CursorShape.PointingHandCursor if normalized == "merge"
+            else Qt.CursorShape.SizeHorCursor if normalized == "track_forward"
             else Qt.CursorShape.ArrowCursor
         )
-        self.setCursor(cursor)
+        if normalized=='track_forward':
+            pixmap=QPixmap(30,22);pixmap.fill(Qt.transparent)
+            painter=QPainter(pixmap);painter.setRenderHint(QPainter.Antialiasing)
+            path=QPainterPath();path.moveTo(2,11);path.lineTo(23,11);path.moveTo(15,4);path.lineTo(23,11);path.lineTo(15,18)
+            painter.setPen(QPen(QColor('#17121d'),6,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin));painter.drawPath(path)
+            painter.setPen(QPen(QColor('#FFD8F0'),3,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin));painter.drawPath(path);painter.end()
+            self._forward_cursor=QCursor(pixmap,2,11);self.setCursor(self._forward_cursor)
+        else:self.setCursor(cursor)
         if had_preview_state:
             # Clear any leftover cut line / anchor highlight from the tool.
             self.update()
 
     def set_project(self, project: SubtitleProject | None) -> None:
+        if project is not None:
+            from .studio_caption_timeline import ensure_independent_captions
+            ensure_independent_captions(project)
         self._page_tail_start_ms = 0
         self.selected_gap = None
         if project is not self.project:self.selected_track_header=None
@@ -1082,6 +1196,16 @@ class WaveformTimeline(QWidget):
             self._thumbnails.updated.connect(lambda _key:self.update())
         self.cancel_timing_edit()
         if project is not self.project:
+            self._unified_selection = False
+            self.selected_audio_clip_ids.clear()
+            self.selected_segment_ids.clear()
+            self.selected_ids.clear()
+            self.selected_segment_id = self.selected_id = ""
+            self.selected_transition_id = ""
+            self.selected_clip_edge = None
+            self._group_drag = None
+            self._marquee_origin = self._marquee_rect = None
+            self.selection_count_changed.emit(0)
             self.cache = None
             self.waveform_caches.clear()
             self.waveform_clip_keys.clear()
@@ -1093,6 +1217,7 @@ class WaveformTimeline(QWidget):
         self._clip_drag = None
         self._clip_scroll_timer.stop()
         self.project = project
+        self.locked_speakers=set(project.studio_state.get("locked_speakers",[])) if project else set()
         self.filmstrip_visible = bool(project.studio_state.get('video_thumbnails_visible', True)) if project else True
         self.snap_enabled = bool(project.studio_state.get("timeline_snap_enabled", True)) if project else True
         self.thumbnail_requests_enabled = True
@@ -1128,31 +1253,33 @@ class WaveformTimeline(QWidget):
                 self.waveform_caches[target.asset_id] = cache
                 if not target.duration_ms:
                     target.duration_ms = cache.metadata.duration_ms
-            if str(Path(self.project.media.path).resolve()) == source:
-                self.project.media.duration_ms = max(
-                    int(self.project.media.duration_ms or 0),
-                    int(cache.metadata.duration_ms or 0),
-                )
+            if (str(Path(self.project.media.path).resolve()) == source
+                    and int(self.project.media.duration_ms or 0) <= 0):
+                # Waveform buckets round up to their block boundary. They are
+                # display data, not a replacement for the saved media clock.
+                # A late cache must not extend an exact recognition result.
+                self.project.media.duration_ms = int(cache.metadata.duration_ms or 0)
         self.update()
 
     def waveform_cache_for_source(self, source_path: str) -> WaveformCache | None:
         if not self.project:
             return None
         try:
-            source = str(Path(source_path).resolve())
+            source = _resolved_source(str(source_path))
+            asset = next(
+                (
+                    item for item in self.project.media_pool
+                    if _resolved_source(str(item.canonical_source)) == source
+                ),
+                None,
+            )
+            cache = self.waveform_caches.get(asset.asset_id) if asset is not None else None
+            cache_source = _resolved_source(str(cache.metadata.source_path)) if cache is not None else ""
         except (OSError, ValueError):
             return None
-        asset = next(
-            (
-                item for item in self.project.media_pool
-                if str(Path(item.canonical_source).resolve()) == source
-            ),
-            None,
-        )
-        cache = self.waveform_caches.get(asset.asset_id) if asset is not None else None
         # A relink retains the asset ID, but its old waveform belongs to a
         # different source. Never let the queue mistake that cache for ready.
-        if cache is not None and str(Path(cache.metadata.source_path).resolve()) != source:
+        if cache is not None and cache_source != source:
             self.waveform_caches.pop(asset.asset_id, None)
             self.waveform_clip_keys.clear()
             return None
@@ -1339,18 +1466,7 @@ class WaveformTimeline(QWidget):
         override = self._track_height_overrides.get("subtitle")
         if override:
             return int(override)
-        count = max(1, len(self.speaker_ids()))
-        available = max(0, round(self._track_viewport().height()))
-        translation_floor = 44 if self.bilingual else 0
-        usable = max(0, available - translation_floor)
-        per_track = usable // count if usable else 52
-        if per_track >= 96:
-            return 96
-        if per_track >= 84:
-            return 84
-        if per_track >= 68:
-            return 68
-        return 52
+        return self._auto_track_heights()[0]
 
     @staticmethod
     def _timeline_text_font(row_height: int, block_width: float = 0) -> QFont:
@@ -1400,7 +1516,7 @@ class WaveformTimeline(QWidget):
         bodies = []
         for cue in ordered:
             track = speaker_rects.get(cue.speaker_id)
-            if not track or cue.speaker_id in self.hidden_speakers or not track.contains(point):
+            if not track or not track.contains(point):
                 continue
             left = self._time_to_x(cue.start_ms)
             right = self._time_to_x(cue.end_ms)
@@ -1422,36 +1538,136 @@ class WaveformTimeline(QWidget):
         return None, ""
 
     def _merge_neighbor(self, anchor_id: str, direction: int) -> StudioCue | None:
-        row = self._timeline_row_by_id.get(anchor_id)
-        if row is None:
-            return None
-        target = row + (1 if direction > 0 else -1)
-        if not 0 <= target < len(self._cues_by_start):
-            return None
-        return self._cues_by_start[target]
+        """Previous/next cue in time order.
 
-    def _nearest_cue_for_razor(self, milliseconds: int) -> StudioCue | None:
-        """Cue under the play position, else the chronologically nearest one."""
+        Another speaker's caption that overlaps the anchor (simultaneous
+        speech) is skipped; a sequential one stays mergeable (diarization fix).
+        """
+        from .studio_timing import merge_neighbor_allowed
+        row = self._timeline_row_by_id.get(anchor_id)
+        anchor = self._timeline_cue_by_id.get(anchor_id)
+        if row is None or anchor is None:
+            return None
+        step = 1 if direction > 0 else -1
+        index = row + step
+        while 0 <= index < len(self._cues_by_start):
+            cue = self._cues_by_start[index]
+            if merge_neighbor_allowed(anchor, cue):
+                return cue
+            index += step
+        return None
+
+    def _nearest_cue_for_razor(self, milliseconds: int, speaker_id: str = "") -> StudioCue | None:
+        """Cue under the play position, else the chronologically nearest one.
+
+        With ``speaker_id`` only that subtitle track is considered, so a cut
+        never lands on another speaker's overlapping caption.
+        """
         value = int(milliseconds)
-        for cue in self._cues_by_start:
+        cues = [cue for cue in self._cues_by_start if not speaker_id or cue.speaker_id == speaker_id]
+        for cue in cues:
             if cue.start_ms <= value < cue.end_ms:
                 return cue
         return min(
-            self._cues_by_start,
+            cues,
             key=lambda cue: min(abs(value - cue.start_ms), abs(value - cue.end_ms)),
             default=None,
         )
 
+    def _razor_target_at(self, x: float, speaker_id: str) -> StudioCue | None:
+        """The cue body under ``x`` on one subtitle track (selected wins)."""
+        if not speaker_id or speaker_id in self.hidden_speakers:
+            return None
+        value = self._x_to_time(x)
+        found = None
+        for cue in self._cues_intersecting(value, value + 1):
+            if cue.speaker_id == speaker_id and cue.start_ms <= value < cue.end_ms:
+                if found is None or cue.id == self.selected_id:
+                    found = cue
+        return self._timeline_cue_by_id.get(found.id, found) if found is not None else None
+
+    def _razor_alignment(self, cue: StudioCue) -> tuple[tuple, str]:
+        """Measured words for one cue revision, resolved once per hover.
+
+        Keyed by the project revision and the cue's own text/interval, so an
+        edit, undo or background change never reuses stale indices.
+        """
+        runtime = getattr(self.project, "_studio_state_runtime", None)
+        key = (id(self.project), getattr(runtime, "revision", 0), cue.id, cue.text, cue.start_ms, cue.end_ms)
+        cached = self._razor_alignment_cache.get(key)
+        if cached is None:
+            from .studio_timing import split_alignment
+            cached = split_alignment(cue, self.project)
+            if len(self._razor_alignment_cache) > 64:
+                self._razor_alignment_cache.clear()
+            self._razor_alignment_cache[key] = cached
+        return cached
+
+    def _razor_resolution(self):
+        """Resolution of the active razor drag, else of the hover."""
+        state = self._razor_drag if self._razor_drag is not None else self._razor_hover
+        if state is None or self.project is None:
+            return None
+        cue = self._timeline_cue_by_id.get(str(state["cue_id"]))
+        if cue is None:
+            return None
+        runtime = getattr(self.project, "_studio_state_runtime", None)
+        key = (str(state["cue_id"]), int(state["split_ms"]), bool(state.get("bypass_snap")),
+               self.snap_enabled, int(self.playhead_ms), self.visible_start_ms, self.visible_duration_ms,
+               getattr(runtime, "revision", 0), cue.text, cue.start_ms, cue.end_ms,
+               cue.speaker_id in self.locked_speakers)
+        if self._razor_resolved is not None and self._razor_resolved[0] == key:
+            return self._razor_resolved[1]
+        from . import timeline_razor
+        resolution = timeline_razor.resolve(self, cue, int(state["split_ms"]),
+                                            bypass_snap=bool(state.get("bypass_snap")))
+        self._razor_resolved = (key, resolution)
+        return resolution
+
+    def _refresh_razor_preview(self) -> None:
+        """Repaint only the previous and the current razor preview regions."""
+        from . import timeline_razor
+        current = timeline_razor.region(self, self._razor_resolution())
+        QWidget.update(self, self._razor_painted | current)
+        self._razor_painted = current
+
+    def _clear_razor_preview(self) -> None:
+        if self._razor_drag is None and self._razor_hover is None:
+            return
+        self._razor_drag = None
+        self._razor_hover = None
+        self._razor_resolved = None
+        QWidget.update(self, self._razor_painted)
+        self._razor_painted = QRegion()
+
+    def _update_razor_hover(self, point: QPoint, modifiers) -> None:
+        cue = self._razor_target_at(point.x(), self._speaker_at(point)) if point.x() >= self.TRACK_HEADER_WIDTH else None
+        if cue is None:
+            if self._razor_hover is not None:
+                self._razor_hover = None
+                self._razor_resolved = None
+                self._refresh_razor_preview()
+            return
+        self._razor_hover = {
+            "cue_id": cue.id,
+            "split_ms": self._x_to_time(point.x()),
+            "bypass_snap": bool(modifiers & Qt.KeyboardModifier.AltModifier),
+        }
+        self._refresh_razor_preview()
+
     def _start_razor_drag(self, cue_id: str, x: float) -> None:
+        hover = self._razor_hover or {}
         self._razor_drag = {
             "cue_id": cue_id,
+            "speaker_id": getattr(self._timeline_cue_by_id.get(cue_id), "speaker_id", ""),
             "origin_x": x,
             "pressed_ms": self._x_to_time(x),
             "split_ms": self._x_to_time(x),
+            "bypass_snap": bool(hover.get("bypass_snap")),
             "moved": False,
         }
         self.interaction_changed.emit(True)
-        self.update()
+        self._refresh_razor_preview()
 
     def _snap_time(self, value: int, moving_id: str) -> int:
         if not self.snap_enabled or self._snap_bypass:
@@ -2053,6 +2269,15 @@ class WaveformTimeline(QWidget):
             row["input_to_paint_ms"] = (perf_counter() - received) * 1000
             row["paint_ms"] = (perf_counter() - started) * 1000
             self._timing_paint_input = None
+        feedback=getattr(self,"_selection_feedback_pending",None)
+        if feedback is not None:
+            now=perf_counter();feedback["input_to_paint_ms"]=(now-feedback.pop("received"))*1000
+            feedback["paint_ms"]=(now-started)*1000
+            last=getattr(self,"_last_selection_feedback_paint",None)
+            feedback["update_interval_ms"]=(now-last)*1000 if last is not None else None
+            self._last_selection_feedback_paint=now
+            rows=getattr(self,"selection_feedback_metrics",[]);rows.append(feedback)
+            self.selection_feedback_metrics=rows[-128:];self._selection_feedback_pending=None
 
     def _paint_timeline(self, event):
         palette = self._timeline_palette()
@@ -2109,6 +2334,13 @@ class WaveformTimeline(QWidget):
         self._paint_edge_feedback(painter, palette)
         # 右侧统一控制区：泳道分界把手（滚动/调高同列，直绘在滚动条列）。
         self._paint_track_height_grips(painter, palette)
+        if self.tool_mode == "razor":
+            # Dynamic layer over the cached raster; never dirties the base.
+            from . import timeline_razor
+            timeline_razor.paint(self, painter, palette, self._razor_resolution())
+        elif self.tool_mode == "merge":
+            from . import timeline_merge
+            timeline_merge.paint(self, painter, palette, self._merge_preview_state())
         painter.end()
 
     def _paint_active_cues(self, painter, palette):
@@ -2142,14 +2374,17 @@ class WaveformTimeline(QWidget):
             highlight(*self._resize_hover)
         if self._drag and self._drag[1] in {"left", "right"}:
             highlight(self._drag[0], self._drag[1])
-        target = self._snap_target if self._drag or self._clip_drag else None
+        if self._drag and self._drag[1] == 'roll':
+            highlight(self._roll_pair[0], 'right')
+            highlight(self._roll_pair[1], 'left')
+        target = self._snap_target if self._drag or self._clip_drag or self._group_drag else None
         if target:
-            highlight(target["cue_id"], target["edge"])
+            highlight(target.get("cue_id", ""), target.get("edge", ""))
             x = round(self._time_to_x(target["time"]))
             painter.setPen(QPen(QColor(palette.clip_selected_border), 2))
             viewport = self._track_viewport()
             painter.drawLine(x, round(viewport.top()), x, round(viewport.bottom()))
-            label = f"吸附：{target['label']} {_format_ms(target['time'])}  · Alt 临时关闭"
+            label = target['label'] if self._drag and self._drag[1]=='roll' else f"吸附：{target['label']} {_format_ms(target['time'])}  · Alt 临时关闭"
             font = painter.font(); font.setPointSize(10); painter.setFont(font)
             width = min(self._content_right()-self.TRACK_HEADER_WIDTH, QFontMetrics(font).horizontalAdvance(label)+20)
             left = max(self.TRACK_HEADER_WIDTH, min(x+8, self._content_right()-width))
@@ -2573,7 +2808,9 @@ class WaveformTimeline(QWidget):
                 else:
                     max_lines = 3
                 metrics = QFontMetrics(font)
-                flags = int(Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap)
+                # Centred, so a cue reads the same wherever it sits on screen
+                # (2026-10-10 user feedback: left-aligned text drifted away).
+                flags = int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap)
                 if available < 28:
                     label = ""
                 else:
@@ -2586,7 +2823,7 @@ class WaveformTimeline(QWidget):
                             available * max_lines,
                         )
                 painter.drawText(inner, flags, label)
-                if selected:
+                if selected and block.width() >= 32 and (self._resize_hover and self._resize_hover[0] == cue.id):
                     painter.setPen(QPen(QColor(palette.handle_dot_border), 1))
                     painter.setBrush(QColor(palette.handle_dot_fill))
                     for handle_x in (block.left(), block.right()):
@@ -2620,19 +2857,19 @@ class WaveformTimeline(QWidget):
                     painter.drawRoundedRect(block, 5, 5)
                     painter.setPen(QColor(palette.translation_clip_text))
                     label = QFontMetrics(painter.font()).elidedText(text, Qt.TextElideMode.ElideRight, max(8, int(block.width()) - 16))
-                    painter.drawText(block.adjusted(8, 2, -6, -2), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine, label)
+                    painter.drawText(block.adjusted(8, 2, -6, -2), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine, label)
 
         painter.restore()
 
         if not timing_only:self._paint_linked_audio_tracks(painter, palette)
+        self._paint_selection_feedback(painter,palette)
+        self._paint_transitions(painter,palette)
         if self._marquee_rect is not None:
-            painter.setPen(QPen(QColor(palette.selection_rect), 1.3, Qt.PenStyle.DashLine))
-            painter.setBrush(rgba_color(palette.selection_fill))
+            color=mix(QColor(palette.clip_selected_border),QColor("white"),.42)
+            painter.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine))
+            color.setAlpha(48)
+            painter.setBrush(color)
             painter.drawRect(self._marquee_rect)
-        if self.tool_mode == "razor":
-            self._paint_razor_preview(painter, palette)
-        elif self.tool_mode == "merge":
-            self._paint_merge_preview(painter, palette)
     def _paint_timing_guides(self,painter,palette):
         if self._drag and self._drag_preview:
             start, end = self._drag_preview
@@ -2686,19 +2923,12 @@ class WaveformTimeline(QWidget):
     # Razor / merge tool previews
     # ------------------------------------------------------------------
 
-    TOOL_ACCENT = "#FF7A1A"
-    TOOL_ACCENT_DIM = "#FFB25C"
-
     def _razor_preview(self) -> tuple[object, StudioCue] | None:
-        """Resolve the razor cut for the active drag (drag-only; no hover)."""
-        if self._razor_drag is None:
+        """The committable razor cut (drag, else hover) and its cue."""
+        resolution = self._razor_resolution()
+        if resolution is None or resolution.preview is None:
             return None
-        cue = self._timeline_cue_by_id.get(str(self._razor_drag["cue_id"]))
-        if cue is None:
-            return None
-        split_ms = self._snap_time(int(self._razor_drag["split_ms"]), cue.id)
-        preview = resolve_split(cue, split_ms, project=self.project)
-        return (preview, cue) if preview is not None else None
+        return resolution.preview, resolution.cue
 
     def _merge_state(self) -> tuple[StudioCue | None, StudioCue | None, int]:
         """Return (anchor, neighbour, direction) for the merge tool painting."""
@@ -2710,275 +2940,251 @@ class WaveformTimeline(QWidget):
             return self._timeline_cue_by_id.get(self._merge_anchor_id), None, 0
         return None, None, 0
 
-    _TOOL_CARD_TEXT_FLAGS = int(
-        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
-    )
-
-    def _tool_card_row_heights(
-        self, rows: list[tuple[str, str, str]], card_width: float
-    ) -> list[int]:
-        """Wrapped text height per row. Long sentences must stay fully
-        readable on the card (user feedback 2026-09-03: elided preview text
-        hides where the cut lands), so text wraps instead of truncating."""
-        body_font = QFont()
-        body_font.setPointSize(12)
-        metrics = QFontMetrics(body_font)
-        text_width = max(120.0, card_width - 56.0)
-        heights: list[int] = []
-        for _label, text, _meta in rows:
-            wrapped = metrics.boundingRect(
-                QRect(0, 0, int(text_width), 4),
-                self._TOOL_CARD_TEXT_FLAGS,
-                text,
-            )
-            heights.append(max(24, wrapped.height()))
-        return heights
-
-    def _tool_card_geometry(
-        self,
-        rows: list[tuple[str, str, str]],
-        title: str,
-        anchor_x: float,
-        track: QRectF,
-    ) -> QRectF:
-        title_font = QFont()
-        title_font.setPointSize(11)
-        title_font.setBold(True)
-        body_font = QFont()
-        body_font.setPointSize(12)
-        metrics = QFontMetrics(body_font)
-        title_metrics = QFontMetrics(title_font)
-        widest = max(
-            [title_metrics.horizontalAdvance(title)]
-            + [metrics.horizontalAdvance(text) for _label, text, _meta in rows],
-            default=200,
-        )
-        card_width = max(
-            360.0,
-            min(max(520.0, float(self.width() - 24.0)), widest + 72.0),
-        )
-        heights = self._tool_card_row_heights(rows, card_width)
-        card_height = 44 + sum(30 + height for height in heights) + 8
-        left = min(
-            max(self.TRACK_HEADER_WIDTH + 4.0, anchor_x - card_width / 2),
-            max(self.TRACK_HEADER_WIDTH + 4.0, self.width() - card_width - 6.0),
-        )
-        top = track.top() - card_height - 14
-        if top < self.RULER_HEIGHT + 4:
-            top = min(
-                track.bottom() + 14,
-                max(self.RULER_HEIGHT + 4, self._canvas_bottom() - card_height - 6),
-            )
-        return QRectF(left, top, card_width, card_height)
-
-    def _paint_tool_card(
-        self,
-        painter: QPainter,
-        palette: TimelinePalette,
-        rows: list[tuple[str, str, str]],
-        title: str,
-        anchor_x: float,
-        track: QRectF,
-    ) -> None:
-        card = self._tool_card_geometry(rows, title, anchor_x, track)
-        heights = self._tool_card_row_heights(rows, card.width())
-        accent = QColor(self.TOOL_ACCENT)
-        background = QColor(palette.background).darker(114)
-        background.setAlpha(255)
-        painter.setPen(QPen(accent, 2.0))
-        painter.setBrush(background)
-        painter.drawRoundedRect(card, 9, 9)
-        title_font = QFont()
-        title_font.setPointSize(11)
-        title_font.setBold(True)
-        painter.setFont(title_font)
-        painter.setPen(accent)
-        painter.drawText(
-            QRectF(card.left() + 16, card.top() + 8, card.width() - 32, 24),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            title,
-        )
-        body_font = QFont()
-        body_font.setPointSize(12)
-        meta_font = QFont()
-        meta_font.setPointSize(8)
-        meta_font.setBold(False)
-        meta_metrics = QFontMetrics(meta_font)
-        y = card.top() + 42
-        for (label, text, meta), height in zip(rows, heights):
-            chip = QRectF(card.left() + 14, y, 46, 22)
-            chip_color = QColor(self.TOOL_ACCENT)
-            chip_color.setAlpha(46)
-            painter.setPen(QPen(QColor(self.TOOL_ACCENT_DIM), 1.0))
-            painter.setBrush(chip_color)
-            painter.drawRoundedRect(chip, 5, 5)
-            painter.setFont(meta_font)
-            painter.setPen(QColor(self.TOOL_ACCENT_DIM))
-            painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, label)
-            if meta:
-                painter.setPen(QColor(palette.time_label))
-                painter.drawText(
-                    QRectF(card.right() - 16 - meta_metrics.horizontalAdvance(meta), y, 200, 22),
-                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                    meta,
-                )
-            painter.setFont(body_font)
-            painter.setPen(QColor(palette.clip_text))
-            painter.drawText(
-                QRectF(card.left() + 16, y + 26, max(120.0, card.width() - 32.0), height),
-                self._TOOL_CARD_TEXT_FLAGS,
-                text,
-            )
-            y += 30 + height
-
-    def _paint_razor_preview(self, painter: QPainter, palette: TimelinePalette) -> None:
-        resolved = self._razor_preview()
-        if resolved is None:
-            return
-        preview, cue = resolved
-        accent = QColor(self.TOOL_ACCENT)
-        x = self._time_to_x(preview.split_ms)
-        painter.save()
-        # Full-height cut line so the split point reads anywhere on the panel.
-        # The cue block itself stays untouched while dragging (2026-09-03 user
-        # feedback): painting "already split" halves before the cut happens
-        # was misread as a completed split and made short cues vanish.
-        painter.setPen(QPen(accent, 2.6))
-        painter.drawLine(round(x), 0, round(x), round(self._canvas_bottom()))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(accent)
-        marker = QPainterPath(QPointF(x - 8, 0))
-        marker.lineTo(QPointF(x + 8, 0))
-        marker.lineTo(QPointF(x, 11))
-        marker.closeSubpath()
-        painter.drawPath(marker)
-        painter.restore()
-        speaker_rects, _translation, _waveform = self._track_layout()
-        track = speaker_rects.get(cue.speaker_id)
-        if track is None:
-            return
-        self._paint_tool_card(
-            painter,
-            palette,
-            [
-                (
-                    "前段",
-                    preview.left_text or "(空)",
-                    f"{len(preview.left_text)} 字 · {(preview.left_end_ms - preview.left_start_ms) / 1000:.1f}s",
-                ),
-                (
-                    "后段",
-                    preview.right_text or "(空)",
-                    f"{len(preview.right_text)} 字 · {(preview.right_end_ms - preview.right_start_ms) / 1000:.1f}s",
-                ),
-            ],
-            f"✂ {_format_ms(preview.split_ms)} · " + ('按字词分配，保留切点' if preview.timing_source == 'exact_token_text' else '文字按比例估算，请试听'),
-            x,
-            track,
-        )
-
-    def _paint_merge_preview(self, painter: QPainter, palette: TimelinePalette) -> None:
-        anchor, neighbor, direction = self._merge_state()
+    def _merge_preview_state(self):
+        """What the merge tool would do now (drag, click-pair hover, anchor)."""
+        from .timeline_merge import MergeState
+        cue = self._timeline_cue_by_id.get
+        drag = self._merge_drag
+        if drag is not None:
+            anchor = cue(str(drag["anchor_id"]))
+            if anchor is None:
+                return None
+            if drag["direction"]:
+                return MergeState('drag', anchor, cue(str(drag["neighbor_id"] or "")), int(drag["direction"]))
+            prior = cue(str(drag.get("prior_anchor_id") or ""))
+            if prior is not None and prior.id != anchor.id:
+                return MergeState('pair', prior, anchor)
+            return MergeState('anchor', anchor, None)
+        anchor = cue(self._merge_anchor_id) if self._merge_anchor_id else None
         if anchor is None:
+            return None
+        other = cue(self._merge_hover_id) if self._merge_hover_id else None
+        if other is not None and other.id != anchor.id:
+            return MergeState('pair', anchor, other)
+        return MergeState('anchor', anchor, None)
+
+    def _refresh_merge_preview(self) -> None:
+        """Repaint only the previous and the current merge preview regions."""
+        from . import timeline_merge
+        current = timeline_merge.region(self, self._merge_preview_state())
+        QWidget.update(self, self._merge_painted | current)
+        self._merge_painted = current
+
+    def _update_merge_hover(self, point: QPoint) -> None:
+        if not self._merge_anchor_id:
             return
-        painter.save()
-        accent = QColor(self.TOOL_ACCENT)
-        speaker_rects, _translation, _waveform = self._track_layout()
-        track = speaker_rects.get(anchor.speaker_id)
-        if track is None:
-            painter.restore()
-            return
-        fill = QColor(self.TOOL_ACCENT)
-        fill.setAlpha(36)
-        anchor_left = max(self.TRACK_HEADER_WIDTH, self._time_to_x(anchor.start_ms))
-        anchor_right = min(self._content_right(), self._time_to_x(anchor.end_ms))
-        painter.setPen(QPen(accent, 2.4))
-        painter.setBrush(fill)
-        painter.drawRoundedRect(
-            QRectF(anchor_left, track.top() + 6, max(4.0, anchor_right - anchor_left), track.height() - 12),
-            5, 5,
-        )
-        if neighbor is not None:
-            neighbor_track = speaker_rects.get(neighbor.speaker_id) or track
-            neighbor_left = max(self.TRACK_HEADER_WIDTH, self._time_to_x(neighbor.start_ms))
-            neighbor_right = min(self._content_right(), self._time_to_x(neighbor.end_ms))
-            painter.setPen(QPen(accent, 2.0))
-            painter.setBrush(fill)
-            painter.drawRoundedRect(
-                QRectF(neighbor_left, neighbor_track.top() + 6, max(4.0, neighbor_right - neighbor_left), neighbor_track.height() - 12),
-                5, 5,
-            )
-            # Bold arrow between the two blocks shows the merge direction.
-            start_point = QPointF(
-                min(max((anchor_left + anchor_right) / 2, self.TRACK_HEADER_WIDTH + 8), self._content_right() - 8),
-                track.center().y(),
-            )
-            end_point = QPointF(
-                min(max((neighbor_left + neighbor_right) / 2, self.TRACK_HEADER_WIDTH + 8), self._content_right() - 8),
-                neighbor_track.center().y(),
-            )
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setPen(QPen(QColor(self.TOOL_ACCENT_DIM), 4.0))
-            painter.setBrush(QColor(self.TOOL_ACCENT_DIM))
-            painter.drawLine(start_point, end_point)
-            arrow = QPainterPath()
-            delta = end_point - start_point
-            length = max(1.0, (delta.x() ** 2 + delta.y() ** 2) ** 0.5)
-            unit = QPointF(delta.x() / length, delta.y() / length)
-            normal = QPointF(-unit.y(), unit.x())
-            head = end_point
-            arrow.moveTo(head)
-            arrow.lineTo(head - unit * 16 + normal * 8)
-            arrow.lineTo(head - unit * 16 - normal * 8)
-            arrow.closeSubpath()
-            painter.drawPath(arrow)
-            painter.restore()
-            earlier, later = (
-                (anchor, neighbor)
-                if (anchor.start_ms, anchor.end_ms, anchor.id) <= (neighbor.start_ms, neighbor.end_ms, neighbor.id)
-                else (neighbor, anchor)
-            )
-            merged_text = earlier.text + later.text
-            merged_duration = max(anchor.end_ms, neighbor.end_ms) - min(anchor.start_ms, neighbor.start_ms)
-            direction_label = "➔ 向后合并（与下一条）" if direction > 0 else "⬅ 向前合并（与上一条）"
-            self._paint_tool_card(
-                painter,
-                palette,
-                [
-                    ("前段", earlier.text, f"{len(earlier.text)} 字"),
-                    ("后段", later.text, f"{len(later.text)} 字"),
-                    ("合并后", merged_text, f"{len(merged_text)} 字 · {merged_duration / 1000:.1f}s"),
-                ],
-                f"{direction_label} · 松开执行",
-                (start_point.x() + end_point.x()) / 2,
-                track,
-            )
-            return
-        painter.restore()
-        if direction:
-            self._paint_tool_card(
-                painter,
-                palette,
-                [],
-                "该方向没有可以合并的字幕",
-                (anchor_left + anchor_right) / 2,
-                track,
-            )
-            return
-        self._paint_tool_card(
-            painter,
-            palette,
-            [("锚点", anchor.text, f"{len(anchor.text)} 字")],
-            "已选锚点：按住拖动向左/右合并，或再点击一条字幕配对",
-            (anchor_left + anchor_right) / 2,
-            track,
-        )
+        cue = (self._razor_target_at(point.x(), self._speaker_at(point))
+               if point.x() >= self.TRACK_HEADER_WIDTH else None)
+        hover = cue.id if cue is not None and cue.id != self._merge_anchor_id else ""
+        if hover != self._merge_hover_id:
+            self._merge_hover_id = hover
+            self._refresh_merge_preview()
 
     @measured('mouse_press')
+    def clip_selection(self):
+        from .studio_selection import ClipSelection
+        return ClipSelection(set(self.selected_segment_ids),set(self.selected_audio_clip_ids),set(self.selected_ids))
+
+    def _publish_clip_selection(self, selection):
+        feedback_started=perf_counter()
+        self._unified_selection = True
+        self.selected_gap = None
+        self.selected_track_header = None
+        self.selected_segment_ids = set(selection.video_ids)
+        self.selected_audio_clip_ids = set(selection.audio_ids)
+        self.selected_ids = set(selection.cue_ids)
+        self.selected_segment_id = next(iter(sorted(selection.video_ids)), '')
+        self.selected_id = next(iter(sorted(selection.cue_ids)), '')
+        self.selection_scope = SelectionScope.explicit(selection.cue_ids,self.selected_id)
+        # Notify list selection without the single-cue/video callbacks, which
+        # intentionally replace selection when users edit a single object.
+        self.selection_changed.emit(set(selection.cue_ids))
+        # Empty-list cancellation can mirror an empty cue scope; restore the
+        # exact cross-track set after the controller has handled the signal.
+        self.selected_ids = set(selection.cue_ids)
+        self.selected_id = next(iter(sorted(selection.cue_ids)), '')
+        self.selection_scope = SelectionScope.explicit(selection.cue_ids,self.selected_id)
+        self.selection_count_changed.emit(selection.count)
+        self._selection_feedback_pending={"received":feedback_started,"dispatch_ms":(perf_counter()-feedback_started)*1000}
+        self.update()
+
+    def _transition_rects(self):
+        if not self.project:return []
+        from .studio_transitions import transition_records
+        video=self._video_track_rects();audio=self._audio_track_rects()
+        result=[]
+        for item in transition_records(self.project):
+            row=(video if item['media']=='video' else audio).get(item['track_id'])
+            if row is None:continue
+            start=item.get('start_ms',0);end=item.get('end_ms',start)
+            if end<self.visible_start_ms or start>self.visible_start_ms+self.visible_duration_ms:continue
+            result.append((item,QRectF(self._time_to_x(start),row.top()+3,
+                max(2,self._time_to_x(end)-self._time_to_x(start)),min(14,row.height()-6))))
+        return result
+
+    def _transition_at(self,point):
+        return next((t for t,rect in self._transition_rects() if rect.contains(point)),None)
+
+    def _paint_transitions(self,painter,palette):
+        painter.save()
+        for item,rect in self._transition_rects():
+            selected=item['id']==self.selected_transition_id
+            color=QColor('#FFD078' if item['media']=='video' else '#79DCCC')
+            painter.setPen(QPen(color,2.2 if selected else 1.2))
+            fill=QColor(color);fill.setAlpha(125 if selected else 65)
+            painter.setBrush(fill);painter.drawRect(rect)
+            painter.drawLine(rect.topLeft(),rect.bottomRight())
+            painter.drawLine(rect.bottomLeft(),rect.topRight())
+        painter.restore()
+
+    def _selection_items(self):
+        if not self.project:
+            return []
+        from .studio_clip_edit import video_track_locked
+        result=[]
+        for kind,tracks,rects in (('video',self.project.video_tracks,self._video_track_rects()),
+                                  ('audio',self.project.audio_tracks,self._audio_track_rects())):
+            for track in tracks:
+                if track.locked or (kind=='video' and video_track_locked(self.project,track)):
+                    continue
+                row=rects.get(track.id)
+                if row is None:
+                    continue
+                for clip in track.clips:
+                    if clip.timeline_out_ms < self.visible_start_ms or clip.timeline_in_ms > self.visible_start_ms+self.visible_duration_ms:
+                        continue
+                    result.append((kind,clip.id,QRectF(self._time_to_x(clip.timeline_in_ms),row.top()+4,
+                        max(1.,self._time_to_x(clip.timeline_out_ms)-self._time_to_x(clip.timeline_in_ms)),row.height()-8)))
+        rows,_,_=self._track_layout()
+        for cue in self.visible_cues():
+            row=rows.get(cue.speaker_id)
+            if row is not None and cue.speaker_id not in self.locked_speakers:
+                result.append(('subtitle',cue.id,QRectF(self._time_to_x(cue.start_ms),row.top()+5,max(1.,self._time_to_x(cue.end_ms)-self._time_to_x(cue.start_ms)),row.height()-10)))
+        return result
+
+    def _selection_at_rect(self, rect):
+        from .studio_selection import ClipSelection, expand_linked_selection
+        result=ClipSelection()
+        for kind,key,bounds in self._marquee_candidates:
+            if bounds.intersects(rect):
+                getattr(result,{'video':'video_ids','audio':'audio_ids','subtitle':'cue_ids'}[kind]).add(key)
+        if self._marquee_base is not None:
+            for name in ('video_ids','audio_ids','cue_ids'):
+                hits=getattr(result,name)
+                base=getattr(self._marquee_base,name)
+                if self._marquee_modifiers & Qt.ControlModifier:
+                    setattr(result,name,hits ^ base)
+                elif self._marquee_modifiers & Qt.ShiftModifier:
+                    hits.update(base)
+        return expand_linked_selection(self.project,result)
+
+    def _lane_and_item_at(self, point):
+        time=self._x_to_time(point.x())
+        video=self._video_track_at(point)
+        if video:
+            clip=self._video_clip_at(video,time)
+            return ('video',video),clip.id if clip else '',clip.timeline_in_ms if clip else time
+        audio=self._audio_track_at(point)
+        if audio:
+            track=next(t for t in self.project.audio_tracks if t.id==audio)
+            clip=next((c for c in track.clips if c.timeline_in_ms<=time<c.timeline_out_ms),None)
+            return ('audio',audio),clip.id if clip else '',clip.timeline_in_ms if clip else time
+        cue,_=self._cue_at(point)
+        speaker=self._speaker_at(point)
+        return ('subtitle',speaker),cue.id if cue else '',cue.start_ms if cue else time
+
+    def _begin_group_drag(self,event):
+        selection=self.clip_selection()
+        times=[c.timeline_in_ms for t in self.project.video_tracks for c in t.clips if c.id in selection.video_ids]
+        times += [c.timeline_in_ms for t in self.project.audio_tracks for c in t.clips if c.id in selection.audio_ids]
+        times += [c.start_ms for c in self._cues_by_start if c.id in selection.cue_ids]
+        self._group_drag=dict(minimum=min(times,default=0),origin_ms=self._x_to_time(event.position().x()),
+            origin=QPointF(event.position()),delta=0,moved=False,selection=self.clip_selection(),
+            copy=bool(event.modifiers() & Qt.AltModifier))
+        self.interaction_changed.emit(True)
+
+    def select_all_clips(self):
+        if self.project:
+            from .studio_selection import forward_selection
+            self._publish_clip_selection(forward_selection(self.project, 0, locked_speakers=self.locked_speakers))
+
+    def _caption_seam_at(self, point):
+        speaker = self._speaker_at(point)
+        if not speaker or speaker in self.locked_speakers or point.x() < self.TRACK_HEADER_WIDTH:
+            return None
+        cues = sorted((c for c in self._cues_by_start if c.speaker_id == speaker), key=lambda c:(c.start_ms,c.end_ms))
+        candidates = []
+        for left, right in zip(cues, cues[1:]):
+            if not 0 <= right.start_ms-left.end_ms <= 250:
+                continue
+            if min(left.end_ms-left.start_ms, right.end_ms-right.start_ms) < 50:
+                continue
+            a, b = self._time_to_x(left.end_ms), self._time_to_x(right.start_ms)
+            if a-7 <= point.x() <= b+7:
+                candidates.append((abs(point.x()-(a+b)/2),left,right))
+        return min(candidates,key=lambda x:x[0])[1:] if candidates else None
+
+    def _begin_caption_roll(self, pair, x, boundary=None):
+        left, right = pair
+        previous_preview = dict(self._timing_preview) if boundary is not None else {}
+        self._group_drag = None
+        self._ctrl_duration_drag = False
+        self._roll_pair = (left.id, right.id)
+        self._roll_boundary = int(boundary if boundary is not None else self._x_to_time(x))
+        self._drag = (left.id, 'roll', x, left.start_ms, left.end_ms)
+        self._drag_origin_time = self._x_to_time(x)
+        self._drag_originals = {c.id:CueInterval(c.start_ms,c.end_ms,c.speaker_id) for c in pair}
+        self._timing_preview = dict(self._drag_originals)
+        # Modifier changes retain the already visible single-edge preview;
+        # the next pointer movement closes only this particular seam.
+        self._timing_preview.update({key:value for key,value in previous_preview.items()
+                                     if key in self._drag_originals})
+        self._pending_timing_pointer = None
+        self.selected_ids = {left.id, right.id}
+        self.selection_scope = SelectionScope.explicit(self.selected_ids,left.id)
+        self._drag_speaker_preview = left.speaker_id
+        self.timing_preview_metrics = []
+        self.selection_changed.emit(set(self.selected_ids))
+        self.timing_edit_started.emit(dict(self._drag_originals))
+        self.interaction_changed.emit(True)
+        self.setCursor(Qt.SizeHorCursor)
+        self.setFocus(Qt.MouseFocusReason)
+
+    @staticmethod
+    def _selection_highlight_rect(rect):
+        rect=QRectF(rect)
+        if rect.width()<3:rect.setWidth(3)
+        return rect.adjusted(.5,.5,-.5,-.5)
+
+    def _paint_selection_feedback(self,painter,palette):
+        color=mix(QColor(palette.clip_selected_border),QColor('white'),.42)
+        fill=QColor(color);fill.setAlpha(58)
+        selection=self.clip_selection()
+        drag=self._group_drag
+        delta=drag['delta'] if drag else 0
+        offset=self._time_to_x(delta)-self._time_to_x(0)
+        painter.save()
+        painter.setPen(QPen(color,2.2,Qt.SolidLine))
+        painter.setBrush(fill)
+        for kind,key,rect in self._selection_items():
+            ids=getattr(selection,{'video':'video_ids','audio':'audio_ids','subtitle':'cue_ids'}[kind])
+            if key in ids:
+                if drag:rect=rect.translated(offset,0)
+                painter.drawRect(self._selection_highlight_rect(rect))
+        painter.restore()
+
     def mousePressEvent(self, event: QMouseEvent):
         self._thumbnails.note_activity()
+        self._selection_before_press = self.clip_selection()
         self.selected_gap = None
         point = event.position().toPoint()
+        self._seam_candidate = None
+        if event.button() == Qt.LeftButton and self.tool_mode == 'selection':
+            self._seam_candidate = self._caption_seam_at(point)
+            if self._seam_candidate and event.modifiers() & Qt.ControlModifier:
+                self._begin_caption_roll(self._seam_candidate, event.position().x())
+                event.accept()
+                return
         # 2026-09-18 VIII：泳道分界线拖动调轨高（优先于其它命中）。
         if (
             event.button() == Qt.MouseButton.LeftButton
@@ -2997,6 +3203,77 @@ class WaveformTimeline(QWidget):
             self.setCursor(Qt.CursorShape.SizeVerCursor)
             event.accept()
             return
+        if self.project and event.button()==Qt.LeftButton and point.x()>=self.TRACK_HEADER_WIDTH and point.y()>=self.RULER_HEIGHT:
+            transition=self._transition_at(point)
+            if transition and self.tool_mode=='selection':
+                self.selected_transition_id=transition['id']
+                self.transition_selected.emit(transition['id'])
+                self.update();event.accept();return
+            self.selected_transition_id=''
+            lane,key,start=self._lane_and_item_at(point)
+            if key and self.tool_mode == 'selection' and event.modifiers() & Qt.AltModifier:
+                from .studio_selection import ClipSelection, expand_linked_selection
+                selection = self.clip_selection()
+                if key not in (selection.video_ids | selection.audio_ids | selection.cue_ids):
+                    selection = ClipSelection()
+                    getattr(selection, {'video': 'video_ids', 'audio': 'audio_ids', 'subtitle': 'cue_ids'}[lane[0]]).add(key)
+                selection.cue_ids = {key for key in selection.cue_ids
+                                    if self._timeline_cue_by_id[key].speaker_id not in self.locked_speakers}
+                self._publish_clip_selection(expand_linked_selection(self.project, selection))
+                if self.clip_selection().count:
+                    self.setFocus(Qt.MouseFocusReason)
+                    self._begin_group_drag(event)
+                event.accept()
+                return
+            if key and lane[0]=='subtitle' and self.tool_mode=='selection' and event.modifiers() & Qt.ControlModifier and self._cue_at(point)[1]=='move':
+                selection=self.clip_selection()
+                if key in selection.cue_ids:selection.cue_ids.remove(key)
+                elif self._timeline_cue_by_id[key].speaker_id not in self.locked_speakers:selection.cue_ids.add(key)
+                self._publish_clip_selection(selection)
+                self.setFocus(Qt.MouseFocusReason)
+                if key in selection.cue_ids:self._begin_group_drag(event)
+                event.accept()
+                return
+            ctrl_duration = bool(key and lane[0] == 'subtitle' and self.tool_mode == 'selection'
+                                 and event.modifiers() & Qt.ControlModifier)
+            self.selected_clip_edge=None
+            if key and lane[0] in ('video','audio'):
+                tracks=self.project.video_tracks if lane[0]=='video' else self.project.audio_tracks
+                clip=next((c for t in tracks if t.id==lane[1] for c in t.clips if c.id==key),None)
+                if clip:
+                    distance,edge=min((abs(point.x()-self._time_to_x(clip.timeline_in_ms)),'in'),
+                                      (abs(point.x()-self._time_to_x(clip.timeline_out_ms)),'out'))
+                    if distance<=5:self.selected_clip_edge=(lane[0],lane[1],key,edge)
+            if self.tool_mode=='track_forward':
+                from .studio_selection import forward_selection
+                single=lane if event.modifiers() & Qt.ShiftModifier else None
+                self.selected_video_track_id=lane[1] if lane[0]=='video' else self.selected_video_track_id
+                self._publish_clip_selection(forward_selection(self.project,start,lane=single,locked_speakers=self.locked_speakers))
+                self.setFocus(Qt.MouseFocusReason)
+                if key:self._begin_group_drag(event)
+                event.accept()
+                return
+            if self._unified_selection and not ctrl_duration and key and key in (self.selected_segment_ids|self.selected_audio_clip_ids|self.selected_ids):
+                if event.modifiers() & Qt.ControlModifier:
+                    selection=self.clip_selection()
+                    from .studio_selection import remove_linked_selection
+                    remove_linked_selection(self.project,selection,lane[0],key)
+                    self._publish_clip_selection(selection)
+                else:
+                    self._begin_group_drag(event)
+                event.accept()
+                return
+        if self.project and event.button()==Qt.LeftButton and point.x()>=self.TRACK_HEADER_WIDTH and self._audio_track_at(point):
+            lane,key,_=self._lane_and_item_at(point)
+            if key and self.tool_mode=='selection':
+                from .studio_selection import ClipSelection,expand_linked_selection
+                self.selected_audio_track_id=lane[1]
+                self._publish_clip_selection(expand_linked_selection(self.project,ClipSelection(audio_ids={key})))
+                self.setFocus(Qt.MouseFocusReason);self._begin_group_drag(event)
+                event.accept();return
+        self._unified_selection=False
+        self.selected_audio_clip_ids.clear()
+        self.selection_count_changed.emit(0)
         cue, _mode = self._cue_at(point)
         ruler_area = (
             event.button() == Qt.MouseButton.LeftButton
@@ -3085,7 +3362,7 @@ class WaveformTimeline(QWidget):
                 edges = [(abs(event.position().x()-self._time_to_x(value)), c.id != self.selected_video_clip_id, c.id, c)
                          for c in row.clips for value in (c.timeline_in_ms,c.timeline_out_ms)
                          if abs(event.position().x()-self._time_to_x(value)) <= self.VIDEO_CLIP_TRIM_HANDLE_PX]
-                if edges:
+                if edges and (clip is not None or min(e[0] for e in edges) <= 1):
                     clip = min(edges,key=lambda item:item[:3])[3]
             previous_selection = set(self.selected_segment_ids)
             previous_anchor = self.selected_segment_id
@@ -3106,8 +3383,14 @@ class WaveformTimeline(QWidget):
                     return
                 gap = lane_gap(self.project, track_id, click_ms)
                 self.selected_gap = (track_id, *gap) if gap and self.tool_mode == 'selection' else None
+                if self.tool_mode == "selection":
+                    self._marquee_origin=point
+                    self._marquee_rect=QRectF(point,point)
+                    self._marquee_base=self._selection_before_press
+                    self._marquee_modifiers=event.modifiers()
+                    self._marquee_candidates=self._selection_items()
                 if self.selected_gap:
-                    self.edit_blocked.emit(f'已选择 {track_id} 空白：Delete 闭合此轨及关联音频；其他轨道保持原位')
+                    self.edit_blocked.emit(f'已选择 {track_id} 空白：Delete 同步闭合工程时间；其他轨道有素材或受锁定保护时停止')
                 self.update()
                 return
             if self.tool_mode == 'selection':
@@ -3172,6 +3455,8 @@ class WaveformTimeline(QWidget):
                         self.subtitle_visibility_changed.emit(speaker_id, visible)
                     elif action_at('subtitle', point.x(), point.y(), rect) == 'lock':
                         (self.locked_speakers.remove if speaker_id in self.locked_speakers else self.locked_speakers.add)(speaker_id)
+                        if self.project:self.project.studio_state["locked_speakers"]=sorted(self.locked_speakers)
+                        self.subtitle_lock_changed.emit()
                     elif action_at('subtitle', point.x(), point.y(), rect) == 'more':
                         self.track_delete_requested.emit('subtitle',speaker_id)
                     self.update()
@@ -3191,8 +3476,9 @@ class WaveformTimeline(QWidget):
                     )
                 )
                 if modifiers & Qt.KeyboardModifier.ControlModifier:
-                    if cue.id in current: current.remove(cue.id)
-                    else: current.add(cue.id)
+                    # Keep the selection for a duration drag; a stationary
+                    # Ctrl click toggles it on release.
+                    current.add(cue.id)
                 else:
                     current.add(cue.id)
                 self.selected_ids = current
@@ -3205,9 +3491,14 @@ class WaveformTimeline(QWidget):
             drag_ids = set(self.selected_ids)
             self.cue_selected.emit(cue.id)
             if self.tool_mode == "razor" and mode != "translation":
-                # Press-and-slide shows a full-height cut line plus a large
-                # two-sentence preview card; release commits the split.
-                self._start_razor_drag(cue.id, event.position().x())
+                # Press commits what the hover shows; press-and-slide moves the
+                # cut inside this subtitle track; release commits the split.
+                target = self._razor_target_at(event.position().x(), cue.speaker_id) or cue
+                if target.speaker_id in self.locked_speakers:
+                    self.edit_blocked.emit(tr('轨道已锁定，请先解锁'))
+                    self._razor_swallow_release = True
+                    return
+                self._start_razor_drag(target.id, event.position().x())
                 return
             if self.tool_mode == "merge" and mode != "translation":
                 # Click anchors this cue; slide left/right picks the merge
@@ -3221,10 +3512,15 @@ class WaveformTimeline(QWidget):
                     "neighbor_id": "",
                 }
                 self._merge_anchor_id = cue.id
+                self._merge_hover_id = ""
                 self.interaction_changed.emit(True)
-                self.update()
+                self._refresh_merge_preview()
                 return
             if mode != "translation" and cue.speaker_id not in self.locked_speakers:
+                self._ctrl_duration_drag = bool(mode == 'move' and self.tool_mode == 'selection'
+                                                and modifiers & Qt.ControlModifier)
+                if self._ctrl_duration_drag:
+                    mode = 'right'
                 self._drag = (cue.id, mode, event.position().x(), cue.start_ms, cue.end_ms)
                 self._drag_speaker_preview = cue.speaker_id
                 self._drag_originals = {
@@ -3253,12 +3549,15 @@ class WaveformTimeline(QWidget):
                 and point.x() >= self.TRACK_HEADER_WIDTH
                 and self._track_viewport().contains(point)
             ):
-                nearest = self._nearest_cue_for_razor(self._x_to_time(point.x()))
-                if nearest is not None:
+                nearest = self._nearest_cue_for_razor(self._x_to_time(point.x()), self._speaker_at(point))
+                if nearest is not None and nearest.speaker_id not in self.locked_speakers:
                     self._start_razor_drag(nearest.id, event.position().x())
                     self.update()
                     return
             self._marquee_origin = point
+            self._marquee_base = self._selection_before_press
+            self._marquee_modifiers = event.modifiers()
+            self._marquee_candidates = self._selection_items()
             self._marquee_rect = QRectF(point, point)
             self.interaction_changed.emit(True)
         self.update()
@@ -3289,6 +3588,11 @@ class WaveformTimeline(QWidget):
                 if event.pos().x() >= self.TRACK_HEADER_WIDTH
                 else None
             )
+            if clip is None and event.pos().x() >= self.TRACK_HEADER_WIDTH:
+                from .studio_clip_edit import lane_gap
+                gap=lane_gap(self.project,track_id,self._x_to_time(event.pos().x()))
+                self.selected_gap=(track_id,*gap) if gap else None
+                self.update()
             self.video_track_menu_requested.emit(
                 track_id,
                 clip.id if clip is not None else "",
@@ -3406,10 +3710,35 @@ class WaveformTimeline(QWidget):
 
     @measured('mouse_move')
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._group_drag is not None:
+            drag=self._group_drag
+            moved=(event.position()-drag['origin']).manhattanLength()>=QApplication.startDragDistance()
+            if moved and not drag['moved']:
+                from .studio_selection import expand_linked_selection
+                selection=expand_linked_selection(self.project,drag['selection'])
+                drag['selection']=selection
+                self._publish_clip_selection(selection)
+            drag['delta']=max(-drag['minimum'],self._x_to_time(event.position().x())-drag['origin_ms'])
+            held, self._snap_target = self._snap_target, None
+            if moved and self.snap_enabled and not self._snap_bypass:
+                from .studio_group_snap import snap_group_delta
+                threshold = 8.0 * self.visible_duration_ms / max(1, self._content_right()-self.TRACK_HEADER_WIDTH)
+                drag['delta'], self._snap_target = snap_group_delta(self.project, drag['selection'], drag['delta'],
+                    playhead=self.playhead_ms, threshold=threshold, held=held)
+            drag['moved']=moved
+            self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            event.accept()
+            return
         if self._track_resize_drag is not None:
             drag = self._track_resize_drag
-            delta = drag["start_y"] - event.globalPosition().y()  # 上拖=调高
-            self.set_track_height(str(drag["kind"]), int(drag["start_height"] + delta))
+            # Lanes stack downward from the ruler (M16): dragging a lane's
+            # lower edge down makes it taller and the edge follows the
+            # pointer (shared subtitle height moves every lane's edge).
+            delta = event.globalPosition().y() - drag["start_y"]
+            if drag["kind"] == "subtitle":
+                delta /= max(1, len(self.speaker_ids()))
+            self.set_track_height(str(drag["kind"]), int(round(drag["start_height"] + delta)))
             event.accept()
             return
         # 分界线悬停光标（仅无其它拖拽/手势活动时接管光标）。
@@ -3444,18 +3773,14 @@ class WaveformTimeline(QWidget):
             if abs(event.position().x() - float(drag["origin_x"])) >= QApplication.startDragDistance():
                 drag["moved"] = True
             drag["split_ms"] = self._x_to_time(event.position().x())
+            drag["bypass_snap"] = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
             # The cut line follows the pointer: sliding it over a different
-            # cue retargets the cut to that cue (clamped when over a gap).
-            over = next(
-                (
-                    item for item in self._cues_by_start
-                    if item.start_ms <= int(drag["split_ms"]) < item.end_ms
-                ),
-                None,
-            )
+            # cue of the same subtitle track retargets the cut (clamped when
+            # over a gap). Another speaker's overlapping caption is never cut.
+            over = self._razor_target_at(event.position().x(), str(drag.get("speaker_id", "")))
             if over is not None and over.id != str(drag["cue_id"]):
                 drag["cue_id"] = over.id
-            self.update()
+            self._refresh_razor_preview()
             event.accept()
             return
         if self._merge_drag is not None:
@@ -3466,7 +3791,7 @@ class WaveformTimeline(QWidget):
                 drag["direction"] = direction
                 neighbor = self._merge_neighbor(str(drag["anchor_id"]), direction)
                 drag["neighbor_id"] = neighbor.id if neighbor is not None else ""
-            self.update()
+            self._refresh_merge_preview()
             event.accept()
             return
         if self._track_reorder_drag:
@@ -3543,10 +3868,15 @@ class WaveformTimeline(QWidget):
         if self._marquee_origin is not None and not self._drag:
             current = event.position().toPoint()
             self._marquee_rect = QRectF(self._marquee_origin, current).normalized()
+            self._publish_clip_selection(self._selection_at_rect(self._marquee_rect))
             self.update()
             return
         if not self._drag:
             point = event.position().toPoint()
+            if self.tool_mode == "razor":
+                self._update_razor_hover(point, event.modifiers())
+            elif self.tool_mode == "merge":
+                self._update_merge_hover(point)
             cue, mode = self._cue_at(point)
             resize_hover = ((cue.id, mode) if cue and mode in {"left", "right"}
                             and cue.speaker_id not in self.locked_speakers and self.tool_mode == "selection" else None)
@@ -3638,9 +3968,24 @@ class WaveformTimeline(QWidget):
         if not self._drag or self._pending_timing_pointer is None:
             return
         point, received = self._pending_timing_pointer
+        self._last_timing_pointer_x = point.x()
         self._pending_timing_pointer = None
         started = perf_counter()
         cue_id, mode, _origin_x, start_ms, end_ms = self._drag
+        if mode == 'roll':
+            left_id, right_id = self._roll_pair
+            left, right = self._drag_originals[left_id], self._drag_originals[right_id]
+            boundary = self._roll_boundary + self._x_to_time(point.x())-self._drag_origin_time
+            boundary = max(left.start_ms+50, min(right.end_ms-50, boundary))
+            self._timing_preview = {left_id:CueInterval(left.start_ms,boundary,left.speaker_id),
+                                   right_id:CueInterval(boundary,right.end_ms,right.speaker_id)}
+            self._drag_preview = (left.start_ms,boundary)
+            self._snap_target = dict(time=boundary,label=f'接缝 {boundary} ms · 左 {boundary-left.start_ms} ms · 右 {right.end_ms-boundary} ms',cue_id='',edge='')
+            self.setToolTip(self._snap_target['label'])
+            self._visible_cue_window_key = None
+            self.timing_preview_changed.emit(dict(self._timing_preview))
+            QWidget.update(self)
+            return
         target_speaker = self._speaker_at(point.toPoint())
         if target_speaker and target_speaker not in self.locked_speakers:
             self._drag_speaker_preview = target_speaker
@@ -3674,9 +4019,14 @@ class WaveformTimeline(QWidget):
         self._timing_frame_timer.stop()
         self._pending_timing_pointer = None
         self._drag = None
+        self._seam_candidate = None
+        self._roll_pair = None
+        if hasattr(self, '_last_timing_pointer_x'):
+            del self._last_timing_pointer_x
         self._drag_preview = None
         self._drag_speaker_preview = ""
         self._drag_originals = {}
+        self._ctrl_duration_drag = False
         self._timing_preview = {}
         self._snap_target = None
         self._resize_hover = None
@@ -3687,9 +4037,60 @@ class WaveformTimeline(QWidget):
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
 
+    def cancel_selection_gesture(self) -> bool:
+        if self._razor_drag is not None:
+            # Esc during a pressed cut: nothing is written; the release that
+            # follows is swallowed. (The page routes Esc here first.)
+            self._razor_swallow_release = True
+            self.interaction_changed.emit(False)
+            self._clear_razor_preview()
+            return True
+        if self._razor_hover is not None:
+            self._clear_razor_preview()  # hover only: Esc keeps its usual meaning
+        if self._merge_drag is not None or self._merge_anchor_id:
+            # Esc drops the pending merge (and its anchor); nothing is written.
+            if self._merge_drag is not None:
+                self._merge_swallow_release = True
+                self.interaction_changed.emit(False)
+            self._merge_drag = None
+            self._merge_anchor_id = ""
+            self._merge_hover_id = ""
+            self._refresh_merge_preview()
+            return True
+        busy=self._group_drag is not None or self._marquee_origin is not None
+        if not busy:return False
+        self._group_drag=None
+        self._snap_target=None
+        if self._marquee_origin is not None and self._marquee_base is not None:
+            self._publish_clip_selection(self._marquee_base)
+        self._marquee_origin=self._marquee_rect=None
+        self.interaction_changed.emit(False)
+        self.setCursor(self._forward_cursor if self.tool_mode=='track_forward' else Qt.ArrowCursor)
+        self.update()
+        return True
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Control and self._drag and self._drag[1] != 'roll' and getattr(self, '_seam_candidate', None):
+            self._flush_timing_preview()
+            cue_id, mode, origin_x, _, _ = self._drag
+            current = self._timing_preview.get(cue_id, self._drag_originals[cue_id])
+            boundary = current.start_ms if mode == 'left' else current.end_ms
+            # Rebase to the current pointer/edge; pressing Ctrl alone has no edit.
+            x = getattr(self, '_last_timing_pointer_x', origin_x)
+            self._begin_caption_roll(self._seam_candidate, x, boundary)
+            event.accept()
+            return
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.select_all_clips()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self._razor_drag is not None:
+            self.cancel_selection_gesture()  # cancel the pending cut
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape:
             self.selected_gap = None
+            self.cancel_selection_gesture()
             if self._clip_drag:
                 self._clip_drag = None
                 self._clip_scroll_timer.stop()
@@ -3724,6 +4125,11 @@ class WaveformTimeline(QWidget):
         super().hideEvent(event)
 
     def leaveEvent(self, event) -> None:
+        if self._razor_drag is None and self._razor_hover is not None:
+            self._clear_razor_preview()
+        if self._merge_drag is None and self._merge_hover_id:
+            self._merge_hover_id = ""
+            self._refresh_merge_preview()
         self._resize_hover = None
         self._track_resize_hover = False
         self._track_resize_hover_kind = ""
@@ -3737,6 +4143,18 @@ class WaveformTimeline(QWidget):
 
     @measured('mouse_release')
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button()==Qt.LeftButton and self._group_drag is not None:
+            drag,self._group_drag=self._group_drag,None
+            self._snap_target=None
+            self.interaction_changed.emit(False)
+            self.set_tool_mode(self.tool_mode)
+            self.setCursor(self._forward_cursor if self.tool_mode=='track_forward' else Qt.ArrowCursor)
+            if drag['moved'] and drag['delta']:
+                signal = self.group_copy_committed if drag.get('copy') else self.group_move_committed
+                signal.emit(drag['selection'],drag['delta'])
+            self.update()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._track_resize_drag is not None:
             self._track_resize_drag = None
             self.interaction_changed.emit(False)
@@ -3758,12 +4176,18 @@ class WaveformTimeline(QWidget):
             # it crosses a rounding boundary — the user sees the preview card
             # text but gets a different cut. The preview IS the commit source.
             preview_state = self._razor_preview()
-            self._razor_drag = None
+            self._clear_razor_preview()
             self.interaction_changed.emit(False)
             if preview_state is not None:
                 preview, cue = preview_state
+                # The controller re-resolves and refuses if it differs.
+                self.razor_committed_preview = (cue.id, preview)
                 self.razor_split_requested.emit(cue.id, int(preview.split_ms))
-            self.update()
+                self.razor_committed_preview = None
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._razor_swallow_release:
+            self._razor_swallow_release = False
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._merge_drag is not None:
@@ -3786,7 +4210,13 @@ class WaveformTimeline(QWidget):
                     self._merge_anchor_id = ""
                 # else: this click becomes the new anchor; keep it highlighted
                 # so the next click pairs with it.
+            self._merge_hover_id = ""
+            self._refresh_merge_preview()
             self.update()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._merge_swallow_release:
+            self._merge_swallow_release = False
             event.accept()
             return
         if self._track_reorder_drag:
@@ -3890,60 +4320,20 @@ class WaveformTimeline(QWidget):
             self._marquee_rect = None
             self.interaction_changed.emit(False)
             moved = rect.width() >= QApplication.startDragDistance() or rect.height() >= QApplication.startDragDistance()
-            if not moved:
+            if not moved and self.selected_gap is not None:
+                # Selecting a media hole must not become a cue-selection/seek
+                # callback that immediately clears the just-selected hole.
+                self.set_selected('')
+            elif not moved:
                 milliseconds = self._bounded_time_ms(self._x_to_time(event.position().x()))
                 self.playhead_ms = milliseconds
                 self.seek_requested.emit(milliseconds / 1000.0)
                 self.set_selected('')
                 self.selection_changed.emit(set())
             elif self.project:
-                start_ms = self._x_to_time(rect.left())
-                end_ms = self._x_to_time(rect.right())
-                sequence = sequence_of(self.project)
-                video_selected = {
-                    segment.id
-                    for segment in runtime_of(self.project).visible_segments(
-                        min(start_ms, end_ms), max(start_ms, end_ms) + 1,
-                    )
-                    if rect.intersects(self._video_track_rect())
-                    and segment.timeline_out_ms > min(start_ms, end_ms)
-                    and segment.timeline_in_ms < max(start_ms, end_ms) + 1
-                }
-                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    video_selected ^= self.selected_segment_ids
-                if video_selected:
-                    self.selected_segment_ids = video_selected
-                    self.selected_segment_id = next(iter(video_selected))
-                    self.segment_selected.emit(self.selected_segment_id)
-                    self.segment_selection_changed.emit(set(video_selected))
-                selected = set()
-                speaker_rects, _translation, _waveform = self._track_layout()
-                track_viewport = self._track_viewport()
-                hit_rect = rect.adjusted(0, -4, 0, 4)
-                horizontal_range = rect.height() < QApplication.startDragDistance()
-                for cue in self._cues_intersecting(min(start_ms, end_ms), max(start_ms, end_ms) + 1):
-                    track = speaker_rects.get(cue.speaker_id)
-                    if (
-                        track is None
-                        or not track.intersects(track_viewport)
-                        or (not horizontal_range and not track.intersects(hit_rect))
-                    ):
-                        continue
-                    selected.add(cue.id)
-                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    selected ^= set(
-                        self.selection_scope.materialize(
-                            [item.id for item in self._cues_by_start]
-                        )
-                    )
-                self.selected_ids = selected
-                self.selected_id = next(iter(sorted(selected)), '')
-                self.selection_scope = SelectionScope.explicit(
-                    selected, self.selected_id
-                )
-                self.selection_changed.emit(set(selected))
-                if self.selected_id:
-                    self.cue_selected.emit(self.selected_id)
+                self._publish_clip_selection(self._selection_at_rect(rect))
+            self._marquee_base=None
+            self._marquee_candidates=[]
             self.update()
             event.accept()
             return
@@ -3952,11 +4342,19 @@ class WaveformTimeline(QWidget):
         self._flush_timing_preview()
         changes = {key: value for key, value in self._timing_preview.items()
                    if value != self._drag_originals[key]}
+        ctrl_click_id = self._drag[0] if self._ctrl_duration_drag and not changes else ''
         self._clear_timing_edit()
         if changes:
             self.timing_edit_committed.emit(changes)
         self.timing_edit_finished.emit(bool(changes))
         self.interaction_changed.emit(False)
+        if ctrl_click_id:
+            selection = self._selection_before_press
+            if ctrl_click_id in selection.cue_ids:
+                selection.cue_ids.remove(ctrl_click_id)
+            else:
+                selection.cue_ids.add(ctrl_click_id)
+            self._publish_clip_selection(selection)
 
     def wheelEvent(self, event: QWheelEvent):
         self._follow_suspended_until = perf_counter() + 2.0
@@ -3975,6 +4373,9 @@ class WaveformTimeline(QWidget):
         else:
             shift = round(self.visible_duration_ms * (-0.12 if delta > 0 else 0.12))
             self.set_visible_window(self.visible_start_ms + shift, self.visible_duration_ms)
+        if self.tool_mode == "razor" and self._razor_drag is None and self._razor_hover is not None:
+            # Keep the hover cut under the pointer after zooming/scrolling.
+            self._update_razor_hover(event.position().toPoint(), event.modifiers())
         event.accept()
 
     def resizeEvent(self, event) -> None:

@@ -5,12 +5,51 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 import re
 
-VERSION='char-evidence-v1'
+VERSION='entity-span-evidence-v2'
 PARTICLES=frozenset('啊呀呢吧嘛吗啦哦呃嗯')
 NUMBERS=frozenset('0123456789零〇一二两三四五六七八九十百千万亿')
 
 
 def content(text):return re.sub(r'[\s，。！？、,.!?；;：:]','',str(text))
+
+
+def usable_transcript(text):
+    """Damaged decoding is unavailable evidence, never an independent vote."""
+    value = str(text or '')
+    return bool(value) and not any(
+        char == '\ufffd' or 0xd800 <= ord(char) <= 0xdfff
+        or (ord(char) < 32 and char not in '\t\r\n') for char in value)
+
+
+def replacement_spans(source, reference):
+    """Keep whole identifiers and contiguous substitutions together.
+
+    The former character voting aligned the p in Sop with a Chinese particle
+    after two recognizers omitted the name. Equal votes at that position were
+    not evidence for the same word. Case and spelling of identifiers belong to
+    terminology adjudication, not this transcript consensus pass.
+    """
+    operations = align(source, reference)
+    spans = []
+    pending = None
+    for start, end, old, new in operations:
+        # A leading interjection is a separate utterance unit. Different
+        # guesses for that unit cannot swallow a later shared body span.
+        if start == 0 and end == 1 and old in PARTICLES:
+            if old != new:
+                spans.append((start, end, old, new))
+            continue
+        if old == new:
+            if pending is not None:
+                spans.append(tuple(pending)); pending = None
+            continue
+        if pending is None:
+            pending = [start, end, old, new]
+        else:
+            pending[1] = end; pending[2] += old; pending[3] += new
+    if pending is not None:
+        spans.append(tuple(pending))
+    return spans
 
 
 def align(primary,reference):
@@ -33,20 +72,23 @@ def align(primary,reference):
     return list(reversed(operations))
 
 
-def arbitrate(primary,firered,qwen,*,manual_text=None,start_ms=0,end_ms=0):
+def arbitrate(primary,firered,qwen,*,manual_text=None,start_ms=0,end_ms=0,primary_model='MOSS'):
     source=content(primary);refs=[content(firered),content(qwen)]
     # Bound comparison to a single cue. Long segment evidence needs upstream
     # time slicing, and cannot be treated as an aligned acoustic observation.
-    valid=all(refs) and max(map(len,[source,*refs]))<=512
+    valid=all(usable_transcript(x) for x in (primary,firered,qwen)) and max(map(len,[source,*refs]))<=512
     aligned=[align(source,ref) for ref in refs] if valid else []
-    votes=Counter(row for alignment in aligned for row in set(alignment) if row[2]!=row[3])
+    votes=Counter(row for ref in refs for row in set(replacement_spans(source,ref))) if valid else Counter()
     edits=[];unresolved=[]
     for (start,end,old,new),count in sorted(votes.items()):
         support_context=valid and all(SequenceMatcher(None,source,ref,autojunk=False).ratio()>=.58 for ref in refs)
         safe=count==2 and support_context and not any(c in NUMBERS for c in old+new)
+        safe=safe and bool(old) and bool(new) and len(old)==len(new) and len(old)<=4
+        # Never split/change a Latin entity, including a numeric player ID.
+        safe=safe and not re.search(r'[A-Za-z0-9]',old+new)
         # Uncertain interjections remain MOSS; a disputed first character must
         # not invalidate a later phrase supported by both recognizers.
-        safe=safe and not (start==0 or (old in PARTICLES and new in PARTICLES))
+        safe=safe and not (start==0 or (len(old)==len(new)==1 and (old in PARTICLES or new in PARTICLES)))
         row={'start':start,'end':end,'from':old,'to':new,'support':count,
              'confidence_source':'two_independent_asr_transcripts; not acoustic probability'}
         (edits if safe else unresolved).append(row)
@@ -57,7 +99,7 @@ def arbitrate(primary,firered,qwen,*,manual_text=None,start_ms=0,end_ms=0):
     return {'version':VERSION,'selected_text':corrected if edits or manual_text is not None else primary,'reason':reason,
         'timestamp':datetime.now(timezone.utc).isoformat(), 'start_ms':start_ms,'end_ms':end_ms,
         'candidates':[{'provider':provider,'model':model,'text':text,'start_ms':start_ms,'end_ms':end_ms}
-            for provider,model,text in [('local','MOSS',primary),('local','FireRed',firered),('local','Qwen',qwen)]],
+            for provider,model,text in [('local',primary_model,primary),('local','FireRed',firered),('local','Qwen',qwen)]],
         'alignment':aligned,'accepted_spans':edits,'unresolved_spans':unresolved,'acoustic_verified':False}
 
 

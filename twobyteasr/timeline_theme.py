@@ -76,6 +76,10 @@ class TimelinePalette:
     inline_editor_border: str
     inline_editor_text: str
     speaker_accents: tuple[str, ...] = field(default_factory=tuple)
+    # Main video lane hue; empty keeps the historical clip_selected_border.
+    video_accent: str = ""
+    video_clip: str = ""
+    video_clip_border: str = ""
 
     def clip_fill(self, speaker: QColor, selected: bool = False) -> QColor:
         fill = mix(speaker, self.track_background, self.clip_fill_mix).lighter(
@@ -270,23 +274,29 @@ SLATE_TIMELINE = TimelinePalette(
     speaker_accents=("#8fc0b8", "#a3a7d1", "#d9a08f", "#c4c58e", "#9db6c9"),
 )
 
+# 2026-10-07 visual system: grape follows the new neutral grape-graphite
+# tokens (ui_theme.THEMES["grape"]). Speaker accent defaults are unchanged so
+# existing speaker/clip identity colours stay recognisable.
 GRAPE_TIMELINE = TimelinePalette(
     key="grape", dark=True,
-    background="#211a26", header="#281e2e", ruler="#1b141f",
-    grid_major="#503a56", grid_minor="#392b40",
-    track_background="#2b2131", track_alternate="#302637", track_header="#281e2e",
-    playhead="#ed8796", playhead_label_text="#211826", time_label="#dcc2d2",
-    clip_text="#fff1f6", clip_selected_border="#e8b8cf",
-    clip_selected_glow="rgba(168,62,96,60)", clip_multi_border="#bd859f",
-    clip_border_shade=0.22, clip_fill_mix=0.64, clip_fill_lighten=104,
-    handle_dot_fill="#fff1f6", handle_dot_border="#e8b8cf",
-    waveform="rgba(218,184,201,170)", waveform_edge="#dab8c9", waveform_center="#795570",
-    waveform_background="#241b2a", waveform_header_text="#e5ccd9", waveform_db_text="#bc9bad",
-    header_letter="#bc9bad", header_name="#fff1f6", header_icon="#d5b5c8", header_hover="#49344c",
-    translation_clip="#493042", translation_clip_border="#b67e99", translation_clip_text="#fff1f6",
-    translation_dot="#d89ab4", selection_rect="#e8b8cf", selection_fill="rgba(168,62,96,38)",
-    inline_editor_bg="#302337", inline_editor_border="#e8b8cf", inline_editor_text="#fff1f6",
-    speaker_accents=("#ad95cc", "#d99ab2", "#91b7c4", "#b9bc95", "#bd8f82"),
+    background="#17131a", header="#1e1a22", ruler="#141117",
+    grid_major="#3c3443", grid_minor="#2a2430",
+    track_background="#1f1b24", track_alternate="#231e29", track_header="#1e1a22",
+    playhead="#ec8db0", playhead_label_text="#19151c", time_label="#c9bfc8",
+    clip_text="#f4eee9", clip_selected_border="#f3dbe5",
+    clip_selected_glow="rgba(236,141,176,56)", clip_multi_border="#b49aaa",
+    clip_border_shade=0.22, clip_fill_mix=0.5, clip_fill_lighten=100,
+    handle_dot_fill="#f4eee9", handle_dot_border="#ec8db0",
+    waveform="rgba(110,196,214,150)", waveform_edge="#6ec4d6", waveform_center="#2f4a52",
+    waveform_background="#1b171e", waveform_header_text="#d0c6cd", waveform_db_text="#a69ba6",
+    header_letter="#a69ba6", header_name="#f4eee9", header_icon="#c9bfc8", header_hover="#2f2935",
+    translation_clip="#2f2935", translation_clip_border="#5d5266", translation_clip_text="#f4eee9",
+    translation_dot="#ec8db0", selection_rect="#ec8db0", selection_fill="rgba(236,141,176,30)",
+    inline_editor_bg="#252028", inline_editor_border="#86b4f7", inline_editor_text="#f4eee9",
+    # 2026-10-07: distinct speaker hues (UI fallback only; a speaker's own
+    # colour in the project always wins) and a slate-blue main video lane.
+    speaker_accents=("#a990e0", "#e0809f", "#dc9a7c", "#c9b27e", "#7fb8c2"),
+    video_accent="#7f97c2", video_clip="#4a536b", video_clip_border="#7f97c2",
 )
 
 TIMELINE_PALETTES: dict[str, TimelinePalette] = {

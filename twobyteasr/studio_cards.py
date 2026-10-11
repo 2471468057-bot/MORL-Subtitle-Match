@@ -93,6 +93,12 @@ class ReviewCandidateCard(QFrame):
             badge.setObjectName("reviewSourceBadge")
             badge.setProperty("current", label == "当前")
             src_row.addWidget(badge, 0)
+        if candidate.context_only:
+            context = QLabel("原始段上下文 · 仅供参考")
+            context.setObjectName("reviewSourceContext")
+            src_row.addWidget(context, 0)
+            self.setEnabled(False)
+            self.setToolTip("包含未能精确对齐本条的原始段落，请结合原音编辑。")
         src_row.addStretch(1)
         body.addLayout(src_row)
 

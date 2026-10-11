@@ -172,6 +172,7 @@ def build_audio_decode_command(
     gain_db: float = 0.,
     source_out_ms: int | None = None,
     av_sync_map=None,
+    audio_envelopes=(), project_ms=0, transport_rate=1., stream_index=0,
 ) -> list[str]:
     from .studio_track_gain import gain_amplitude
     # Window positions are audio-content ms; a gappy recording's file
@@ -194,11 +195,15 @@ def build_audio_decode_command(
         filters.append(f"volume={gain_amplitude(gain_db):.9f}")
     if source_out_ms is not None:
         filters.append(f"atrim=duration={max(0, source_out_ms-source_ms)/1000.0/max(.125,rate):.6f}")
+    from .audio_envelope import envelope_filter
+    envelope = envelope_filter(audio_envelopes, origin_ms=project_ms, clock_rate=transport_rate, channels=channels)
+    if envelope:
+        filters.append(envelope.rstrip(','))
     return [
         str(Path(ffmpeg)), "-hide_banner", "-loglevel", "error", "-nostdin",
         *(["-ss", f"{max(0, seek_ms) / 1000.0:.6f}"] if seek_ms >= 250 else []),
         "-i", str(Path(source)),
-        "-vn", "-sn", "-dn", "-af", ",".join(filters),
+        "-map", f"0:a:{int(stream_index)}", "-vn", "-sn", "-dn", "-af", ",".join(filters),
         "-f", str(pcm_format), "-ac", str(max(1, int(channels))),
         "-ar", str(max(1, int(sample_rate))), "pipe:1",
     ]
@@ -240,8 +245,12 @@ def build_audio_mix_command(ffmpeg, layers, *, transport_rate=1.0,
                 if limit else "")
         pad = "apad=pad_dur=0.1," if limit and abs(lane_rate-1.) > .000001 else ""
         pad_duration = mix_duration * joint_rate + .1 if joint_rate is not None and mix_duration is not None else mix_duration
-        filters.append(f"[{index}:a:0]{head}{limit}asetpts=PTS-STARTPTS,{pad}{_atempo_chain(lane_rate)},{tail}"
-                       f"volume={1. if separate else gain_amplitude(layer.get('gain_db', 0.)):.9f},"
+        from .audio_envelope import envelope_filter
+        clip_rate = max(.01,float(layer.get('playback_rate') or 1.))
+        envelope = envelope_filter(layer.get('audio_envelopes',()), origin_ms=layer.get('project_ms',0),
+            clock_rate=lane_rate/clip_rate, channels=channels)
+        filters.append(f"[{index}:a:{int(layer.get('stream_index',0))}]{head}{limit}asetpts=PTS-STARTPTS,{pad}{_atempo_chain(lane_rate)},{tail}"
+                       f"{envelope}volume={1. if separate else gain_amplitude(layer.get('gain_db', 0.)):.9f},"
                        f"aresample={sample_rate},aformat=sample_fmts=flt:channel_layouts={channels}c,"
                        +(f"apad=whole_dur={pad_duration:.6f}" if (separate or joint_rate is not None) and pad_duration is not None else "apad=pad_dur=0.1")+f"[a{index}]")
     inputs = ''.join(f"[a{i}]" for i in range(len(layers)))
@@ -334,7 +343,9 @@ class _PcmRingDevice(QIODevice):
 
     def set_gains(self, gains):
         with self._condition:
-            self._mix_gains = np.array([gains.get(key,1.) for key in self._mix_ids],dtype=np.float32)
+            values = [gains.get(key,1.) for key in self._mix_ids] if isinstance(gains, Mapping) else list(gains)
+            if len(values) == len(self._mix_ids):
+                self._mix_gains = np.array(values,dtype=np.float32)
 
     def _mix_output(self, payload):
         spec = self._mix_spec
@@ -774,7 +785,7 @@ class _AudioEngineWorker(QObject):
             "sink_volume": self.sink.volume() if self.sink is not None else None,
             "device_endpoint_generation": self._endpoint_generation,
             "last_pcm_write_monotonic": device.last_pcm_write_at if device is not None else 0.,
-            "active_sources": [dict(x) for x in self._mix_layers] or ([{'source_path':self._source_path,'track_id':self._track_id,'gain_db':self._gain_db}] if self._source_path else []),
+            "active_sources": [dict(x) for x in self._mix_layers] or ([dict(getattr(self,'_active_input',{}),source_path=self._source_path,gain_db=self._gain_db)] if self._source_path else []),
             "sink_state": self.sink.state().name if self.sink is not None else None,
             "sink_error": self.sink.error().name if self.sink is not None else None,
             "output_format": {
@@ -928,6 +939,8 @@ class _AudioEngineWorker(QObject):
             pcm_format="f32le",
             gain_db=0., source_out_ms=self._source_out_ms,
             av_sync_map=self._av_sync_map,
+            audio_envelopes=getattr(self,'_audio_envelopes',()), project_ms=getattr(self,'_project_start_ms',0),
+            transport_rate=self._transport_rate, stream_index=getattr(self,'_stream_index',0),
         )
         if len(self._mix_layers) > 1:
             command = build_audio_mix_command(
@@ -1113,11 +1126,17 @@ class _AudioEngineWorker(QObject):
             discontinuity = transport_generation is not None and transport_generation != self._transport_generation
             self._transport_generation = transport_generation
             mix_layers = tuple(request.get("mix_layers") or ())
-            mix_identity = tuple((item.get("clip_id"), item.get("source_path"), item.get("playback_rate", 1.0), item.get("source_out_ms"))
+            mix_identity = tuple((item.get("track_id"), item.get("audio_track_id"), item.get("clip_id"),
+                                  item.get("audio_clip_id"), item.get("source_path"),
+                                  item.get("playback_rate", 1.0), item.get("source_out_ms"), repr(item.get("audio_envelopes",())))
                                  for item in mix_layers)
             discontinuity = discontinuity or mix_identity != self._mix_identity
             self._mix_layers, self._mix_identity = mix_layers, mix_identity
             self._transport_rate = float(request.get("transport_rate") or 1.)
+            self._audio_envelopes = request.get('audio_envelopes',())
+            self._project_start_ms = request.get('project_ms',0)
+            self._stream_index = int(request.get('stream_index',0))
+            self._active_input = {key:request[key] for key in ('track_id','audio_track_id','clip_id','audio_clip_id','asset_id','source_ms','project_ms') if key in request}
             gain_db = float(request.get("gain_db", 0.))
             source_out_ms = request.get("source_out_ms")
             discontinuity = discontinuity or source_out_ms != self._source_out_ms
@@ -1126,7 +1145,7 @@ class _AudioEngineWorker(QObject):
             if self.device is not None:
                 from .studio_track_gain import gain_amplitude
                 inputs = mix_layers or (request,)
-                self.device.set_gains({x.get('audio_track_id') or x.get('track_id',''):gain_amplitude(x.get('gain_db',0.)) for x in inputs})
+                self.device.set_gains([gain_amplitude(x.get('gain_db',0.)) for x in inputs])
             source_path = str(request.get("source_path") or "")
             audible = bool(request.get("audible", False) and source_path)
             self._paused = bool(request.get("paused", True))
@@ -1446,9 +1465,12 @@ class StudioAudioEngine(QObject):
         self._draining = False
         now = time.monotonic()
         target = int(payload.get('source_ms') or 0)
-        identity = (str(payload.get('source_path') or ''), str(payload.get('clip_id') or ''),
-                    payload.get('source_out_ms'),
-                    tuple((item.get('clip_id'), item.get('source_out_ms'))
+        identity = (str(payload.get('source_path') or ''), str(payload.get('track_id') or ''),
+                    str(payload.get('audio_track_id') or ''), str(payload.get('clip_id') or ''),
+                    str(payload.get('audio_clip_id') or ''),
+                    payload.get('source_out_ms'), repr(payload.get('audio_envelopes',())),
+                    tuple((item.get('track_id'), item.get('audio_track_id'), item.get('clip_id'),
+                           item.get('audio_clip_id'), item.get('source_out_ms'), repr(item.get('audio_envelopes',())))
                           for item in payload.get('mix_layers', ())))
         effective_rate = float(payload.get('playback_rate') or 1.) * float(transport_rate)
         previous = self._last_source_request

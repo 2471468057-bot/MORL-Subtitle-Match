@@ -1,10 +1,12 @@
 """A quiet, cached project-cover backdrop for the Home Studio entrance."""
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QImage, QImageReader, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame
+from PySide6.QtCore import QRectF, QSize, Qt, Signal, QTimer
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QImage, QImageReader, QLinearGradient, QPainter,
+                           QPainterPath, QPen)
+from PySide6.QtWidgets import QFrame, QSizePolicy, QToolButton, QWidget
 
+from .ui_zoom import px as _zpx  # painted text follows the interface zoom
 from .theme_manager import theme_key
 from .ui_theme import theme_definition
 
@@ -18,7 +20,11 @@ def studio_paper_colors(theme):
     if theme.key == "warm":
         return "#F2E3C4", "#F8EBD2", "#BE9A60", "#46351F", "#78603F"
     if theme.key == "grape":
-        return "#593344", "#714053", "#B9819C", "#FFF1F6", "#E6BFD1"
+        # 2026-10-07: a quiet brand wash over the card surface instead of a
+        # saturated pink slab; ink and secondary text follow the theme.
+        from .ui_theme import blend_hex
+        return (blend_hex(theme.surface, theme.accent, 0.13), blend_hex(theme.surface, theme.accent, 0.2),
+                theme.border_strong, theme.text, theme.text_secondary)
     if theme.key == "lavender":
         return "#494361", "#5A5274", "#A79BC4", "#FAF3FF", "#D9CEE9"
     if theme.key == "slate":
@@ -46,6 +52,313 @@ def latest_studio_entry(records):
     return "", ""
 
 
+def _edited_text(record) -> str:
+    from datetime import datetime
+    for key in ("last_opened", "modified", "updated_at"):
+        raw = str(record.get(key) or "")
+        try:
+            stamp = datetime.fromisoformat(raw) if raw else None
+        except ValueError:
+            stamp = None
+        if stamp is not None:
+            return (stamp.astimezone() if stamp.tzinfo else stamp).strftime("%m-%d %H:%M")
+    return ""
+
+
+def recent_studio_entries(records, limit=12):
+    """Openable recent projects in recent-open order, with the library's cover rule."""
+    entries = []
+    for item in records if isinstance(records, list) else []:
+        record = item if isinstance(item, dict) else {"path": str(item)}
+        name, cover = latest_studio_entry([record])
+        if not name:
+            continue
+        entries.append({"path": str(record.get("path") or ""), "name": name, "cover": cover,
+                        "count": int(record.get("cue_count", 0) or 0), "edited": _edited_text(record)})
+        if len(entries) >= limit:
+            break
+    return entries
+
+
+def _load_cover(path, cache):
+    """(key, QImage) for ``path``; reuses ``cache`` while mtime/size match."""
+    try:
+        stat = Path(path).stat() if path and Path(path).is_file() else None
+        key = (path, stat.st_mtime_ns, stat.st_size) if stat else None
+    except OSError:
+        key = None
+    if key == cache[0]:
+        return cache
+    image = QImage()
+    if key:
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid():
+            reader.setScaledSize(size.scaled(1280, 720, Qt.AspectRatioMode.KeepAspectRatio))
+        image = reader.read()
+    return key, image
+
+
+class _HoverButton(QToolButton):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+
+def _entry_meta(entry):
+    from .i18n import tr
+    count = entry.get("count", 0)
+    edited = entry.get("edited", "")
+    return tr('{count} 条字幕 · {edited}', count=count, edited=edited) if edited else tr('{count} 条字幕', count=count)
+
+
+class RecentProjectHero(_HoverButton):
+    """The latest project as one cover with a soft scrim and its name/info:
+    a project entrance, not a poster (2026-10-08). Empty: a quiet placeholder."""
+
+    open_requested = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("homeRecentHero")
+        self.setProperty("uiZoomOwnSize", True)  # cover keeps its own 16:10 cap
+        self.entry = {}
+        self._cover = (None, QImage())
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.clicked.connect(lambda: self.open_requested.emit(self.entry.get("path", "")))
+
+    def sizeHint(self):
+        return QSize(420, 170)
+
+    def minimumSizeHint(self):
+        return QSize(200, 150)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # The cover follows the window, but never taller than 16:10.
+        cap = max(150, int(self.width() * 0.625))
+        if self.maximumHeight() != cap:
+            self.setMaximumHeight(cap)
+
+    def set_entry(self, entry):
+        self.entry = dict(entry or {})
+        self.setAccessibleName(self.entry.get("name", ""))
+        self.setToolTip(self.entry.get("path", ""))
+        self._cover = _load_cover(self.entry.get("cover") or "", self._cover)
+        self.update()
+
+    def paintEvent(self, _event):
+        from .i18n import tr
+        from .ui_theme import blend_hex
+        theme = theme_definition(theme_key())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        shape = QPainterPath()
+        shape.addRoundedRect(rect, 14, 14)
+        p.save()
+        p.setClipPath(shape)
+        image = self._cover[1]
+        if not image.isNull():
+            factor = max(rect.width() / image.width(), rect.height() / image.height())
+            w, h = image.width() * factor, image.height() * factor
+            p.drawImage(QRectF(rect.center().x() - w / 2, rect.center().y() - h / 2, w, h), image)
+        else:
+            fill = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            zone = theme.zone_colors["studio"]
+            fill.setColorAt(0, QColor(blend_hex(theme.surface, zone, 0.26)))
+            fill.setColorAt(1, QColor(blend_hex(theme.surface, zone, 0.08)))
+            p.fillRect(rect, fill)
+            import qtawesome as qta
+            glyph = 40
+            p.setOpacity(0.55)
+            p.drawPixmap(int(rect.center().x() - glyph / 2), int(rect.center().y() - glyph / 2 - 24),
+                         qta.icon("fa5s.closed-captioning", color=zone).pixmap(glyph, glyph))
+            p.setOpacity(1)
+        if self.entry:
+            # Soft scrim: clear at the top, dark under the text in every theme.
+            scrim = QLinearGradient(rect.left(), rect.top() + rect.height() * 0.35, rect.left(), rect.bottom())
+            scrim.setColorAt(0, QColor(12, 10, 18, 0))
+            scrim.setColorAt(1, QColor(12, 10, 18, 215))
+            p.fillRect(rect, scrim)
+        p.restore()
+        edge = theme.focus if self.hasFocus() else (theme.accent_text if self._hovered else theme.border)
+        p.setPen(QPen(QColor(edge), 2 if self.hasFocus() else 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(shape)
+        font = QFont(self.font())
+        left, width = rect.x() + 20, rect.width() - 40
+        if not self.entry:
+            font.setPixelSize(_zpx(15))
+            font.setWeight(QFont.Weight.DemiBold)
+            p.setFont(font)
+            p.setPen(QColor(theme.text_secondary))
+            p.drawText(QRectF(rect.x(), rect.center().y() + 4, rect.width(), 22), Qt.AlignmentFlag.AlignCenter,
+                       tr('还没有工程'))
+            font.setPixelSize(_zpx(13))
+            font.setWeight(QFont.Weight.Normal)
+            p.setFont(font)
+            p.setPen(QColor(theme.text_muted))
+            p.drawText(QRectF(rect.x(), rect.center().y() + 28, rect.width(), 20), Qt.AlignmentFlag.AlignCenter,
+                       tr('识别完成后会自动建立工程'))
+            p.end()
+            return
+        bottom = rect.bottom() - 18
+        font.setPixelSize(_zpx(13))
+        font.setWeight(QFont.Weight.Normal)
+        p.setFont(font)
+        p.setPen(QColor(255, 255, 255, 200))
+        meta = _entry_meta(self.entry)
+        p.drawText(QRectF(left, bottom - 20, width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(font).elidedText(meta, Qt.TextElideMode.ElideRight, int(width)))
+        font.setPixelSize(_zpx(20))
+        font.setWeight(QFont.Weight.DemiBold)
+        p.setFont(font)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(QRectF(left, bottom - 50, width, 28), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(font).elidedText(self.entry.get("name", ""), Qt.TextElideMode.ElideMiddle, int(width)))
+        font.setPixelSize(_zpx(12))
+        font.setWeight(QFont.Weight.Medium)
+        p.setFont(font)
+        p.setPen(QColor(255, 255, 255, 170))
+        p.drawText(QRectF(left, bottom - 74, width, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   tr('继续编辑') + "  →")
+        p.end()
+
+
+class RecentProjectRow(_HoverButton):
+    """One recent project line: clear name, quieter count and time. The
+    current row (the one the cover shows) carries the Studio zone accent."""
+
+    hovered = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("homeRecentRow")
+        self.entry = {}
+        self.current = False
+
+    def set_entry(self, entry):
+        self.entry = dict(entry)
+        self.setAccessibleName(self.entry.get("name", ""))
+        self.setToolTip(self.entry.get("path", ""))
+        self.update()
+
+    def set_current(self, current):
+        if bool(current) != self.current:
+            self.current = bool(current)
+            self.update()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.hovered.emit(True)
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.hovered.emit(False)
+
+    def paintEvent(self, _event):
+        from .ui_theme import blend_hex
+        theme = theme_definition(theme_key())
+        zone = theme.zone_colors["studio"]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0, 2, 0, -2)
+        if self.current or self._hovered or self.hasFocus():
+            fill = blend_hex(theme.surface, zone, 0.2 if self._hovered else 0.13)
+            edge = theme.focus if self.hasFocus() else blend_hex(theme.surface, zone, 0.55 if self._hovered else 0.3)
+            p.setPen(QPen(QColor(edge), 1))
+            p.setBrush(QColor(fill))
+            p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 9, 9)
+        if self.current:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(zone))
+            p.drawRoundedRect(QRectF(rect.x() + 6, rect.y() + 9, 3, rect.height() - 18), 1.5, 1.5)
+        font = QFont(self.font())
+        font.setPixelSize(_zpx(12))
+        font.setWeight(QFont.Weight.Normal)
+        meta = _entry_meta(self.entry)
+        meta_width = min(QFontMetrics(font).horizontalAdvance(meta) + 4, int(rect.width() * 0.42))
+        p.setFont(font)
+        muted = QColor(theme.text_muted)
+        muted.setAlpha(200)
+        p.setPen(muted)
+        p.drawText(QRectF(rect.right() - 14 - meta_width, rect.y(), meta_width, rect.height()),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(font).elidedText(meta, Qt.TextElideMode.ElideRight, meta_width))
+        font.setPixelSize(_zpx(15))
+        font.setWeight(QFont.Weight.DemiBold if self.current else QFont.Weight.Medium)
+        name_width = int(rect.width() - 22 - meta_width - 24)
+        p.setFont(font)
+        p.setPen(QColor(theme.text))
+        p.drawText(QRectF(rect.x() + 20, rect.y(), name_width, rect.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(font).elidedText(self.entry.get("name", ""), Qt.TextElideMode.ElideMiddle, name_width))
+        p.end()
+
+
+class RecentProjectList(QWidget):
+    """Recent projects as rows; the first is the current one (shown on the
+    cover). Hovering a row previews it on the cover; a click opens it."""
+
+    open_requested = Signal(str)
+    preview_requested = Signal(int)
+    ROW = 44
+
+    def __init__(self, parent=None, limit=4):
+        super().__init__(parent)
+        self.limit = limit
+        self.rows = []
+        self.entries = []
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self):
+        return QSize(320, self.ROW * len(self.entries))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def set_entries(self, entries):
+        self.entries = list(entries)[:self.limit]
+        while len(self.rows) < len(self.entries):
+            row = RecentProjectRow(self)
+            index = len(self.rows)
+            row.clicked.connect(lambda _=False, r=row: self.open_requested.emit(r.entry.get("path", "")))
+            row.hovered.connect(lambda inside, i=index: self.preview_requested.emit(i if inside else -1))
+            self.rows.append(row)
+        for index, row in enumerate(self.rows):
+            if index < len(self.entries):
+                row.set_entry(self.entries[index])
+                row.setGeometry(0, index * self.ROW, self.width(), self.ROW)
+                row.show()
+            else:
+                row.hide()
+        self.set_current(-1)
+        self.updateGeometry()
+
+    def set_current(self, index):
+        for position, row in enumerate(self.rows):
+            row.set_current(position == index)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for index, row in enumerate(self.rows[:len(self.entries)]):
+            row.setGeometry(0, index * self.ROW, self.width(), self.ROW)
+
+
 class StudioEntryCard(QFrame):
     clicked = Signal()
     refresh_requested = Signal()
@@ -55,6 +368,8 @@ class StudioEntryCard(QFrame):
         self._cover = QImage()
         self._cover_key = None
         self._pressed = False
+        # Home (2026-10-08) shows real recent covers instead of the painted backdrop.
+        self.show_backdrop = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         bind_text(self, '进入字幕工作台', property='accessibleName')
@@ -118,6 +433,8 @@ class StudioEntryCard(QFrame):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        if not self.show_backdrop:
+            return
         theme = theme_definition(theme_key())
         paper, highlight, edge, ink, muted = studio_paper_colors(theme)
         p = QPainter(self)

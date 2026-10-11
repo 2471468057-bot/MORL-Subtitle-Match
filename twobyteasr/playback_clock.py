@@ -60,6 +60,7 @@ class PlaybackClock:
         self._playback_rate = 1.0
         self._rate_correction = 0.0
         self._paused = True
+        self._presentation_held = False
         self._seeking = False
         self._exact_seek_pending = False
         self._seek_target_ms: float | None = None
@@ -184,7 +185,7 @@ class PlaybackClock:
         elapsed_ms: float | None = None,
     ) -> float:
         current = time.monotonic() if now is None else float(now)
-        if self._paused:
+        if self._paused or self._presentation_held:
             return max(0.0, self._presentation_anchor_ms)
         elapsed = (
             max(0.0, float(elapsed_ms)) / 1000.0
@@ -193,6 +194,19 @@ class PlaybackClock:
         )
         effective_rate = max(0.0, self._playback_rate + self._rate_correction)
         return max(0.0, self._presentation_anchor_ms + elapsed * 1000.0 * effective_rate)
+
+    def set_presentation_hold(self, held: bool) -> None:
+        """Hold an acknowledged frame while its physical transport resumes.
+
+        User play/pause intent and observed media time remain unchanged. The
+        waiting interval cannot become synthetic playback progress on release.
+        """
+        held = bool(held)
+        if held == self._presentation_held:
+            return
+        self._presentation_anchor_ms = self._snapshot.presentation_media_ms
+        self._presentation_anchor_ts = time.monotonic()
+        self._presentation_held = held
 
     @measured('clock_sample')
     def sample_presentation(

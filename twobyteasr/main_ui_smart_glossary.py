@@ -105,12 +105,13 @@ class SmartGlossaryDialog(QWidget):
     Retrieval first, AI optional.
     """
 
-    def __init__(self, owner: "MainWindow", game_name: str, container: QWidget | None = None):
+    def __init__(self, owner: "MainWindow", game_name: str, container: QWidget | None = None, *, library_id=None):
         parent = container if container is not None else owner
         super().__init__(parent)
         self.owner = owner
         self.legacy = owner.legacy
         self.game_name = str(game_name)
+        self.library_id = str(library_id or getattr(self.legacy, 'resolve_glossary_identity', lambda _name: '')(game_name) or game_name)
         self._candidates = []
         self._worker = None
         # Content only — host provides title/X/backdrop/Esc.
@@ -760,7 +761,7 @@ class SmartGlossaryDialog(QWidget):
             origin = "AI 学习" if "ai" in str(candidate.source).casefold() else "用户确认"
             category = category_label(candidate.category)
             if self.legacy.add_learned_mapping(
-                self.game_name,
+                self.library_id,
                 candidate.term,
                 candidate.term,
                 category=category,
@@ -769,7 +770,7 @@ class SmartGlossaryDialog(QWidget):
                 added_terms += 1
             for alias in candidate.aliases:
                 if self.legacy.add_learned_mapping(
-                    self.game_name,
+                    self.library_id,
                     alias,
                     candidate.term,
                     category=category,
@@ -780,7 +781,16 @@ class SmartGlossaryDialog(QWidget):
         if added_aliases:
             message += f"、{added_aliases} 条纠错映射"
         message += f" 到《{self.game_name}》"
+        if self.library_id not in getattr(self.owner, '_enabled_glossary_ids', lambda: [])():
+            message += '；已保存，尚未用于本批，请在词库页点击「用于本批字幕」。'
         self.owner.term_hint.setText(message)
+        refresh = getattr(self.owner, '_refresh_content_choices', None)
+        if callable(refresh):
+            refresh()
+        library = getattr(self.owner, '_term_library_dialog', None)
+        if library is not None:
+            library._notify_library_changed()
+            library.refresh_current_game()
         # Warm hosted close (no native dialog). Show a small toast in content if possible.
         try:
             self._show_inline_toast(message, 1400)

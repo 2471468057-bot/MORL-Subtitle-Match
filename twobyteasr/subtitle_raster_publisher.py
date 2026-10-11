@@ -36,7 +36,7 @@ class SubtitleRasterPublisher:
     def _run(self):
         from .overlay_buffer import OverlayBuffer
         import numpy as np
-        buffers={};slots={}
+        buffers={};slots={};last_frames={}
         try:
             while True:
                 with self.condition:
@@ -45,6 +45,8 @@ class SubtitleRasterPublisher:
                     overlay_id,(epoch,image,target,opacity,controller,cue_id)=self.pending.popitem(last=False)
                 if not self.current(overlay_id,epoch) or not controller.running:continue
                 try:
+                    identity=(epoch,image.cacheKey(),target.getRect(),opacity,cue_id)
+                    if last_frames.get(overlay_id)==identity:continue
                     image=image.convertToFormat(QImage.Format_ARGB32_Premultiplied)
                     if opacity<.999:
                         faded=QImage(image.size(),QImage.Format_ARGB32_Premultiplied);faded.fill(Qt.transparent)
@@ -62,16 +64,19 @@ class SubtitleRasterPublisher:
                         buffer=buffers[key]=OverlayBuffer(self.folder/f'native-{self.identity}-{overlay_id}-{slot}.rgba',len(pixels))
                     buffer.write(pixels)
                     if not self.current(overlay_id,epoch):continue
-                    acknowledged=threading.Event()
+                    acknowledged=threading.Event();outcome={}
+                    def applied(ok,event=acknowledged,state=outcome):
+                        state['ok']=bool(ok);event.set()
                     posted=controller.post_raw_overlay(overlay_id,buffer.path,
                         cue_id=cue_id,
                         valid_when=lambda oid=overlay_id,gen=epoch:self.current(oid,gen),
-                        on_applied=lambda ok,event=acknowledged:event.set(),
+                        on_applied=applied,
                         coalesce_key=f'native-subtitle:{overlay_id}',x=display.x(),y=display.y(),
                         width=cropped.width(),height=cropped.height(),stride=cropped.bytesPerLine(),
                         display_width=display.width(),display_height=display.height())
                     # No slot can be overwritten while mpv still reads it.
                     while posted and not acknowledged.wait(.005) and controller.running:pass
+                    if outcome.get('ok') and self.current(overlay_id,epoch):last_frames[overlay_id]=identity
                     slots[overlay_id]=slot
                 except (OSError,RuntimeError,ValueError):
                     continue

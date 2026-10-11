@@ -12,7 +12,8 @@ import re
 import copy
 import threading
 import traceback
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -84,6 +85,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpacerItem,
+    QSplitter,
+    QGridLayout,
     QStackedWidget,
     QStyle,
     QTableWidget,
@@ -141,7 +144,7 @@ from twobyteasr.recognition_plans import (
     recognition_plan,
 )
 from twobyteasr.studio_ui import SubtitleStudioPage
-from twobyteasr.ui_navigation import NAVIGATION_QSS, WorkspaceNavigation
+from twobyteasr.ui_navigation import NAVIGATION_QSS, WorkspaceNavigation, style_workspace_sidebar_heading
 from twobyteasr.settings import save_runtime_settings
 from twobyteasr.llm_config import (
     AI_SERVICE_SPECS,
@@ -165,6 +168,7 @@ from twobyteasr.llm_config import (
     responses_url,
     qwen_asr_endpoint_from_settings,
     read_api_key,
+    read_asr_api_key,
     resolve_api_key,
     save_api_key_for,
     save_api_keys,
@@ -187,12 +191,21 @@ from subtitle_core import run_llm_json_self_test
 from twobyteasr.service import CancellationToken, RunOptions, run_media_queue
 from twobyteasr.updater import (
     RELEASE_PAGE,
+    UpdateCancelled,
+    automatic_check_delay_ms,
+    automatic_check_due,
+    automatic_checks_allowed,
     check_for_update,
+    cleanup_after_update,
+    confirm_started,
     current_version,
-    download_update,
+    format_bytes,
     launch_update_helper,
+    prepare_update,
 )
 from twobyteasr.startup_trace import mark as _startup_mark
+from twobyteasr import ui_zoom
+from twobyteasr.lazy_pages import existing_page
 
 
 from twobyteasr.main_ui_helpers import (
@@ -226,22 +239,10 @@ ASR_API_PRESETS = {
         "protocol": "spark_wss", "model": "spark_asr_v2",
         "url": "wss://iat.cn-huabei-1.xf-yun.com/v1",
     },
-    "qwen31_flash": {
-        "short": "Qwen 3.1 Flash", "label": "Qwen Audio 3.1 ASR Flash（短音频）",
-        "protocol": "dashscope_asr_flash", "model": "qwen-audio-3.1-asr-flash",
-        "url": "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
-    },
     "qwen31_filetrans": {
-        "short": "Qwen 3.1 Filetrans", "label": "Qwen Audio 3.1 ASR Filetrans（长文件）",
+        "short": "Qwen 3.1 Filetrans", "label": "Qwen Audio 3.1｜长音频转写",
         "protocol": "dashscope_filetrans", "model": "qwen-audio-3.1-asr-flash-filetrans",
         "url": "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
-    },
-    "dashscope": {
-        "short": "阿里云 Qwen",
-        "label": "阿里云百炼 Qwen ASR",
-        "protocol": "dashscope_multimodal",
-        "model": "qwen3-asr-flash",
-        "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     },
     "groq": {
         "short": "Groq",
@@ -268,37 +269,23 @@ ASR_API_PRESETS = {
     # 要求移除）；settings 加载器把存量 provider=openrouter 迁移到字级通道。
     "openrouter_word": {
         "short": "OpenRouter",
-        "label": "OpenRouter 转写（MAI · 字级时间戳）",
+        "label": "OpenRouter MAI 2.1（模型映射待验证）",
         "protocol": "openrouter_verbose_json",
-        "model": "microsoft/mai-transcribe-2",
+        "model": "",
         "url": "https://openrouter.ai/api/v1/audio/transcriptions",
     },
     "azure": {
         "short": "Azure",
-        "label": "Azure 转写（MAI）",
+        "label": "Azure MAI 2.1（部署映射待验证）",
         "protocol": "azure_transcription",
-        "model": "microsoft/mai-transcribe-2",
+        "model": "",
         "url": "",
-    },
-    "dashscope_qwen_audio": {
-        "short": "Qwen-Audio",
-        "label": "阿里云 Qwen-Audio 3.0",
-        "protocol": "dashscope_multimodal",
-        "model": "qwen-audio-3.0-asr-flash",
-        "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     },
     # 四十轮：录音文件识别（异步 filetrans）——整段上传用户 OSS 临时对象，
     # 预签名 HTTPS URL 提交 Qwen；词级时间戳 + 说话人分离（speaker_id）。
     # 需要 OSS 配置（配置弹窗 OSS 分组），AccessKey 走 DPAPI。
     # 四十一轮：地址换用户推荐的工作台域名（四十分轮默认的 dashscope 中心域名
     # 对该模型在执行期报 InvalidParameter.ParseError）。
-    "qwen_filetrans": {
-        "short": "百炼 Filetrans",
-        "label": "阿里云 Qwen 录音文件识别（字级+说话人）",
-        "protocol": "dashscope_filetrans",
-        "model": "qwen-audio-3.0-asr-flash-filetrans",
-        "url": "https://llm-v4zdjopess7u3ohb.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/asr/transcription",
-    },
 }
 
 PRIMARY_MODEL_CHOICES = (
@@ -603,44 +590,31 @@ def _acquire_instance_lock():
     return guard
 
 
-def _completion_notification_spec(result):
-    """Build a concise, user-visible completion message for every queue outcome."""
-    success_count = len(result.successes)
-    failure_count = len(result.failures)
-    cancel_count = len(result.cancelled)
-    skipped_count = len(result.skipped)
-    if failure_count:
-        title = "字幕生成部分失败" if success_count else "字幕生成失败"
-        icon = (
-            QMessageBox.Icon.Warning
-            if success_count
-            else QMessageBox.Icon.Critical
-        )
-        message = (
-            f"本批任务已结束：成功 {success_count} 个，失败 {failure_count} 个。"
-            "请查看结果页中的失败原因。"
-        )
-        details = "\n".join(
-            f"{Path(item.media_path).name}：{item.error or '任务失败但没有返回异常文本，请查看完整运行日志。'}"
-            for item in result.failures[:3]
-        )
-    elif cancel_count:
-        title = "字幕任务已取消"
-        icon = QMessageBox.Icon.Warning
-        message = (
-            f"任务已安全停止：成功 {success_count} 个，取消 {cancel_count} 个。"
-        )
-        details = "已完成的字幕会保留，尚未开始或未完成的素材不会写入成片。"
-    else:
-        title = "字幕生成完成"
-        icon = QMessageBox.Icon.Information
-        message = (
-            f"已成功生成 {success_count} 个素材的字幕。"
-            if success_count
-            else f"任务已完成，跳过 {skipped_count} 个已有结果。"
-        )
-        details = "可以在结果页查看字幕、分轨和任务报告路径。"
-    return title, message, icon, details
+def _completion_notification_spec(result, outcomes=None):
+    """Use the same terminal model as completion, reports and history."""
+    from .recognition_outcome import normalize_recognition_outcome, normalize_recognition_queue
+    if outcomes is None:
+        outcomes = []
+        for item in result.results:
+            payload = None
+            if item.report_json_path:
+                try:
+                    payload = json.loads(Path(item.report_json_path).read_text(encoding='utf-8-sig'))
+                except (OSError, ValueError, TypeError):
+                    pass
+            if not isinstance(payload, dict):
+                payload = dict(status=item.status, result=dict(outputs=dict(project=item.project_path, srt=item.srt_path)))
+                if item.error and item.status == 'failed':
+                    payload['result']['error'] = item.error
+            outcomes.append(normalize_recognition_outcome(payload))
+    queue = normalize_recognition_queue(outcomes)
+    icon = {'error': QMessageBox.Icon.Critical, 'warning': QMessageBox.Icon.Warning,
+            'information': QMessageBox.Icon.Information}[queue.notification_level]
+    message = tr('完成 {completed} 个 · 部分完成 {partial} 个 · 失败 {failed} 个 · 取消 {cancelled} 个',
+        completed=queue.completed_count, partial=queue.partial_count, failed=queue.failed_count, cancelled=queue.cancelled_count)
+    details = tr('待检查问题 {review} 项 · 联网核验未完成或未执行 {search} 个任务',
+        review=queue.review_issue_count, search=queue.search_incomplete_count)
+    return tr(queue.title), message, icon, details
 
 
 def _configure_windows_app_identity() -> None:
@@ -1017,25 +991,20 @@ def keep_log_view_at_left(edit) -> None:
 
 
 def append_log_html_keep_left(edit, fragment: str) -> None:
-    """Append one log block, keep vertical tail-follow AND the left edge.
-
-    QTextEdit.append() parks the text cursor at the END of the appended
-    block. Under NoWrap, any later ensureCursorVisible() pass (page reveal,
-    details-row expand, window resize) scrolls the view to the far right of
-    a long line — the 2026-09-10s run-signature lines made the completion
-    log open showing only line tails. Park the cursor at the line start so
-    every layout pass lands on column 0, then pin both scrollbars
-    explicitly: horizontal to the minimum, vertical to the tail.
-    """
-    edit.append(fragment)
-    cursor = edit.textCursor()
-    cursor.movePosition(
-        QTextCursor.MoveOperation.StartOfLine, QTextCursor.MoveMode.MoveAnchor
-    )
-    edit.setTextCursor(cursor)
+    """Follow a live tail, but preserve a user's place in earlier log entries."""
     vertical = edit.verticalScrollBar()
+    previous = vertical.value() if vertical is not None else 0
+    follow_tail = vertical is None or previous >= vertical.maximum() - 2
+    old_cursor = edit.textCursor()
+    edit.append(fragment)
+    if follow_tail:
+        cursor = edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine, QTextCursor.MoveMode.MoveAnchor)
+        edit.setTextCursor(cursor)
+    else:
+        edit.setTextCursor(old_cursor)
     if vertical is not None:
-        vertical.setValue(vertical.maximum())
+        vertical.setValue(vertical.maximum() if follow_tail else previous)
     keep_log_view_at_left(edit)
 
 
@@ -1052,193 +1021,12 @@ def _active_theme_definition():
     return theme_definition(theme_key())
 
 
-class ProgressPhaseCard(QFrame):
-    """Compact cartoon-like phase card with explicit pending/active/done states."""
-
-    def __init__(self, icon_name: str, title: str, subtitle: str, accent: str):
-        super().__init__()
-        self.setObjectName("phaseCard")
-        self.icon_name = icon_name
-        self.accent = accent
-        self.setMinimumHeight(84)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 11, 12, 11)
-        layout.setSpacing(10)
-        self.icon_label = QLabel()
-        self.icon_label.setFixedSize(42, 42)
-        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.icon_label)
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(1)
-        self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("font-size: 15px; font-weight: 800;")
-        self.subtitle_label = QLabel(subtitle)
-        self.subtitle_label.setObjectName("muted")
-        self.state_label = QLabel("等待")
-        self.state_label.setStyleSheet("font-size: 12px; font-weight: 700;")
-        text_layout.addWidget(self.title_label)
-        text_layout.addWidget(self.subtitle_label)
-        text_layout.addWidget(self.state_label)
-        layout.addLayout(text_layout, 1)
-        self._state = ""
-        self._pulse_light = False
-        self._pulse = QTimer(self)
-        self._pulse.setInterval(900)
-        self._pulse.setTimerType(Qt.TimerType.CoarseTimer)
-        self._pulse.timeout.connect(self._toggle_active_pulse)
-        self.set_state("pending")
-
-    def _state_palette(self, state: str):
-        theme = _active_theme_definition()
-        return {
-            "pending": (theme.surface, theme.border_strong, theme.text_muted, "等待"),
-            "active": (theme.warning_soft, theme.accent, theme.accent, "进行中"),
-            "done": (theme.accent_soft, theme.success, theme.success, "已完成"),
-            "failed": (theme.danger_soft, theme.danger, theme.danger, "需处理"),
-        }.get(state, (theme.surface, theme.border_strong, theme.text_muted, "等待"))
-
-    def _repaint_state(self) -> None:
-        background, border, icon_color, _label = self._state_palette(self._state)
-        border_width = 2 if self._state == "active" else 1
-        self.setStyleSheet(
-            f"QFrame#phaseCard {{ background: {background}; border: {border_width}px solid {border}; "
-            "border-radius: 17px; }}"
-        )
-        theme = _active_theme_definition()
-        self.icon_label.setPixmap(_icon(self.icon_name, icon_color).pixmap(QSize(25, 25)))
-        self.icon_label.setStyleSheet(
-            f"background: {theme.surface_elevated}; border: 2px solid {icon_color}; border-radius: 21px;"
-        )
-        self.state_label.setStyleSheet(f"color: {icon_color}; font-size: 12px; font-weight: 800;")
-
-    def refresh_theme_palette(self) -> None:
-        self._repaint_state()
-
-    def _toggle_active_pulse(self):
-        if self._state != "active":
-            return
-        self._pulse_light = not self._pulse_light
-        theme = _active_theme_definition()
-        background, border, _icon_color, _label = self._state_palette("active")
-        self.setStyleSheet(
-            f"QFrame#phaseCard {{ background: {background if self._pulse_light else theme.accent_soft}; "
-            f"border: 2px solid {border}; border-radius: 17px; }}"
-        )
-
-    def set_state(self, state: str):
-        if state == self._state:
-            return
-        self._state = state
-        _background, _border, _icon_color, label = self._state_palette(state)
-        self._repaint_state()
-        bind_text(self.state_label, label)
-        if state == "active":
-            self._pulse_light = False
-            self._pulse.start()
-        else:
-            self._pulse.stop()
-
-
-class RunningIndicator(QLabel):
-    """Small animated status pill that remains readable without relying on motion."""
-
-    def __init__(self, parent=None):
-        super().__init__("运行中", parent)
-        self._step = 0
-        self._running = False
-        self._apply_theme()
-        self._timer = QTimer(self)
-        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._timer.setInterval(320)
-        self._timer.timeout.connect(self._tick)
-
-    def _apply_theme(self) -> None:
-        theme = _active_theme_definition()
-        self.setStyleSheet(
-            f"background:{theme.warning_soft}; color:{theme.warning}; border:1px solid {theme.warning}; "
-            "border-radius:11px; padding:4px 10px; font-size:11px; font-weight:800;"
-        )
-
-    def refresh_theme_palette(self) -> None:
-        self._apply_theme()
-
-    def _tick(self):
-        self._step = (self._step + 1) % 4
-        bind_text(self, '运行中{value0}', value0=' ·' * self._step)
-
-    def set_running(self, running: bool):
-        running = bool(running)
-        if running == self._running:
-            return
-        self._running = running
-        if running:
-            self._timer.start()
-            self._tick()
-        else:
-            self._timer.stop()
-            self._step = 0
-            bind_text(self, '阶段衔接')
-
-
+from .progress_widgets import _ElidedValue as ElidedValueLabel
+from .progress_widgets import (ElidedRowsLabel, FeedList, ProgressPhaseCard, RecognitionPreview, ResizeWatcher,
+                               RunningIndicator, StageMetricGrid, StageProgressBar, TaskEventCard, log_line_html,
+                               progress_page_qss)
 from .i18n import join_text
 from .recognition_status_text import recognition_event_text
-
-
-class TaskEventCard(QFrame):
-    """Rounded, glanceable representation of one structured pipeline event."""
-
-    ICONS = {
-        "准备": "fa5s.hourglass-start",
-        "开始": "fa5s.play",
-        "完成": "fa5s.check",
-        "失败": "fa5s.exclamation",
-        "缓存": "fa5s.database",
-        "并行": "fa5s.project-diagram",
-        "批次": "fa5s.layer-group",
-        "素材": "fa5s.file-video",
-        "取消": "fa5s.stop",
-        "自愈": "fa5s.shield-alt",
-    }
-
-    def __init__(self, badge: str, message: str, color: str, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(48)
-        self._badge = str(badge)
-        self._message = str(message)
-        self._accent = str(color)
-        theme = _active_theme_definition()
-        self._apply_theme(theme)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 7, 10, 7)
-        row.setSpacing(9)
-        icon = QLabel()
-        icon.setObjectName("eventIcon")
-        icon.setFixedSize(28, 28)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setPixmap(_icon(self.ICONS.get(badge, "fa5s.circle"), "#ffffff").pixmap(QSize(12, 12)))
-        row.addWidget(icon)
-        text = QVBoxLayout()
-        text.setSpacing(0)
-        badge_label = bind_text(QLabel(), badge)
-        badge_label.setObjectName("eventBadge")
-        message_label = bind_text(QLabel(), message)
-        message_label.setObjectName("eventMessage")
-        message_label.setWordWrap(True)
-        text.addWidget(badge_label)
-        text.addWidget(message_label)
-        row.addLayout(text, 1)
-
-    def _apply_theme(self, theme) -> None:
-        accent = self._accent if QColor(self._accent).isValid() else theme.accent
-        self.setStyleSheet(
-            f"QFrame {{ background:{theme.surface_elevated}; border:1px solid {theme.border}; border-radius:13px; }}"
-            f"QLabel#eventIcon {{ background:{accent}; border:0; border-radius:10px; }}"
-            f"QLabel#eventBadge {{ color:{accent}; border:0; font-size:11px; font-weight:800; }}"
-            f"QLabel#eventMessage {{ color:{theme.text}; border:0; font-size:12px; }}"
-        )
-
-    def refresh_theme_palette(self) -> None:
-        self._apply_theme(_active_theme_definition())
 
 
 class FlowStage(QWidget):
@@ -1376,6 +1164,47 @@ class MediaPickCard(QFrame):
         super().keyPressEvent(event)
 
 
+class MediaNameLabel(QLabel):
+    """Media file name that elides in the middle instead of widening the page."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self.setText(text)
+
+    def text(self):
+        return self._full_text
+
+    def setText(self, text):
+        self._full_text = str(text)
+        self._elide()
+        self.updateGeometry()
+
+    def sizeHint(self):
+        margins = self.contentsMargins()
+        width = self.fontMetrics().horizontalAdvance(self._full_text) + margins.left() + margins.right() + 4
+        return QSize(width, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(min(self.sizeHint().width(), 120), super().minimumSizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._elide()
+
+    def _elide(self):
+        shown = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideMiddle, max(20, self.contentsRect().width())
+        )
+        if shown != super().text():
+            super().setText(shown)
+
+
 class CollapsibleFrame(QFrame):
     toggled = Signal(bool)
 
@@ -1435,6 +1264,8 @@ class CollapsibleFrame(QFrame):
         self._title = title
         self._summary = summary
         self.content = QWidget()
+        # Its maximum height follows its own size hint (interface zoom: own size).
+        self.content.setProperty("uiZoomOwnSize", True)
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(16, 3, 16, 12)
         self.content_layout.setSpacing(8)
@@ -1613,10 +1444,17 @@ class EndpointEditor(QFrame):
         form.addRow(self.custom_name_label, self.custom_name)
         self.provider_label = QLabel("服务商预设")
         self.base_url_label = QLabel("Base URL")
-        form.addRow(self.base_url_label, self.base_url)
-        form.addRow("", self.endpoint_hint)
         self.protocol_label = QLabel("协议 / Protocol")
-        form.addRow(self.protocol_label, self.protocol)
+        # Rarely changed connection details live in the advanced group below
+        # (2026-10-08); the key stays in the main form.
+        self.api_advanced = QWidget()
+        advanced_form = QFormLayout(self.api_advanced)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        advanced_form.setHorizontalSpacing(12)
+        advanced_form.setVerticalSpacing(8)
+        advanced_form.addRow(self.base_url_label, self.base_url)
+        advanced_form.addRow("", self.endpoint_hint)
+        advanced_form.addRow(self.protocol_label, self.protocol)
         self.key_label = QLabel("API 密钥")
         self.key_row_host = QWidget()
         self.key_row_host.setLayout(key_row)
@@ -1627,8 +1465,8 @@ class EndpointEditor(QFrame):
         self.json_mode = QCheckBox("JSON Mode")
         self.structured_output = QCheckBox("Structured Output")
         self.stream_output = QCheckBox("stream")
-        self.json_mode.setChecked(True)
-        self.structured_output.setChecked(True)
+        self.json_mode.setChecked(active.get('json_mode', models.get(f'{prefix}_json_mode', True)))
+        self.structured_output.setChecked(active.get('structured_output', models.get(f'{prefix}_structured_output', True)))
         self.stream_output.setEnabled(False)
         bind_text(self.stream_output, '当前字幕处理后端使用非流式结构化响应', property='toolTip')
         advanced.addWidget(self.json_mode)
@@ -1637,6 +1475,9 @@ class EndpointEditor(QFrame):
         advanced.addStretch(1)
         self.capabilities_host = QWidget()
         self.capabilities_host.setLayout(advanced)
+        self.json_capability_status = QLabel()
+        self.json_capability_status.setObjectName('fieldHint')
+        self.json_capability_status.setWordWrap(True)
 
         self.cli_page = QWidget()
         self.cli_page.setObjectName("endpointCliPage")
@@ -1647,13 +1488,19 @@ class EndpointEditor(QFrame):
         self.cli_status.setObjectName("endpointCliStatus")
         self.account_status = QLabel("CLI Session：未知")
         self.account_status.setObjectName("endpointAccountStatus")
+        self.cli_status.setWordWrap(True)
+        self.account_status.setWordWrap(True)
+        self.cli_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.account_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         cli_layout.addWidget(self.cli_status)
         cli_layout.addWidget(self.account_status)
         cli_actions = QHBoxLayout()
         self.detect_cli_button = QPushButton("重新检测")
         self.login_button = QPushButton("登录")
         self.install_button = QPushButton("安装帮助")
-        for button in (self.detect_cli_button, self.login_button, self.install_button):
+        self.update_cli_button = QPushButton("更新 CLI / 查看方法")
+        self.update_cli_button.clicked.connect(self.start_cli_update)
+        for button in (self.detect_cli_button, self.login_button, self.install_button, self.update_cli_button):
             button.setObjectName("endpointSecondary")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             cli_actions.addWidget(button)
@@ -1668,6 +1515,17 @@ class EndpointEditor(QFrame):
         account_actions.addWidget(self.logout_button)
         account_actions.addWidget(self.copy_diagnostics_button)
         cli_layout.addLayout(account_actions)
+        self.diagnostics_toggle = QPushButton('展开诊断详情')
+        self.diagnostics_toggle.setCheckable(True)
+        self.diagnostics_toggle.setObjectName('endpointSecondary')
+        self.diagnostics_details = QPlainTextEdit()
+        self.diagnostics_details.setObjectName('endpointDiagnostics')
+        self.diagnostics_details.setReadOnly(True)
+        self.diagnostics_details.setMaximumHeight(180)
+        self.diagnostics_details.hide()
+        self.diagnostics_toggle.toggled.connect(self.diagnostics_details.setVisible)
+        cli_layout.addWidget(self.diagnostics_toggle)
+        cli_layout.addWidget(self.diagnostics_details)
 
         service_form = QFormLayout()
         service_form.setHorizontalSpacing(12)
@@ -1705,8 +1563,30 @@ class EndpointEditor(QFrame):
         self.model_warning.hide()
         model_form.addRow(self.model_warning)
         layout.addLayout(model_form)
-        layout.addWidget(section_label("Capabilities"))
-        layout.addWidget(self.capabilities_host)
+        self.advanced_toggle = QToolButton()
+        self.advanced_toggle.setObjectName("endpointAdvancedToggle")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        bind_text(self.advanced_toggle, '进阶设置：Base URL、协议与输出能力')
+        self.advanced_box = QWidget()
+        advanced_layout = QVBoxLayout(self.advanced_box)
+        advanced_layout.setContentsMargins(0, 4, 0, 0)
+        advanced_layout.setSpacing(8)
+        advanced_layout.addWidget(self.api_advanced)
+        advanced_layout.addWidget(section_label("Capabilities"))
+        advanced_layout.addWidget(self.capabilities_host)
+        advanced_layout.addWidget(self.json_capability_status)
+        self.advanced_box.hide()
+
+        def show_advanced(checked):
+            self.advanced_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+            self.advanced_box.setVisible(checked)
+
+        self.advanced_toggle.toggled.connect(show_advanced)
+        layout.addWidget(self.advanced_toggle)
+        layout.addWidget(self.advanced_box)
+        self.last_connection_ok = None
 
         restored_service = active["service"] if active["service"] in AI_SERVICE_SPECS else self._service_for_settings(current_transport, str(current_provider), self.base_url.text())
         self.service.setCurrentIndex(max(0, self.service.findData(restored_service)))
@@ -1746,6 +1626,10 @@ class EndpointEditor(QFrame):
         self._discovery_pending = False
         self.base_url.textChanged.connect(self._invalidate_model_discovery)
         self.key.textChanged.connect(self._invalidate_model_discovery)
+        for signal in (self.model.currentTextChanged, self.base_url.textChanged,
+                self.key.textChanged, self.protocol.currentIndexChanged,
+                self.json_mode.toggled, self.structured_output.toggled):
+            signal.connect(self._invalidate_endpoint_tasks)
         self._queue_model_discovery()
         self.refresh_theme_palette()
 
@@ -1790,6 +1674,8 @@ class EndpointEditor(QFrame):
 
     def _service_changed(self, _index: int = -1, *, initial: bool = False) -> None:
         self._invalidate_endpoint_tasks()
+        if hasattr(self, '_model_discovery_timer'):
+            self._invalidate_model_discovery()
         service_id = str(self.service.currentData() or "custom")
         spec = AI_SERVICE_SPECS[service_id]
         self._active_service_id = service_id
@@ -1805,9 +1691,19 @@ class EndpointEditor(QFrame):
             self.provider.blockSignals(False)
         is_api = transport == AITransport.OPENAI_COMPATIBLE.value
         self.settings_stack.setCurrentWidget(self.api_page if is_api else self.cli_page)
-        self.settings_stack.setMaximumHeight(16777215 if is_api else 190)
+        self.settings_stack.setMaximumHeight(16777215)
+        # A hidden page must not reserve height (QStackedLayout skips Ignored).
+        for page in (self.api_page, self.cli_page):
+            visible = page is self.settings_stack.currentWidget()
+            page.setSizePolicy(QSizePolicy.Policy.Preferred,
+                               QSizePolicy.Policy.Preferred if visible else QSizePolicy.Policy.Ignored)
+        self.settings_stack.updateGeometry()
         self.custom_name.setVisible(service_id == "custom")
         self.custom_name_label.setVisible(service_id == "custom")
+        self.api_advanced.setVisible(is_api)
+        if service_id == "custom" and hasattr(self, "advanced_toggle"):
+            # A custom service needs its Base URL: open the advanced group.
+            self.advanced_toggle.setChecked(True)
         if not initial:
             # 原子切换：Base URL / 模型 / 协议必须一次性按新 Provider 的
             # profile 加载。期间屏蔽这些控件自身的信号，避免旧字段的部分
@@ -1825,6 +1721,8 @@ class EndpointEditor(QFrame):
                 self.protocol.setCurrentIndex(protocol_index)
                 self.protocol.blockSignals(False)
             self._last_key_scope = (provider, values["base_url"])
+            self.json_mode.setChecked(values.get('json_mode', True))
+            self.structured_output.setChecked(values.get('structured_output', True))
             self.refresh_secret_status()
             self._queue_model_discovery()
         self._refresh_model_retirement_warning(service_id)
@@ -1832,6 +1730,15 @@ class EndpointEditor(QFrame):
         (bind_text(self.login_button, '打开官方 Codex 登录') if service_id == 'codex_cli' else (bind_text(self.login_button, '打开 Google 登录') if service_id == 'antigravity' else bind_text(self.login_button, '管理 Grok 登录')))
         self.logout_button.setVisible(service_id == "codex_cli")
         self.install_button.setVisible(not is_api)
+        self.update_cli_button.setVisible(service_id == 'grok_account')
+        self.diagnostics_details.clear()
+        self.diagnostics_toggle.setChecked(False)
+        self.json_mode.setEnabled(True)
+        self.structured_output.setEnabled(True)
+        bind_text(self.structured_output, 'Structured Output')
+        bind_text(self.json_mode, 'JSON 答案始终进行本地校验；CLI 外层事件 JSON 与模型答案 JSON 分别校验。', property='toolTip')
+        bind_text(self.structured_output, '启用时优先使用已检测支持的原生 JSON Schema；关闭时使用兼容 JSON／本地校验。', property='toolTip')
+        bind_text(self.json_capability_status, '结构化能力：尚未检测；模型列表获取不决定 JSON 能力。')
         bind_text(self.cli_status, 'CLI：未检测')
         (bind_text(self.account_status, 'Antigravity CLI Session：未知') if service_id == 'antigravity' else bind_text(self.account_status, '{value0} Session：未知', value0=spec['label']))
         if is_api:
@@ -1860,6 +1767,11 @@ class EndpointEditor(QFrame):
                 border-radius: 6px; padding: 6px 8px; selection-background-color: {theme.selected};
             }}
             QFrame#endpointCard QLineEdit:focus, QFrame#endpointCard QComboBox:focus {{ border-color: {theme.accent}; }}
+            QFrame#endpointCard QPlainTextEdit#endpointDiagnostics {{
+                color: {theme.text}; background: {theme.surface_input}; border: 1px solid {theme.border};
+                border-radius: 6px; padding: 6px; font-family: {UI_FONT_STACK}; font-size: 12px;
+                selection-background-color: {theme.selected};
+            }}
             QFrame#endpointCard QPushButton#endpointSecondary {{
                 color: {theme.text}; background: {theme.control_background}; border: 1px solid {theme.border};
                 border-radius: 6px; padding: 6px 10px;
@@ -1996,16 +1908,7 @@ class EndpointEditor(QFrame):
         editor selection onto a copy of the live settings and activate the
         selected service in that copy — identical post-save resolution.
         """
-        values = self.values()
-        base = GLOBAL_PROVIDER_REGISTRY.settings()
-        overlay = json.loads(json.dumps(base)) if isinstance(base, dict) else {}
-        overlay.setdefault("models", {})
-        service_id = str(values.get("service") or "custom")
-        if service_id in AI_SERVICE_SPECS:
-            activate_ai_service(overlay, service_id, stage=self.stage)
-        overlay["models"][f"{self.stage}_transport"] = values["transport"]
-        overlay["models"][f"{self.stage}_model"] = values["model"]
-        return overlay
+        return self._provider_settings()
 
     def _provider_settings(self) -> dict:
         """Model discovery must resolve the same post-save world as _cli_settings.
@@ -2016,7 +1919,7 @@ class EndpointEditor(QFrame):
         与连接测试同构：live settings 拷贝 + activate_ai_service 覆盖层。
         """
         values = self.values()
-        base = GLOBAL_PROVIDER_REGISTRY.settings()
+        base = self._settings_ref
         overlay = json.loads(json.dumps(base)) if isinstance(base, dict) else {}
         overlay.setdefault("models", {})
         service_id = str(values.get("service") or "custom")
@@ -2028,7 +1931,8 @@ class EndpointEditor(QFrame):
         overlay["models"][f"{self.stage}_model"] = values["model"]
         overlay["models"][f"{self.stage}_base_url"] = values["base_url"]
         update_active_profile(overlay, stage=self.stage, base_url=values['base_url'],
-                              model=values['model'], protocol=values['protocol'])
+                              model=values['model'], protocol=values['protocol'],
+                              json_mode=values['json_mode'], structured_output=values['structured_output'])
         # Ephemeral only: persist_ai_configuration never serializes this key.
         overlay["models"][f"{self.stage}_api_key"] = values["key"]
         if overlay.get('switches',{}).get('unified_glm_processing'):
@@ -2043,6 +1947,7 @@ class EndpointEditor(QFrame):
         return identity(values['provider'], values['base_url'], key)+(values['service'],values['protocol'])
 
     def _invalidate_model_discovery(self, *_):
+        self._discovery_epoch = getattr(self, '_discovery_epoch', 0) + 1
         self._model_discovery_timer.stop()
         if self._model_discovery_running():
             self._model_discovery_worker.requestInterruption()
@@ -2103,10 +2008,11 @@ class EndpointEditor(QFrame):
         )
         self._model_discovery_worker = worker
         scope=self._model_discovery_identity()
+        epoch = getattr(self, '_discovery_epoch', 0)
         worker.succeeded.connect(lambda models: self._model_discovery_succeeded(models)
-            if scope==self._model_discovery_identity() and not worker.isInterruptionRequested() else None)
+            if epoch==getattr(self, '_discovery_epoch', 0) and scope==self._model_discovery_identity() and not worker.isInterruptionRequested() else None)
         worker.failed.connect(lambda message: self._model_discovery_failed(message)
-            if scope==self._model_discovery_identity() and not worker.isInterruptionRequested() else None)
+            if epoch==getattr(self, '_discovery_epoch', 0) and scope==self._model_discovery_identity() and not worker.isInterruptionRequested() else None)
         worker.finished.connect(lambda:self._model_discovery_done(worker))
         worker.start()
 
@@ -2168,14 +2074,14 @@ class EndpointEditor(QFrame):
             self.model.addItems(list(dict.fromkeys(filter(None, (current_model, *detected_models)))))
             self.model.setCurrentText(current_model or detected_models[0])
             self.model.blockSignals(False)
-        installed = "未安装" not in message and "未检测到" not in message
+        diagnostics = dict(getattr(self._tester, 'diagnostics', {}) or {})
+        self._show_cli_diagnostics(diagnostics, ok=ok, request_test=False)
+        installed = bool(diagnostics.get('executable')) if diagnostics else "未安装" not in message and "未检测到" not in message
         self.install_button.setVisible(not installed)
-        (bind_text(self.cli_status, 'CLI：已安装') if installed else bind_text(self.cli_status, 'CLI：未检测到'))
         service_id = str(self.service.currentData() or "")
         prefix = str(AI_SERVICE_SPECS[service_id]["label"]) + " Session"
         if ok and service_id == "codex_cli":
             bind_text(self.login_button, '重新登录或切换账号')
-        (bind_text(self.account_status, f'{prefix}：READY') if ok else (bind_text(self.account_status, '{value0}：未知', value0=prefix) if not installed else bind_text(self.account_status, '{value0}：未登录或不可调用', value0=prefix)))
         self.status.setObjectName("statusGood" if ok else "statusWarn")
         self.status.setText(message)
         self.status.style().unpolish(self.status)
@@ -2185,8 +2091,75 @@ class EndpointEditor(QFrame):
         from .provider_diagnostics import redact_diagnostics
         provider=provider_for_stage(self._provider_settings(),self.stage)
         payload=redact_diagnostics({"provider":self.values()["service"],"model":self.model.currentText(),
-            "status":self.status.text(),"trace":provider.invocation_trace()})
+            "status":self.status.text(),"diagnostics":getattr(self, '_last_cli_diagnostics', {}),
+            "trace":provider.invocation_trace()})
         QApplication.clipboard().setText(json.dumps(payload,ensure_ascii=False,indent=2))
+
+    def _show_cli_diagnostics(self, diagnostics, *, ok, request_test):
+        from .provider_diagnostics import redact_diagnostics
+        diagnostics = redact_diagnostics(diagnostics)
+        self._last_cli_diagnostics = diagnostics
+        self._show_json_capabilities(diagnostics.get('json_capabilities', {}))
+        path = diagnostics.get('executable') or '未检测到'
+        version = diagnostics.get('cli_version') or '版本未检测'
+        self.cli_status.setText(f'CLI：{version}\n{path}')
+        evidence = diagnostics.get('auth_evidence')
+        credential = {'model_catalog': '模型目录验证过凭据', 'successful_model_request': '实际请求验证过凭据',
+                      'official_auth_error': '官方 CLI 提示未登录'}.get(evidence, '凭据状态未知')
+        category = diagnostics.get('category')
+        request = ('连接测试通过（中文 JSON）' if ok and request_test else
+                   '需更新 CLI；本次请求失败' if category == 'upgrade_required' else
+                   '连接测试失败' if request_test else '当前配置真实请求尚未验证')
+        tested = diagnostics.get('last_tested_at')
+        self.account_status.setText(f'登录/凭据：{credential}\n请求：{request}' + (f' · {tested}' if tested else ''))
+        self.update_cli_button.setVisible(str(self.service.currentData()) == 'grok_account')
+        self.diagnostics_details.setPlainText(json.dumps(diagnostics, ensure_ascii=False, indent=2))
+
+    def _show_json_capabilities(self, evidence):
+        state = evidence.get('state', 'unverified')
+        if state == 'verified':
+            text = '结构化能力：原生 JSON Schema 已验证；答案同时通过本地校验。'
+        elif evidence.get('native_schema'):
+            text = '结构化能力：本机 CLI 支持原生 JSON Schema；当前模型尚未通过请求验证。'
+        elif state == 'unsupported':
+            text = '结构化能力：本机 CLI 未提供原生 Schema；使用兼容 JSON／本地校验。'
+        elif state == 'failed':
+            text = '结构化能力：检测失败；保留 JSON 选项，可重新检测。'
+        else:
+            text = '结构化能力：尚未检测；模型列表获取不决定 JSON 能力。'
+        bind_text(self.json_capability_status, text)
+
+    def start_cli_update(self):
+        settings = self._provider_settings()
+        provider = provider_for_stage(settings, self.stage)
+        try:
+            plan = provider.cli_update_plan()
+        except Exception as exc:
+            self.status.setText(str(exc))
+            return
+        target = plan.get('executable') or '未检测到 CLI'
+        command = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in plan.get('command', []))
+        if not plan.get('supported'):
+            QMessageBox.information(self, '查看 CLI 更新方法', f'实际目标：{target}\n\n{plan["message"]}\n\n更新后点击重新检测和测试连接。')
+            return
+        result = QMessageBox.question(self, '确认更新这份 CLI',
+            f'目标路径：{target}\n当前版本：{plan.get("version") or "未检测"}\n动作：{command}\n\n'
+            f'{plan["message"]}\n完成后将重新读取路径/版本并执行一次最小普通文本请求。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        self._invalidate_endpoint_tasks()
+        self._update_worker = ProviderCLIUpdateWorker(settings, self.stage, plan)
+        self._update_worker.finished_status.connect(self._endpoint_callback(self._update_worker, '_update_worker', self._cli_update_finished))
+        self.update_cli_button.setEnabled(False)
+        self.status.setText('正在更新已确认的 CLI…')
+        self._update_worker.start()
+
+    def _cli_update_finished(self, ok, message):
+        self.update_cli_button.setEnabled(True)
+        self._show_cli_diagnostics(self._update_worker.diagnostics, ok=ok, request_test=True)
+        self.status.setObjectName('statusGood' if ok else 'statusWarn')
+        self.status.setText(message)
 
     def start_login(self, _checked=False, *, action="login") -> None:
         if self._login_worker is not None and self._login_worker.isRunning():
@@ -2231,7 +2204,7 @@ class EndpointEditor(QFrame):
         label=str(AI_SERVICE_SPECS[service_id]["label"])
         ((bind_text(self.login_button, '重新登录或切换账号') if ok else bind_text(self.login_button, '打开官方 Codex 登录')) if service_id == 'codex_cli' else bind_text(self.login_button, '打开登录'))
         self.logout_button.setEnabled(True)
-        bind_text(self.account_status, f'{label}：' + ('已登录/连接正常' if ok else '登录未完成，请重新检测'))
+        bind_text(self.account_status, f'{label}：' + ('登录流程完成；当前配置请求仍需测试' if ok else '登录未完成，请重新检测'))
         self.status.setObjectName("statusGood" if ok else "statusWarn")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setText(html.unescape(str(message)))
@@ -2302,7 +2275,7 @@ class EndpointEditor(QFrame):
             return
         self.test_button.setEnabled(False)
         bind_text(self.status, '正在测试…')
-        self._tester = ConnectionTester(endpoint)
+        self._tester = ProviderConnectionTester(self._provider_settings(), self.stage, prompt_test=True)
         self._tester.finished_status.connect(self._endpoint_callback(self._tester, '_tester', self._connection_finished))
         self._tester.start()
 
@@ -2312,8 +2285,9 @@ class EndpointEditor(QFrame):
             bind_text(self.status, '模型响应较慢，仍在等待… {elapsed} 秒 · 可取消', elapsed=elapsed)
 
     def _invalidate_endpoint_tasks(self) -> None:
+        self.last_connection_ok = None
         self._endpoint_epoch = getattr(self, '_endpoint_epoch', 0) + 1
-        for name in ('_tester', '_login_worker'):
+        for name in ('_tester', '_login_worker', '_update_worker'):
             worker = getattr(self, name, None)
             if worker is not None and worker.isRunning():
                 worker.requestInterruption()
@@ -2329,6 +2303,7 @@ class EndpointEditor(QFrame):
             bind_text(self.test_button, '测试连接')
             self.detect_cli_button.setEnabled(True)
             self.logout_button.setEnabled(True)
+            self.update_cli_button.setEnabled(True)
 
     def _endpoint_callback(self, worker, slot, callback):
         epoch = getattr(self, '_endpoint_epoch', 0)
@@ -2340,12 +2315,14 @@ class EndpointEditor(QFrame):
         return deliver
 
     def _connection_finished(self, ok: bool, message: str):
+        self.last_connection_ok = bool(ok)
         self.test_button.setEnabled(True)
         bind_text(self.test_button, '测试连接')
+        if self.values()['transport'] != AITransport.OPENAI_COMPATIBLE.value:
+            self._show_cli_diagnostics(dict(getattr(self._tester, 'diagnostics', {}) or {}), ok=ok, request_test=True)
         if ok:
             if str(self.service.currentData()) == "codex_cli":
                 bind_text(self.login_button, '重新登录或切换账号')
-                bind_text(self.account_status, 'Codex：已登录/连接正常')
             try:
                 base = GLOBAL_PROVIDER_REGISTRY.settings()
                 saved_service = get_active_service(base) if isinstance(base, dict) else "custom"
@@ -2488,10 +2465,15 @@ def persist_ai_configuration(
             base_url=models["polish_base_url"],
             model=models["polish_model"],
             protocol=models["polish_protocol"],
+            json_mode=polish.get('json_mode', True),
+            structured_output=polish.get('structured_output', True),
             unified=bool(unified),
         )
         models["ai_service"] = active_service
         models["provider_profiles"] = profile_view["models"].get("provider_profiles", {})
+    for stage, values in (('polish', polish), ('group', group)):
+        models[f'{stage}_json_mode'] = bool(values.get('json_mode', True))
+        models[f'{stage}_structured_output'] = bool(values.get('structured_output', True))
     if dry_run:
         return {"models": models, "unified": unified, "missing_keys": tuple(missing_keys)}
     if polish_key and models["polish_transport"] == AITransport.OPENAI_COMPATIBLE.value:
@@ -2542,10 +2524,10 @@ def persist_asr_configuration(
         "primary_asr_backend": str(values.get("primary_asr_backend", "moss")),
         "qwen_asr_backend": str(values.get("qwen_asr_backend", "local")),
         "qwen_asr_model": str(values.get("qwen_asr_model", "Qwen/Qwen3-ASR-1.7B")),
-        "qwen_asr_api_provider": str(values.get("qwen_asr_api_provider", "dashscope")),
-        "qwen_asr_api_protocol": str(values.get("qwen_asr_api_protocol", "dashscope_multimodal")),
-        "qwen_asr_api_model": str(values.get("qwen_asr_api_model", "qwen3-asr-flash")),
-        "qwen_asr_api_url": str(values.get("qwen_asr_api_url", "")).rstrip("/"),
+        "qwen_asr_api_provider": str(values.get("qwen_asr_api_provider", "qwen31_filetrans")),
+        "qwen_asr_api_protocol": str(values.get("qwen_asr_api_protocol", "dashscope_filetrans")),
+        "qwen_asr_api_model": str(values.get("qwen_asr_api_model", "qwen-audio-3.1-asr-flash-filetrans")),
+        "qwen_asr_api_url": str(values.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"])).rstrip("/"),
         "firered_asr_backend": str(values.get("firered_asr_backend", "local")),
         "api_transcribe_style": str(values.get("api_transcribe_style", "clean") or "clean"),
         "speaker_source": str(values.get("speaker_source", legacy.RUNTIME_SETTINGS.get('models',{}).get('speaker_source','single')) or 'single'),
@@ -2563,7 +2545,12 @@ def persist_asr_configuration(
         "api", "local", "firered_llm", "whisper_turbo", "sensevoice", "funasr_nano", "off"
     }:
         raise RuntimeError("文字复核后端选项无效。")
-    if models["qwen_asr_api_provider"] not in ASR_API_PRESETS:
+    # A saved user deployment can outlive a removed preset. Retain its exact
+    # provider/protocol ownership; do not silently select another service.
+    saved_models = legacy.RUNTIME_SETTINGS.get("models", {})
+    retained_endpoint = (models["qwen_asr_api_provider"] == saved_models.get("qwen_asr_api_provider")
+                         and models["qwen_asr_api_protocol"] == saved_models.get("qwen_asr_api_protocol"))
+    if models["qwen_asr_api_provider"] not in ASR_API_PRESETS and not retained_endpoint:
         raise RuntimeError("ASR API 服务商选项无效。")
     if models["qwen_asr_api_protocol"] not in {
         "dashscope_multimodal", "openai_transcription", "azure_transcription",
@@ -2634,12 +2621,46 @@ class ProviderConnectionTester(QThread):
         self.force_refresh = bool(force_refresh)
         self.models: tuple[str, ...] = ()
         self.timings: dict[str, float | bool] = {}
+        self.diagnostics: dict = {}
 
     def run(self):
         started = time.monotonic()
+        provider = None
+        import datetime
+        def finish(ok, message):
+            measured = getattr(provider, 'cli_diagnostics', lambda: {})() if provider is not None else {}
+            explicit = {key: self.diagnostics[key] for key in ('category', 'request_succeeded') if key in self.diagnostics}
+            self.diagnostics = {**self.diagnostics, **measured, **explicit}
+            self.diagnostics['last_tested_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            self.finished_status.emit(ok, message)
         try:
             provider = provider_for_stage(self.settings, self.stage)
             validate_started = time.monotonic()
+            if self.prompt_test:
+                schema = {'type': 'object', 'properties': {
+                    'ok': {'type': 'boolean', 'const': True},
+                    'text': {'type': 'string', 'const': '兔白字幕'}},
+                    'required': ['ok', 'text'], 'additionalProperties': False}
+                answer = provider.structured_complete([
+                    {'role': 'user', 'content': '请只返回 JSON：{"ok":true,"text":"兔白字幕"}。'}],
+                    schema, max_tokens=80, temperature=0, timeout=45,
+                    cancel_check=self.isInterruptionRequested, stage='connection_test',
+                    operation_kind='polish')
+                from jsonschema import Draft202012Validator
+                Draft202012Validator(schema).validate(answer)
+                if self.isInterruptionRequested():
+                    finish(False, '连接测试已取消')
+                    return
+                self.timings = dict(getattr(provider, 'last_timings', {}) or {})
+                self.timings['total_seconds'] = time.monotonic() - started
+                self.diagnostics.update(request_succeeded=True, category='',
+                    auth_evidence='successful_model_request',
+                    json_capabilities=provider.json_capabilities())
+                mode = provider.structured_output_mode()
+                label = '原生 JSON Schema＋本地校验' if mode == 'STRICT_JSON_SCHEMA' else '兼容 JSON／本地校验'
+                finish(True, tr('连接测试通过 · 中文 JSON 字段正确 · {value0} · {value1}s',
+                    value0=label, value1=f'{self.timings["total_seconds"]:.2f}'))
+                return
             # 45s: an Antigravity cold start alone costs 3-10s per CLI call and
             # the readiness probe rides on top; 20s reported healthy sessions
             # as "未登录或不可调用" under load.
@@ -2651,44 +2672,62 @@ class ProviderConnectionTester(QThread):
             self.timings = dict(getattr(provider, "last_timings", {}) or {})
             self.timings["validation_seconds"] = time.monotonic() - validate_started
             self.models = tuple(status.models)
+            self.diagnostics = dict(getattr(status, 'diagnostics', {}) or {})
+            self.diagnostics['json_capabilities'] = provider.json_capabilities(
+                probe=True, cancel_check=self.isInterruptionRequested)
             if self.isInterruptionRequested():
-                self.finished_status.emit(False, "连接测试已取消")
+                finish(False, "连接测试已取消")
                 return
             measured_readiness = self.timings.get("readiness_request_seconds")
             if measured_readiness is not None and not self.timings.get("cache_hit"):
                 self.timings["response_seconds"] = measured_readiness
-            if self.prompt_test and status.available and status.authenticated and (measured_readiness is None or self.timings.get("cache_hit")):
-                response_started = time.monotonic()
-                reply = provider.complete(
-                    [{"role": "user", "content": "Return exactly: 2ByteASR_OK"}],
-                    max_tokens=32,
-                    temperature=0.0,
-                    timeout=45.0,
-                    cancel_check=self.isInterruptionRequested,
-                    stage="connection_test",
-                ).strip()
-                self.timings["response_seconds"] = time.monotonic() - response_started
-                if reply != "2ByteASR_OK":
-                    self.finished_status.emit(False, f"连接返回不符合预期：{reply[:80]}")
-                    return
-                status = type(status)(True, True, "连接正常 · 返回 2ByteASR_OK", status.models)
             self.timings["total_seconds"] = time.monotonic() - started
             cache_note = "缓存状态" if self.timings.get("cache_hit") else "实时检测"
             timing = f"{cache_note} {float(self.timings['validation_seconds']):.2f}s"
             if "response_seconds" in self.timings:
                 timing += f" · 模型响应 {float(self.timings['response_seconds']):.2f}s"
             timing += f" · 总计 {float(self.timings['total_seconds']):.2f}s"
-            self.finished_status.emit(
+            finish(
                 bool(status.available and status.authenticated),
                 f"{status.message} · {timing}",
             )
         except Exception as exc:
+            self.diagnostics['category'] = getattr(exc, 'category', 'provider_error')
+            self.diagnostics['request_succeeded'] = False if self.prompt_test else None
             compact = " ".join(str(exc).split())[:120]
             if self.isInterruptionRequested() or "取消" in compact:
-                self.finished_status.emit(False, "连接测试已取消")
+                finish(False, "连接测试已取消")
             else:
                 elapsed = time.monotonic() - started
-                self.finished_status.emit(False, f"{compact} · {elapsed:.2f}s")
+                finish(False, f"{str(exc) if getattr(exc, 'category', '') == 'upgrade_required' else compact} · {elapsed:.2f}s")
+        finally:
+            measured = getattr(provider, 'cli_diagnostics', lambda: {})() if provider is not None else {}
+            explicit = {key: self.diagnostics[key] for key in ('category', 'request_succeeded') if key in self.diagnostics}
+            self.diagnostics = {**self.diagnostics, **measured, **explicit}
+            self.diagnostics['last_tested_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+class ProviderCLIUpdateWorker(QThread):
+    finished_status = Signal(bool, str)
+
+    def __init__(self, settings, stage, plan):
+        super().__init__()
+        self.settings = copy.deepcopy(settings)
+        self.stage = stage
+        self.plan = copy.deepcopy(plan)
+        self.diagnostics = {}
+
+    def run(self):
+        provider = provider_for_stage(self.settings, self.stage)
+        try:
+            status = provider.update_cli(self.plan, user_confirmed=True, cancel_check=self.isInterruptionRequested)
+            self.diagnostics = dict(status.diagnostics)
+            self.finished_status.emit(status.request_succeeded is True, status.message)
+        except Exception as exc:
+            from .provider_diagnostics import redact_diagnostics
+            self.diagnostics = provider.cli_diagnostics()
+            self.diagnostics.update(category=getattr(exc, 'category', 'cli_update_failed'), request_succeeded=False)
+            self.finished_status.emit(False, redact_diagnostics(str(exc)))
 
 
 class ProviderLoginWorker(QThread):
@@ -2799,37 +2838,126 @@ class TermSearchWorker(QThread):
 
 
 class UpdateCheckWorker(QThread):
+    """Fetch and verify the signed update manifest off the GUI thread."""
+
     result_ready = Signal(object)
     failed = Signal(str)
+    skipped = Signal()
+
+    def __init__(self, parent=None, *, automatic: bool = False):
+        super().__init__(parent)
+        self.automatic = automatic
 
     def run(self):
         try:
-            self.result_ready.emit(check_for_update())
+            if self.automatic and not automatic_check_due():
+                self.skipped.emit()
+                return
+            self.result_ready.emit(check_for_update(use_cache=not self.automatic))
         except Exception as exc:  # noqa: BLE001 - UI must report network failures
             self.failed.emit(" ".join(str(exc).split()) or exc.__class__.__name__)
 
 
 class UpdateDownloadWorker(QThread):
-    progress_changed = Signal(int, int)
-    completed = Signal(str, str)
-    failed = Signal(str)
+    """Download, verify and stage only the components this update changes."""
 
-    def __init__(self, info, destination: Path):
-        super().__init__()
-        self.info = info
-        self.destination = destination
+    progress_changed = Signal(int, int)
+    completed = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, check, parent=None):
+        super().__init__(parent)
+        self.check = check
+        self.cancel_event = threading.Event()
 
     def run(self):
         try:
-            package, checksum = download_update(
-                self.info,
-                self.destination,
-                progress=self.progress_changed.emit,
+            prepared = prepare_update(
+                self.check,
+                progress=lambda _name, done, total: self.progress_changed.emit(int(done), int(total)),
+                cancel=self.cancel_event,
             )
-            self.completed.emit(str(package), checksum)
+            self.completed.emit(prepared)
+        except UpdateCancelled:
+            self.cancelled.emit()
         except Exception as exc:  # noqa: BLE001 - UI must report mirror/checksum failures
             self.failed.emit(" ".join(str(exc).split()) or exc.__class__.__name__)
 
+
+class UpdateOfferDialog(QDialog):
+    """Current/new version, release notes and the real download size."""
+
+    def __init__(self, check, parent=None):
+        super().__init__(parent)
+        self.choice = None
+        self.setWindowTitle(tr('发现新版本'))
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        manifest, plan = check.manifest, check.plan
+        heading = QLabel(tr('兔白字幕 {value0}（当前 {value1}）', value0=check.latest_version,
+                            value1=check.current_version))
+        heading.setObjectName('sectionTitle')
+        layout.addWidget(heading)
+        notes = manifest.note_for(current_language()) if manifest else ''
+        if notes:
+            layout.addWidget(QLabel(tr('主要变更')))
+            box = QPlainTextEdit(notes)
+            box.setReadOnly(True)
+            box.setMaximumHeight(170)
+            layout.addWidget(box)
+        lines = []
+        if plan is not None and plan.mode == 'components':
+            lines.append(tr('本次需要下载：{value0}', value0=format_bytes(plan.download_bytes)))
+            for action in plan.downloads:
+                cached = '' if action.download_bytes else tr('（已下载过，直接使用）')
+                lines.append('  · ' + tr('{value0}：{value1}', value0=tr(action.label),
+                                         value1=format_bytes(action.archive_bytes)) + cached)
+            if plan.reused:
+                lines.append(tr('沿用、不下载：{value0}', value0='、'.join(tr(a.label) for a in plan.reused)))
+        elif plan is not None:
+            lines.append(tr('需要用完整安装包更新（{value0}）。', value0=format_bytes(plan.setup_bytes)))
+            if plan.fallback_reason:
+                lines.append(tr('原因：{value0}', value0=plan.fallback_reason))
+            lines.append(tr('安装包会保留设置、词库、工程、模型和运行环境，覆盖安装即可，不要先卸载。'))
+        if plan is not None:
+            if plan.environment_changes:
+                lines.append(tr('运行环境：{value0} 的需求有变化，用到时程序会提示补齐。',
+                                value0='、'.join(plan.environment_changes)))
+            else:
+                lines.append(tr('运行环境：沿用，不需要重新下载。'))
+            if plan.model_changes:
+                lines.append(tr('模型：{value0} 有新版本，只有用到该模型时才需要下载。',
+                                value0='、'.join(plan.model_changes)))
+            else:
+                lines.append(tr('模型：沿用，不需要重新下载。'))
+        detail = QLabel('\n'.join(lines))
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(detail)
+        buttons = QHBoxLayout()
+        page = QPushButton(tr('打开发布页'))
+        page.clicked.connect(lambda: self._finish('page'))
+        later = QPushButton(tr('稍后'))
+        later.clicked.connect(self.reject)
+        if plan is not None and plan.mode == 'components':
+            primary = QPushButton(tr('下载并准备更新'))
+            primary.clicked.connect(lambda: self._finish('download'))
+        else:
+            primary = QPushButton(tr('下载安装包'))
+            primary.clicked.connect(lambda: self._finish('setup'))
+        primary.setObjectName('primary')
+        primary.setDefault(True)
+        buttons.addWidget(page)
+        buttons.addStretch(1)
+        buttons.addWidget(later)
+        buttons.addWidget(primary)
+        layout.addLayout(buttons)
+
+    def _finish(self, choice):
+        self.choice = choice
+        self.accept()
 
 class PipelineWorker(QThread):
     event_received = Signal(object)
@@ -3635,12 +3763,16 @@ class ModalHost(QFrame):
 
 
 class MainWindow(QWidget):
-    def __init__(self, media_paths, legacy, pipeline, startup_self_test):
+    def __init__(self, media_paths, legacy, pipeline, startup_self_test, *, startup_page="recognition"):
         super().__init__()
+        self._workshop_page_instance = None
+        self._history_page_instance = None
+        self._studio_page_instance = None
         self.media_paths = list(media_paths)
         self.legacy = legacy
         self.pipeline = pipeline
         self.startup_self_test = startup_self_test
+        self._recognition_page_deferred = startup_page == "project_library"
         self.profile_store = ProjectProfileStore()
         self.current_project_profile: ProjectProfile | None = None
         # 方案切换守卫与脏标：_applying_profile 期间控件信号不标记脏、不回写方案。
@@ -3650,6 +3782,9 @@ class MainWindow(QWidget):
         self.worker = None
         self.update_check_worker = None
         self.update_download_worker = None
+        self._available_update = None
+        self._prepared_update = None
+        self._pending_update = None
         self.started_at = 0.0
         self.result_exit_code = 0
         # P1-4：active run 重入守卫。preparing / runtime checking / worker
@@ -3715,58 +3850,21 @@ class MainWindow(QWidget):
         except Exception:
             pass
         self.pages = QStackedWidget()
-        self.settings_scroll = self._scrollable(self._settings_page())
+        self.settings_scroll = self._scrollable(
+            QWidget() if self._recognition_page_deferred else self._settings_page())
         self.pages.addWidget(self.settings_scroll)
         self.pages.addWidget(self._progress_page())
         self.pages.addWidget(self._result_page())
-        self.workshop_page = ModelWorkshopPage(
-            APP_ROOT,
-            self.legacy.RUNTIME_SETTINGS,
-            self,
-        )
-        self.workshop_page.return_requested.connect(self._return_to_settings)
-        self.workshop_page.terms_requested.connect(self._open_terms_from_workshop)
-        self.workshop_page.history_requested.connect(self._open_recognition_history)
-        self.workshop_page.task_settings_requested.connect(self._open_task_settings_from_workshop)
-        self.workshop_page.ai_segmentation_requested.connect(self._open_ai_from_workshop)
-        self.workshop_page.update_requested.connect(self._check_updates)
-        self.workshop_page.api_config_requested.connect(self._open_qwen_api_from_workshop)
-        self.workshop_page.api_preset_requested.connect(self._apply_asr_api_preset)
-        self.workshop_page.api_configure_requested.connect(self._open_api_key_dialog_for_preset)
-        self.workshop_page.backend_requested.connect(self._apply_workshop_backend)
-        self.pages.addWidget(self.workshop_page)
+        # 2026-10-10 启动：模型工坊、识别记录与 Studio 共占启动时约 82% 的控件
+        # （识别记录随报告数增长），首页用不到。第一次进入时才构造（见
+        # workshop_page / history_page / studio_page 属性）；被动检查用
+        # built_page()，不会因此把整页建出来。
         self.term_library_page = TermLibraryPage(self)
         self.term_library_page.recognition_requested.connect(self._return_to_settings)
         self.term_library_page.workshop_requested.connect(self._open_model_workshop)
         self.term_library_page.history_requested.connect(self._open_recognition_history)
         self.pages.addWidget(self.term_library_page)
-        # Reports live in the stable user-data root; the install tree (and any
-        # legacy roots) are still scanned so history survives EXE rebuilds.
-        from . import reporting as _reporting
-
-        self.history_page = RecognitionHistoryPage(
-            _reporting.REPORT_ROOT,
-            self,
-            extra_roots=_reporting.LEGACY_REPORT_ROOTS,
-        )
-        self.history_page.recognition_requested.connect(self._return_to_settings)
-        self.history_page.workshop_requested.connect(self._open_model_workshop)
-        self.history_page.terms_requested.connect(self._open_terms_from_history)
-        self.pages.addWidget(self.history_page)
-        self.studio_page = SubtitleStudioPage(self)
-        self.studio_page.return_requested.connect(self._return_to_settings)
-        self.studio_page.close_ready_signal.connect(self._finish_studio_close)
-        self.studio_page.recognition_requested.connect(
-            self._handle_studio_recognition_request
-        )
-        # 四十二轮：左侧字幕列表状态芯片上的"取消识别"→ 主窗口取消令牌。
-        self.studio_page.recognition_cancel_requested.connect(self._cancel_run)
-        # 四十三轮："查看详细进度"→ 跳主页识别进度页（识别继续后台跑）。
-        self.studio_page.recognition_detail_requested.connect(
-            self._show_studio_recognition_detail
-        )
         self._studio_recognition_context = None
-        self.pages.addWidget(self.studio_page)
         content.addWidget(self.pages, 1)
         # P1: 底部“取消 / 开始生成字幕”固定在主页面底部，不随中间内容滚动。
         # 无论窗口高度如何（1366x768 / 1920x1080 / 2560x1440），CTA 始终可见。
@@ -3781,6 +3879,8 @@ class MainWindow(QWidget):
         self.pages.currentChanged.connect(self._update_bottom_bar_visibility)
         # Apply sane default geometry once (after construction) to avoid tiny/offscreen windows.
         QTimer.singleShot(0, self, self._apply_sane_initial_geometry)
+        from .storage_ui import IdleStorageMaintenance
+        self._storage_maintenance = IdleStorageMaintenance(self)
         self.drop_overlay = DropOverlay(self)
         self.drop_overlay.setGeometry(self.rect().adjusted(16, 16, -16, -16))
         self.drop_overlay.hide()
@@ -3796,8 +3896,9 @@ class MainWindow(QWidget):
         self._popup_click_ts = None
         self._popup_first_paint_title = ""
 
-        self._refresh_media_summary()
-        self._refresh_ai_summary()
+        if not self._recognition_page_deferred:
+            self._refresh_media_summary()
+            self._refresh_ai_summary()
         self._create_resize_handles()
         self._apply_ui_language()
         self._encoder_capability_cancel = threading.Event()
@@ -3805,8 +3906,139 @@ class MainWindow(QWidget):
         self._startup_background_ready_thread = None
         # P0: background preload of model install status + term index after first paint.
         # Never on click path; cheap FS/metadata only. No spinners.
+        if self._recognition_page_deferred:
+            self._switch_page(self.studio_page)
+        else:
+            QTimer.singleShot(0, self, self._background_preload)
+            QTimer.singleShot(0, self, self._restore_last_project_profile)
+
+    def _set_brand_text(self):
+        self.brand.setText(
+            f'<span style="font-size:{ui_zoom.px(26)}px; font-weight:800;">2</span>'
+            f'<span style="font-size:{ui_zoom.px(23)}px; font-weight:800;">ByteASR</span>'
+        )
+
+    def apply_ui_zoom(self, _factor):
+        """Interface zoom changed: rich-text brand sizes and the home card band."""
+        if hasattr(self, "brand"):
+            self._set_brand_text()
+        self._refresh_header_density()
+        # Zoomed pages may need more width than a small window has: scroll
+        # sideways rather than clip. At 100% the pages keep their policy.
+        policy = (Qt.ScrollBarPolicy.ScrollBarAlwaysOff if ui_zoom.zoom_percent() == ui_zoom.DEFAULT_PERCENT
+                  else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        for area in getattr(self, "_page_scroll_areas", ()):
+            area.setHorizontalScrollBarPolicy(policy)
+        if hasattr(self, "recognition_plan"):
+            self.apply_density()
+
+    def built_page(self, name: str):
+        """The lazily built page ``name`` if it exists; never builds it."""
+        return getattr(self, f"_{name}_page_instance", None)
+
+    @property
+    def workshop_page(self):
+        page = getattr(self, "_workshop_page_instance", None)
+        return page if page is not None else self._build_lazy_page("workshop")
+
+    @workshop_page.setter
+    def workshop_page(self, page):
+        self._workshop_page_instance = page
+
+    @property
+    def history_page(self):
+        page = getattr(self, "_history_page_instance", None)
+        return page if page is not None else self._build_lazy_page("history")
+
+    @history_page.setter
+    def history_page(self, page):
+        self._history_page_instance = page
+
+    @property
+    def studio_page(self):
+        page = getattr(self, "_studio_page_instance", None)
+        return page if page is not None else self._build_lazy_page("studio")
+
+    @studio_page.setter
+    def studio_page(self, page):
+        self._studio_page_instance = page
+
+    def _build_lazy_page(self, name: str):
+        # First visit builds the page (0.5-2 s with many reports): show the
+        # busy cursor at once instead of an unexplained pause after the click.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return self._construct_lazy_page(name)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _construct_lazy_page(self, name: str):
+        started = time.perf_counter()
+        if name == "workshop":
+            page = ModelWorkshopPage(APP_ROOT, self.legacy.RUNTIME_SETTINGS, self)
+            self._workshop_page_instance = page
+            page.return_requested.connect(self._return_to_settings)
+            page.terms_requested.connect(self._open_terms_from_workshop)
+            page.history_requested.connect(self._open_recognition_history)
+            page.task_settings_requested.connect(self._open_task_settings_from_workshop)
+            page.ai_segmentation_requested.connect(self._open_ai_from_workshop)
+            page.update_requested.connect(self._check_updates)
+            page.api_config_requested.connect(self._open_qwen_api_from_workshop)
+            page.api_preset_requested.connect(self._apply_asr_api_preset)
+            page.api_configure_requested.connect(self._open_api_key_dialog_for_preset)
+            page.backend_requested.connect(self._apply_workshop_backend)
+            preloaded = getattr(self, "_preloaded_installed_model_keys", None)
+            if preloaded is not None:
+                page._installed = set(preloaded)
+            if self._density_comfortable is not None:
+                page.apply_density(self._density_comfortable)
+        elif name == "history":
+            # Reports live in the stable user-data root; the install tree (and
+            # any legacy roots) are still scanned so history survives rebuilds.
+            from . import reporting as _reporting
+
+            page = RecognitionHistoryPage(
+                _reporting.REPORT_ROOT,
+                self,
+                extra_roots=_reporting.LEGACY_REPORT_ROOTS,
+            )
+            self._history_page_instance = page
+            page.recognition_requested.connect(self._return_to_settings)
+            page.workshop_requested.connect(self._open_model_workshop)
+            page.terms_requested.connect(self._open_terms_from_history)
+            page.result_requested.connect(self._open_completion_from_history)
+        elif name == "studio":
+            page = SubtitleStudioPage(self)
+            self._studio_page_instance = page
+            page.return_requested.connect(self._return_to_settings)
+            page.glossary_proofread_requested.connect(self._open_studio_glossary_proofread)
+            page.close_ready_signal.connect(self._finish_studio_close)
+            page.recognition_requested.connect(self._handle_studio_recognition_request)
+            # 四十二轮：左侧字幕列表状态芯片上的"取消识别"→ 主窗口取消令牌。
+            page.recognition_cancel_requested.connect(self._cancel_run)
+            # 四十三轮："查看详细进度"→ 跳主页识别进度页（识别继续后台跑）。
+            page.recognition_detail_requested.connect(self._show_studio_recognition_detail)
+        else:
+            raise KeyError(name)
+        self.pages.addWidget(page)
+        _startup_mark(f"LAZY_{name.upper()}_PAGE_BUILT",
+                      duration_ms=round((time.perf_counter() - started) * 1000, 1))
+        return page
+
+    def _ensure_recognition_page(self):
+        """Build recognition controls only when the user enters that workflow."""
+        if not self._recognition_page_deferred:
+            return
+        self._recognition_page_deferred = False
+        previous = self.settings_scroll.takeWidget()
+        self.settings_scroll.setWidget(self._settings_page())
+        if previous is not None:
+            previous.deleteLater()
+        self._refresh_media_summary()
+        self._refresh_ai_summary()
+        self._apply_ui_language()
+        self._restore_last_project_profile()
         QTimer.singleShot(0, self, self._background_preload)
-        QTimer.singleShot(0, self, self._restore_last_project_profile)
 
     def _on_modal_closed(self):
         # Lightweight hook for global post-close housekeeping if needed.
@@ -3814,6 +4046,11 @@ class MainWindow(QWidget):
         pass
 
     def retranslate_ui(self):
+        # refresh_application() calls this from inside _apply_ui_language(),
+        # which has just done the same pass; repeating it walked the whole
+        # window tree and refreshed every page a second time.
+        if getattr(self, "_applying_ui_language", False):
+            return
         self._apply_ui_language(refresh_all=False)
 
     def _apply_ui_language(self, *, refresh_all=True):
@@ -3850,17 +4087,22 @@ class MainWindow(QWidget):
                 tr("2ByteASR  兔白字幕")
             )
         apply_ui_language(self, code)
+        if getattr(self, '_completion_tasks', None):
+            self._select_completion_task(self.result_task_selector.currentIndex())
+        self._refresh_project_profile_combo()
         if hasattr(self, "recognition_plan"):
             self.recognition_plan.retranslate(code)
             self._refresh_asr_summary()
         if hasattr(self, "_refresh_ai_summary"):
             self._refresh_ai_summary()
-        if hasattr(self, "workshop_page"):
-            self.workshop_page.refresh()
-            for technical in self.workshop_page._technical_cache.values():
+        workshop = self.built_page("workshop")
+        if workshop is not None:
+            workshop.refresh()
+            for technical in workshop._technical_cache.values():
                 technical.retranslate(code)
-        if hasattr(self, "history_page"):
-            self.history_page.refresh()
+        history = self.built_page("history")
+        if history is not None:
+            history.refresh()
         if (
             hasattr(self, "term_library_page")
             and self.term_library_page.library is not None
@@ -3875,7 +4117,11 @@ class MainWindow(QWidget):
             self._refresh_studio_entry_card()
         from .i18n_widgets import refresh_application
         if refresh_all:
-            refresh_application(code)
+            self._applying_ui_language = True
+            try:
+                refresh_application(code)
+            finally:
+                self._applying_ui_language = False
         if hasattr(self, "language_combo"):
             self._refresh_header_density()
 
@@ -3888,9 +4134,13 @@ class MainWindow(QWidget):
         area.setWidgetResizable(True)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         area.setWidget(widget)
+        self._page_scroll_areas = getattr(self, "_page_scroll_areas", []) + [area]
         return area
 
     def _schedule_ai_panel_visibility(self, expanded: bool):
+        if not (hasattr(self, "settings_page_widget") and self.settings_page_widget.isAncestorOf(self.ai_panel)
+                and self.ai_panel.isVisible()):
+            return
         if hasattr(self, "settings_page_layout"):
             self.settings_page_layout.setContentsMargins(0, 0, 0, 40 if expanded else 0)
         if expanded:
@@ -3911,8 +4161,10 @@ class MainWindow(QWidget):
             and self.settings_page_widget.isAncestorOf(self.ai_panel)
         ):
             return
-        self.settings_scroll.ensureWidgetVisible(self.ai_panel.header, 24, 24)
-        panel_top = self.ai_panel.mapTo(self.settings_page_widget, QPoint(0, 0)).y()
+        # The tile is the visible header of the in-place form.
+        anchor = self.setting_tiles["ai"] if hasattr(self, "setting_tiles") else self.ai_panel
+        self.settings_scroll.ensureWidgetVisible(anchor, 24, 24)
+        panel_top = anchor.mapTo(self.settings_page_widget, QPoint(0, 0)).y()
         scroll_bar = self.settings_scroll.verticalScrollBar()
         scroll_bar.setValue(
             min(scroll_bar.maximum(), max(scroll_bar.minimum(), panel_top - 12))
@@ -3956,10 +4208,8 @@ class MainWindow(QWidget):
         row = QHBoxLayout(header_content)
         row.setContentsMargins(2, 0, 8, 0)
         row.setSpacing(10)
-        self.brand = BrandLabel(
-            '<span style="font-size:26px; font-weight:800;">2</span>'
-            '<span style="font-size:23px; font-weight:800;">ByteASR</span>'
-        )
+        self.brand = BrandLabel()
+        self._set_brand_text()
         self.brand.setObjectName("brand")
         self.brand.setTextFormat(Qt.TextFormat.RichText)
         self.brand.setAccessibleName("2ByteASR")
@@ -3982,9 +4232,11 @@ class MainWindow(QWidget):
         self.support_button.setObjectName("supportEntry")
         bind_text(self.support_button, "支持我！")
         install_themed_icon(self.support_button, "fa5s.heart", "primary")
-        self.support_button.setVisible(not support_entry_hidden())
         self.support_button.clicked.connect(self._open_support)
         row.addWidget(self.support_button)
+        # After adoption: showing a parentless button made it a native
+        # top-level window for a moment (~0.3 s at startup).
+        self.support_button.setVisible(not support_entry_hidden())
         self.update_button = AnimatedButton("检查更新")
         self.update_button.setObjectName("softAction")
         install_themed_icon(self.update_button, "fa5s.sync-alt", "accent")
@@ -4017,7 +4269,12 @@ class MainWindow(QWidget):
         for button in (self.subtitle_studio_button, self.model_workshop_button, self.app_settings_button):
             button_role(button, "secondary", size="default")
             button.setProperty("homeNavigation", True)
-            button.setIconSize(QSize(20, 20))
+            button.setIconSize(QSize(18, 18))
+        # Keyboard users still Tab to every header command; a mouse click or
+        # window activation no longer leaves a focus ring on the support button.
+        for button in (self.support_button, self.update_button, self.subtitle_studio_button,
+                       self.model_workshop_button, self.return_recognition_button, self.app_settings_button):
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.language_combo = user_text(FramelessPopupCombo())
         self.language_combo.setMinimumWidth(100)
         self.language_combo.setMaximumWidth(160)  # soft for CN labels
@@ -4038,11 +4295,19 @@ class MainWindow(QWidget):
         # header layout and never absolutely positioned over the wordmark.
         return
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, '_initial_focus_settled', False):
+            self._initial_focus_settled = True
+            # Start with no control focused; the first Tab reaches the header.
+            QTimer.singleShot(0, self, lambda: self.setFocus(Qt.FocusReason.OtherFocusReason))
+
     def changeEvent(self, event):
         if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "window_title_bar"):
             self.window_title_bar.sync_window_state()
-            if hasattr(self, "studio_page"):
-                self.studio_page._sync_window_controls()
+            studio = self.built_page("studio")
+            if studio is not None:
+                studio._sync_window_controls()
             self._layout_resize_handles()
         super().changeEvent(event)
 
@@ -4085,13 +4350,18 @@ class MainWindow(QWidget):
 
     def _page_changed(self, index: int):
         current = self.pages.widget(index)
-        self.content_layout.setContentsMargins(*( (0, 0, 0, 0) if current is self.studio_page else (18, 12, 18, 14) ))
-        self.content_layout.setSpacing(0 if current is self.studio_page else 12)
-        self.app_header.setVisible(current is not self.studio_page)
+        completion = current.objectName() == 'completionScroll'
+        studio = existing_page(self, "studio")
+        in_studio = studio is not None and current is studio
+        self.content_layout.setContentsMargins(*( (0, 0, 0, 0) if in_studio
+            else (18, 0, 18, 14) if completion else (18, 12, 18, 14) ))
+        self.content_layout.setSpacing(0 if in_studio else 12)
+        self.app_header.setVisible(not in_studio)
         self.model_workshop_button.setVisible(current is self.settings_scroll)
-        self.subtitle_studio_button.setVisible(current is not self.studio_page)
+        self.subtitle_studio_button.setVisible(not in_studio)
         self.return_recognition_button.setVisible(
-            current in {self.workshop_page, self.term_library_page, self.history_page}
+            current is self.term_library_page
+            or current in {existing_page(self, "workshop"), existing_page(self, "history")}
         )
         # 四十三轮：主页进度页的"返回 Studio"只在 Studio 后台识别进行中显示。
         progress_page = self.pages.widget(1) if self.pages.count() > 1 else None
@@ -4106,13 +4376,21 @@ class MainWindow(QWidget):
         if current.property("_2b_language_applied") != language:
             apply_ui_language(current, language)
             current.setProperty("_2b_language_applied", language)
+        # Interface zoom: pages built or changed since the last zoom step
+        # catch up here (no-op at 100%; Studio keeps its own size).
+        from .ui_zoom import apply_to as _apply_ui_zoom
+        _apply_ui_zoom(current)
         self._update_bottom_bar_visibility(index)
 
     def _switch_page(self, target) -> None:
         """Commit a stacked-page transition under one paint boundary."""
         widget = self.pages.widget(target) if isinstance(target, int) else target
+        if widget is self.settings_scroll:
+            self._ensure_recognition_page()
         if widget is None or self.pages.currentWidget() is widget:
             return
+        if widget is self.pages.widget(2) and hasattr(self, 'result_preview'):
+            self._refresh_completion_preview()
         from .ui_motion import atomic_layout, reveal_cue
         with atomic_layout(self):
             widget.ensurePolished()
@@ -4120,7 +4398,8 @@ class MainWindow(QWidget):
             self.pages.layout().activate()
             if hasattr(self, "content_layout"):
                 self.content_layout.activate()
-        reveal_cue(self.app_header if self.app_header.isVisible() else self.studio_page.studio_toolbar)
+        studio = self.built_page("studio")
+        reveal_cue(self.app_header if self.app_header.isVisible() or studio is None else studio.studio_toolbar)
 
     def _update_bottom_bar_visibility(self, index: int = None):
         # Bottom CTA is only relevant on the main settings page (index 0).
@@ -4175,8 +4454,20 @@ class MainWindow(QWidget):
                 g = QRect(0, 0, w, h)
                 g.moveCenter(avail.center())
                 self.setGeometry(g)
+            # 2026-10-10 (user): a window closed maximized opens maximized. Older
+            # versions saved only the size, so a saved size that almost fills the
+            # screen is read as maximized too; un-maximizing then gives the default.
+            flag = settings.value("mainWindow/maximized")
+            near_full = restored and g.width() >= avail.width() - 48 and g.height() >= avail.height() - 48
+            maximize = str(flag).lower() in {"true", "1"} if flag is not None else near_full
+            if maximize and near_full:
+                g = QRect(0, 0, w, h)
+                g.moveCenter(avail.center())
+                self.setGeometry(g)
             from .window_constraints import install_window_bounds
             install_window_bounds(self)
+            if maximize:
+                self.showMaximized()
             # Persist on close
             try:
                 self._persist_geometry = True
@@ -4188,8 +4479,9 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         try:
-            if hasattr(self, "studio_page"):
-                self.studio_page.close_page()
+            studio = self.built_page("studio")
+            if studio is not None:
+                studio.close_page()
             if getattr(self, "_persist_geometry", False):
                 settings = QSettings("2ByteASR", "2ByteASR")
                 g = self.geometry()
@@ -4201,21 +4493,34 @@ class MainWindow(QWidget):
         super().closeEvent(event)
 
     def _open_model_workshop(self):
+        self._ensure_recognition_page()
         self.workshop_page.update_runtime_settings(self.legacy.RUNTIME_SETTINGS)
         self.workshop_page.restore_active_navigation()
         self._switch_page(self.workshop_page)
 
-    def open_studio_project(self, project_path=None, *, mode="edit", source="canonical", on_ready=None):
+    def open_studio_project(self, project_path=None, *, mode="edit", source="canonical", on_ready=None, expected_result_ref=None):
         """Canonical Studio navigation entry for every project-opening source."""
-        if hasattr(self, "studio_page"):
-            self.studio_page._studio_trace(
-                "ENTRY",
-                source=str(source),
-                mode=str(mode),
-                project_path=str(project_path or ""),
-            )
+        proofread = getattr(self, "glossary_proofread_page", None)
+        if proofread is not None and project_path and not proofread.settle_writes(project_path):
+            # The proofreading edits of this file are not saved yet; Studio
+            # would load (and later save over) the older file.
+            return
+        if (source == "external" and project_path and self.built_page("studio") is not None
+                and self.studio_page.project is not None):
+            from .external_open import path_identity
+            current = self.studio_page.session.project_path
+            if current and path_identity(current) == path_identity(project_path):
+                self._switch_page(self.studio_page)
+                return
+        self.studio_page._studio_trace(
+            "ENTRY",
+            source=str(source),
+            mode=str(mode),
+            project_path=str(project_path or ""),
+        )
         self._open_subtitle_studio(project_path, mode=mode,
-            skip_dirty_guard=source == 'studio_recognition', on_ready=on_ready)
+            skip_dirty_guard=source == 'studio_recognition', on_ready=on_ready,
+            expected_result_ref=expected_result_ref)
 
     def _retry_pending_recognition_reload(self):
         """Reload a recognition handoff that failed to land earlier.
@@ -4224,7 +4529,7 @@ class MainWindow(QWidget):
         (readiness timeout/cancel). Retrying on the next Studio entry keeps
         the user from having to reopen the project from the library.
         """
-        studio = getattr(self, "studio_page", None)
+        studio = self.built_page("studio")
         pending = str(getattr(studio, "_pending_recognition_reload", "") or "")
         if not pending:
             return
@@ -4237,11 +4542,19 @@ class MainWindow(QWidget):
             studio._studio_trace(
                 "StudioSubtitleRefresh", retry=True, project_path=str(target)
             )
-        self.open_studio_project(str(target), mode="edit", source="studio_recognition")
+        self.open_studio_project(str(target), mode="edit", source="studio_recognition",
+            expected_result_ref=getattr(studio, '_pending_recognition_result_ref', None))
 
-    def _open_subtitle_studio(self, project_path=None, *, mode="edit", skip_dirty_guard=False, on_ready=None):
+    def _open_subtitle_studio(self, project_path=None, *, mode="edit", skip_dirty_guard=False, on_ready=None, expected_result_ref=None):
+        if expected_result_ref:
+            from .recognition_result import verify_result_reference
+            try:
+                verify_result_reference(expected_result_ref, project_path=project_path)
+            except (OSError, ValueError, TypeError) as exc:
+                QMessageBox.warning(self, tr('无法确认本次识别工程'), str(exc))
+                return
         transition_started = time.perf_counter()
-        if self.pages.currentWidget() is not self.studio_page:
+        if self.pages.currentWidget() is not self.studio_page and not self._recognition_page_deferred:
             current = self.current_project_profile
             self._home_profile_snapshot = ProjectProfile.from_dict(dict(
                 self._profile_configuration(), id=current.id if current else '',
@@ -4277,6 +4590,9 @@ class MainWindow(QWidget):
         if candidate and Path(candidate).is_file():
             def ready():
                 project = self.studio_page.project
+                if expected_result_ref:
+                    from .recognition_result import verify_result_reference
+                    verify_result_reference(expected_result_ref, project=project, project_path=candidate)
                 if skip_dirty_guard:
                     self._refresh_progress_cards()
                     self.studio_page._studio_trace('RECOGNITION_LOADED', project_path=candidate,
@@ -4301,12 +4617,14 @@ class MainWindow(QWidget):
                         self.studio_page._studio_trace(
                             "RECOGNITION_RESTORE_FAILED", error=str(exc)
                         )
-            self.studio_page.open_project(candidate, on_ready=ready, skip_dirty_guard=skip_dirty_guard)
+            self.studio_page.open_project(candidate, on_ready=ready, skip_dirty_guard=skip_dirty_guard,
+                expected_result_ref=expected_result_ref)
         else:
             self.studio_page.show_project_hub()
             self._retry_pending_recognition_reload()
 
     def _return_to_settings(self):
+        self._ensure_recognition_page()
         self._refresh_available_asr_choices()
         self._restore_global_recognition_plan_for_home()
         self._switch_page(self.settings_scroll)
@@ -4327,6 +4645,7 @@ class MainWindow(QWidget):
     def _handle_studio_recognition_request(
         self, action: str, media_path: str, project_path: str
     ) -> None:
+        self._ensure_recognition_page()
         media = Path(str(media_path or ""))
         project = Path(str(project_path or ""))
         if not media.is_file() or not project.is_file():
@@ -4362,14 +4681,6 @@ class MainWindow(QWidget):
             value = str(models.get(key) or "")
             if value:
                 self._set_backend_combo(control, value)
-        if request_options.get('speaker_source') == 'filetrans' and self.qwen_asr_api_provider.currentData()!='qwen31_filetrans':
-            # This is an explicit model selection in the recognition dialog.
-            provider_index = self.qwen_asr_api_provider.findData('qwen_filetrans')
-            self.qwen_asr_api_provider.setCurrentIndex(provider_index)
-            self._apply_asr_preset_fields('qwen_filetrans')
-            self.qwen_asr_api_model.setText('qwen-audio-3.0-asr-flash-filetrans')
-            self._set_backend_combo(self.primary_asr_backend, 'api')
-            models['primary'] = 'api'
         self._studio_recognition_context = {
             "media_path": str(media.resolve()),
             "project_path": str(project.resolve()),
@@ -4379,7 +4690,7 @@ class MainWindow(QWidget):
             "replace_policy": str(request_options.get("replace_policy") or "replace_cues"),
             "recognition_plan": plan_key,
             "models": dict(models),
-            "speaker_source": str(request_options.get("speaker_source") or "single"),
+            "speaker_source": str(models.get('speaker_source') or self.speaker_source.currentData() or 'native'),
         }
         from .recognition_input import capture_recognition_snapshot
         try:
@@ -4405,7 +4716,7 @@ class MainWindow(QWidget):
                     str(self._run_block_reason or "识别未能启动，请查看运行日志")
                 )
 
-    def _finish_studio_recognition(self, project_path: str) -> None:
+    def _finish_studio_recognition(self, project_path: str, expected_result_ref=None) -> None:
         context = getattr(self, "_studio_recognition_context", None) or {}
         snapshot = context.get("snapshot")
         if snapshot:
@@ -4417,7 +4728,8 @@ class MainWindow(QWidget):
             studio.note_recognition_kept_in_memory()
             self._studio_recognition_context = None
             if unchanged:
-                self.open_studio_project(project_path, mode="edit", source="studio_recognition")
+                self.open_studio_project(project_path, mode="edit", source="studio_recognition",
+                    expected_result_ref=expected_result_ref)
             else:
                 self._show_task_notification("识别结果已保存", "当前工程已有变化；请从完成页打开独立识别结果。", QMessageBox.Icon.Information)
             return
@@ -4439,7 +4751,7 @@ class MainWindow(QWidget):
         # 不再无条件重载（会静默丢弃），改为二选；无编辑保持原行为直接重载。
         # 2026-09-17：编辑判定改用 undo 栈计数——autosave 代次会被无编辑的
         # 周期保存顶掉，曾把无编辑的交接误判成"识别期间有编辑"。
-        studio = getattr(self, "studio_page", None)
+        studio = self.built_page("studio")
         try:
             same_open = (
                 studio is not None
@@ -4489,6 +4801,7 @@ class MainWindow(QWidget):
             # 就绪门超时/取消会让这次重载静默失败；挂起待重载，Studio 下次
             # 进入时自动重试，用户不必回工程库手动重开。
             studio._pending_recognition_reload = str(target)
+            studio._pending_recognition_result_ref = expected_result_ref
 
         def _restore_after_reload(page):
             cues = len(getattr(getattr(page, "project", None), "cues", ()) or ())
@@ -4521,13 +4834,13 @@ class MainWindow(QWidget):
         self.studio_page._studio_trace('RECOGNITION_HANDOFF', project_path=str(target),
             same_open=bool(same_open), edited_during_run=bool(edited_during_run))
         self.open_studio_project(target, mode="edit", source="studio_recognition",
-                                 on_ready=_restore_after_reload)
+                                 on_ready=_restore_after_reload, expected_result_ref=expected_result_ref)
 
     def _open_application_settings(self, initial_section=None):
         """One shared settings entry for every workspace (Recognition/Library/Studio)."""
         from .application_settings import open_application_settings
 
-        studio_page = getattr(self, "studio_page", None)
+        studio_page = self.built_page("studio")
         open_application_settings(
             self,
             on_saved=getattr(studio_page, "_after_application_settings_saved", None),
@@ -4583,37 +4896,8 @@ class MainWindow(QWidget):
         self._manage_terms()
 
     def _open_ai_from_workshop(self):
-        """Open the exact same AI configuration component used on the home page."""
-        panel = self.ai_panel
-        dialog = SpringDialog(self)
-        bind_text(dialog, 'AI 模型 / 智能断句', property='windowTitle')
-        dialog.setWindowIcon(_app_icon())
-        dialog.resize(980, 660)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
-        heading = QLabel("AI 模型 / 智能断句")
-        heading.setObjectName("termLibraryTitle")
-        layout.addWidget(heading)
-        note = QLabel("与字幕识别主页共用同一套供应商、模型、Base URL、密钥和开关配置。")
-        note.setObjectName("muted")
-        layout.addWidget(note)
-        panel.setVisible(True)
-        panel.set_expanded(True, animate=False)
-        layout.addWidget(panel, 1)
-        close = AnimatedButton("完成")
-        close.setObjectName("primary")
-        close.clicked.connect(dialog.accept)
-        layout.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
-        dialog.exec()
-        layout.removeWidget(panel)
-        panel.setParent(self.settings_page_widget)
-        insert_at = max(0, self.settings_page_layout.indexOf(self.settings_action_bar))
-        self.settings_page_layout.insertWidget(insert_at, panel)
-        panel.set_expanded(False, animate=False)
-        panel.hide()
-        self.setting_tiles["ai"].setChecked(False)
-        self.workshop_page.restore_active_navigation()
+        """Open the exact same AI settings dialog used on the home page."""
+        self._open_ai_settings_dialog(on_finished=self.workshop_page.restore_active_navigation)
 
     def _open_task_settings_from_workshop(self):
         self._open_application_settings(initial_section="高级设置")
@@ -4624,15 +4908,15 @@ class MainWindow(QWidget):
         self.term_hint.setVisible(bool(self.term_hint.text()))
 
     def _open_qwen_api_from_workshop(self):
-        self._apply_asr_api_preset("dashscope")
+        self._apply_asr_api_preset("qwen31_filetrans")
 
     def _saved_asr_api_endpoint(self) -> tuple[str, str, str]:
         """(provider, model, url) 已保存值——用户自定义地址不被预设强制刷新的依据。"""
         models = self.legacy.RUNTIME_SETTINGS.get("models", {})
         return (
-            str(models.get("qwen_asr_api_provider", "dashscope") or "dashscope"),
+            str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans"),
             str(models.get("qwen_asr_api_model", "") or ""),
-            str(models.get("qwen_asr_api_url", "") or ""),
+            str(models.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"]) or ""),
         )
 
     def _apply_asr_preset_fields(self, preset_key: str):
@@ -4669,7 +4953,7 @@ class MainWindow(QWidget):
             return
         target_combo = (
             self.primary_asr_backend
-            if getattr(getattr(self, "workshop_page", None), "api_target_role", "") == "primary"
+            if getattr(self.built_page("workshop"), "api_target_role", "") == "primary"
             else self.qwen_asr_backend
         )
         index = target_combo.findData("api")
@@ -4698,13 +4982,13 @@ class MainWindow(QWidget):
         self._open_api_key_dialog()
 
     def _refresh_workshop_after_asr_change(self):
-        workshop = getattr(self, "workshop_page", None)
+        workshop = self.built_page("workshop")
         if workshop is None:
             return
         try:
             workshop.update_runtime_settings(self.legacy.RUNTIME_SETTINGS)
             active=getattr(self,'current_project_profile',None)
-            (bind_text(workshop.combo_title, active.name) if active else bind_text(workshop.combo_title, '当前默认配置'))
+            (bind_text(workshop.combo_title, active.name + (' · ' + tr('自定义方案') if active.recognition_plan == 'custom' else '')) if active else bind_text(workshop.combo_title, '自定义方案'))
         except Exception:
             pass
         try:
@@ -4715,25 +4999,9 @@ class MainWindow(QWidget):
 
     def _apply_workshop_backend(self, role: str, value: str):
         if role == 'speaker':
-            from .speaker_strategy import resolve
-            value=resolve(self.legacy.RUNTIME_SETTINGS,value)
-            previous=self.legacy.RUNTIME_SETTINGS['models'].get('speaker_source','single')
-            active=getattr(self,'current_project_profile',None)
-            previous_asr=copy.deepcopy(active.asr_config) if active else None
-            try:
-                if active:
-                    updated={**previous_asr,'speaker_source':value}
-                    self.current_project_profile=self.profile_store.update_asr_config(active.id,updated)
-                self.legacy.configure_runtime_asr({'speaker_source':value})
-            except Exception as exc:
-                if active:
-                    self.current_project_profile=self.profile_store.update_asr_config(active.id,previous_asr)
-                self.legacy.RUNTIME_SETTINGS['models']['speaker_source']=previous
-                bind_text(self.asr_save_status, '说话人方案保存失败：{value0}', value0=str(exc))
-                self._refresh_workshop_after_asr_change()
-                return
-            self._refresh_asr_summary()
-            self._refresh_workshop_after_asr_change()
+            self.speaker_source.setCurrentIndex(max(0,self.speaker_source.findData(value)))
+            if self._save_asr_configuration(show_feedback=False):
+                self.workshop_page.update_runtime_settings(self.legacy.RUNTIME_SETTINGS)
             return
         self._refresh_available_asr_choices()
         combo = (
@@ -4776,10 +5044,64 @@ class MainWindow(QWidget):
 
     def _set_update_idle(self):
         self.update_button.setEnabled(True)
-        bind_text(self.update_button, '检查更新')
+        if getattr(self, '_prepared_update', None) is not None:
+            bind_text(self.update_button, '重启以完成更新')
+        elif getattr(self, '_available_update', None) is not None:
+            bind_text(self.update_button, '新版本 {value0}', value0=self._available_update.latest_version)
+        else:
+            bind_text(self.update_button, '检查更新')
+
+    def _after_startup_interactive(self):
+        """Startup has painted: confirm a just-applied update, then idle work."""
+        try:
+            confirm_started(current_version())
+        except Exception as exc:  # noqa: BLE001 - never block startup
+            print(f"[update] confirm failed: {exc}")
+        threading.Thread(target=cleanup_after_update, name='update-cleanup', daemon=True).start()
+        if automatic_checks_allowed():
+            QTimer.singleShot(automatic_check_delay_ms(), self, self._auto_check_updates)
+
+    def _auto_check_updates(self):
+        if (self.update_check_worker and self.update_check_worker.isRunning()) or \
+                (self.update_download_worker and self.update_download_worker.isRunning()):
+            return
+        worker = UpdateCheckWorker(self, automatic=True)
+        self.update_check_worker = worker
+        worker.result_ready.connect(self._auto_update_check_finished)
+        worker.failed.connect(self._auto_update_check_failed)
+        worker.start()
+
+    def _auto_update_check_failed(self, detail: str):
+        print(f"[update] automatic check failed: {detail}")
+
+    def _auto_update_check_finished(self, check):
+        if check.newer and getattr(self, '_prepared_update', None) is None:
+            self._available_update = check
+            self._set_update_idle()
+            bind_text(self.update_button, '发现新版本 {value0}，点击查看更新内容和下载量', property='toolTip',
+                      value0=check.latest_version)
 
     def _check_updates(self):
-        if self.update_check_worker and self.update_check_worker.isRunning():
+        if getattr(self, '_prepared_update', None) is not None:
+            self._offer_prepared_update(self._prepared_update)
+            return
+        if self.update_download_worker and self.update_download_worker.isRunning():
+            answer = QMessageBox.question(self, tr('正在下载更新'),
+                                          tr('要取消这次更新下载吗？已下载的部分会保留，下次继续。'))
+            if answer == QMessageBox.StandardButton.Yes:
+                self.update_download_worker.cancel_event.set()
+            return
+        running = self.update_check_worker
+        if running and running.isRunning():
+            if getattr(running, 'automatic', False) and not getattr(running, '_user_waiting', False):
+                # A silent background check is in flight: show its result to the user.
+                running._user_waiting = True
+                running.result_ready.connect(self._update_check_finished)
+                running.failed.connect(self._update_check_failed)
+                running.skipped.connect(self._auto_check_skipped_for_user)
+                running.finished.connect(self._auto_check_finished_for_user)
+                self.update_button.setEnabled(False)
+                bind_text(self.update_button, '正在检查…')
             return
         self.update_button.setEnabled(False)
         bind_text(self.update_button, '正在检查…')
@@ -4790,60 +5112,58 @@ class MainWindow(QWidget):
         worker.finished.connect(self._set_update_idle)
         worker.start()
 
+    def _auto_check_skipped_for_user(self):
+        self._update_check_rerun = True
+
+    def _auto_check_finished_for_user(self):
+        # Slots of the main window run on the GUI thread (queued connection).
+        if getattr(self, '_update_check_rerun', False):
+            self._update_check_rerun = False
+            self._check_updates()
+        else:
+            self._set_update_idle()
+
     def _update_check_failed(self, detail: str):
         message = QMessageBox(self)
         bind_text(message, '检查更新失败', property='windowTitle')
         message.setIcon(QMessageBox.Icon.Warning)
-        bind_text(message, '暂时无法连接更新服务器。')
+        bind_text(message, '暂时无法取得更新信息，程序可以照常使用。')
         bind_text(message, '{value0}\n\n可稍后重试，或打开发布页手动下载。', property='informativeText', value0=detail)
-        open_release = message.addButton("打开发布页", QMessageBox.ButtonRole.AcceptRole)
-        message.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+        open_release = message.addButton(tr("打开发布页"), QMessageBox.ButtonRole.AcceptRole)
+        message.addButton(tr("关闭"), QMessageBox.ButtonRole.RejectRole)
         message.exec()
         if message.clickedButton() is open_release:
             QDesktopServices.openUrl(QUrl(RELEASE_PAGE))
 
-    def _update_check_finished(self, info):
-        if not info.newer:
+    def _update_check_finished(self, check):
+        if not check.newer:
+            self._available_update = None
             QMessageBox.information(
                 self,
                 tr('已经是最新版'),
-                tr('当前版本 {value0}，发布版 {value1}。', value0=info.current_version, value1=info.latest_version),
+                tr('当前版本 {value0}，发布版 {value1}。', value0=check.current_version, value1=check.latest_version),
             )
             return
-        if not info.can_self_update:
-            answer = QMessageBox.question(
-                self,
-                tr('发现新版本'),
-                tr('发现 2ByteASR {value0}。这个旧版尚不支持一键增量更新，可以下载新版安装包直接覆盖安装；模型、环境和设置都会保留。\n\n现在打开下载页吗？', value0=info.latest_version),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                QDesktopServices.openUrl(QUrl(info.installer_url or info.release_url))
-            return
-        answer = QMessageBox.question(
-            self,
-            tr('发现新版本'),
-            tr('发现 2ByteASR {value0}（当前 {value1}）。\n\n是否下载小型更新包？下载完成后程序会退出、覆盖程序文件并自动重新打开；不会重新下载模型或 Python 环境。', value0=info.latest_version, value1=info.current_version),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._download_update(info)
+        self._available_update = check
+        dialog = UpdateOfferDialog(check, self)
+        self._update_offer_dialog = dialog
+        dialog.exec()
+        self._update_offer_dialog = None
+        if dialog.choice == 'page':
+            QDesktopServices.openUrl(QUrl(check.release_url))
+        elif dialog.choice == 'setup':
+            QDesktopServices.openUrl(QUrl(check.installer_url))
+        elif dialog.choice == 'download':
+            self._download_update(check)
 
-    def _download_update(self, info):
-        if self.update_download_worker and self.update_download_worker.isRunning():
-            return
-        local_data = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
-        destination = local_data / "updates"
-        self.update_button.setEnabled(False)
-        bind_text(self.update_button, '下载更新 0%')
-        worker = UpdateDownloadWorker(info, destination)
+    def _download_update(self, check):
+        worker = UpdateDownloadWorker(check, self)
         self.update_download_worker = worker
         worker.progress_changed.connect(self._update_download_progress)
         worker.completed.connect(self._update_download_finished)
         worker.failed.connect(self._update_download_failed)
-        worker.finished.connect(self._set_update_idle)
+        worker.cancelled.connect(self._set_update_idle)
+        bind_text(self.update_button, '准备下载更新…')
         worker.start()
 
     def _update_download_progress(self, received: int, total: int):
@@ -4854,20 +5174,76 @@ class MainWindow(QWidget):
             bind_text(self.update_button, '已下载 {value0:.1f} MB', value0=received / 1048576)
 
     def _update_download_failed(self, detail: str):
+        self._set_update_idle()
         QMessageBox.warning(
             self,
             tr('更新下载失败'),
             tr('更新未修改任何程序文件。可稍后重试或直接覆盖安装新版。\n\n{value0}', value0=detail),
         )
 
-    def _update_download_finished(self, package_path: str, checksum: str):
-        try:
-            launch_update_helper(Path(package_path), checksum, wait_pid=os.getpid())
-        except Exception as exc:  # noqa: BLE001 - retain verified package for retry
-            QMessageBox.critical(self, tr('无法启动更新'), str(exc))
+    def _update_download_finished(self, prepared):
+        self._prepared_update = prepared
+        self._set_update_idle()
+        self._offer_prepared_update(prepared)
+
+    def _offer_prepared_update(self, prepared):
+        answer = QMessageBox.question(
+            self,
+            tr('更新已准备好'),
+            tr('兔白字幕 {value0} 已下载并校验完成（本次下载 {value1}）。\n\n需要退出程序才能完成更新：'
+               '退出前会提示保存未保存的工程，更新完成后自动重新打开。设置、词库、工程、模型和运行环境都会保留。'
+               '\n\n现在退出并更新吗？',
+               value0=prepared.version, value1=format_bytes(prepared.downloaded_bytes)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._apply_prepared_update(prepared)
+
+    def _update_blockers(self) -> list[str]:
+        """Work that must finish first; updating never cancels it."""
+        blockers = []
+        if self.worker is not None and self.worker.isRunning():
+            blockers.append(tr('字幕识别正在进行'))
+        studio = self.built_page('studio')
+        if getattr(getattr(studio, 'export_workspace', None), '_running', False):
+            blockers.append(tr('视频导出正在进行'))
+        workshop = self.built_page('workshop')
+        active_download = getattr(workshop, '_active_download_dialog', None)
+        if callable(active_download) and active_download() is not None:
+            blockers.append(tr('模型下载或环境准备正在进行'))
+        own = (self.update_check_worker, self.update_download_worker, self.worker)
+        for value in list(vars(self).values()):
+            if isinstance(value, QThread) and value not in own and value.isRunning():
+                blockers.append(tr('后台任务正在进行'))
+                break
+        return blockers
+
+    def _apply_prepared_update(self, prepared):
+        blockers = self._update_blockers()
+        if blockers:
+            QMessageBox.information(
+                self, tr('暂时不能更新'),
+                tr('{value0}。请等它完成后再点“重启以完成更新”；更新已保留，不会重复下载。', value0='；'.join(blockers)))
             return
-        bind_text(self.update_button, '正在重启…')
-        QApplication.quit()
+        self._pending_update = prepared
+        self.close()
+        if self.isVisible() and not getattr(self, '_studio_close_pending', False):
+            # The user cancelled at the save prompt: keep working, keep the update.
+            self._pending_update = None
+            self._set_update_idle()
+
+    def launch_pending_update(self) -> bool:
+        """Called after the event loop ended; hands over to the updater."""
+        prepared = getattr(self, '_pending_update', None)
+        if prepared is None:
+            return False
+        try:
+            launch_update_helper(prepared, wait_pid=os.getpid())
+            return True
+        except Exception as exc:  # noqa: BLE001 - the old program stays intact
+            print(f"[update] helper launch failed: {exc}")
+            return False
 
     def _queue_workflow_show(self):
         return
@@ -4908,32 +5284,58 @@ class MainWindow(QWidget):
         page_heading.addWidget(page_subtitle)
         page_heading.addStretch(1)
         layout.addLayout(page_heading)
-        # 素材区放在最上方：整张卡片是选择/拖放主操作。
+        # 素材区放在最上方：整张卡片是选择/拖放主操作。空态是一块醒目的大投放区，
+        # 载入素材后收成一行（2026-10-08）；见 _apply_media_mode。
         self.media_frame = MediaPickCard()
         self.media_frame.setProperty("dropActive", False)
         self.media_frame.setMinimumHeight(66)
         self.media_frame.activated.connect(self._choose_media)
         media_row = QHBoxLayout(self.media_frame)
+        self.media_row_layout = media_row
         media_row.setContentsMargins(12, 8, 12, 8)
+        self.media_lead_space = QSpacerItem(0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        media_row.addSpacerItem(self.media_lead_space)
         media_icon = QLabel()
+        media_icon.setObjectName("mediaIcon")
+        media_icon.setFixedSize(36, 36)
+        media_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.media_type_icon = media_icon
-        media_icon.setPixmap(themed_icon("fa5s.file-audio").pixmap(QSize(20, 20)))
         media_row.addWidget(media_icon)
-        media_row.addWidget(QLabel("本地素材"))
-        media_row.addSpacing(20)
+        media_row.addSpacing(4)
+        self.media_kind_label = QLabel("本地素材")
+        media_row.addWidget(self.media_kind_label)
+        self.media_kind_gap = QSpacerItem(20, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        media_row.addSpacerItem(self.media_kind_gap)
         media_text = QVBoxLayout()
         media_text.setSpacing(1)
-        self.media_name = QLabel("")
+        self.media_name = MediaNameLabel("")
         self.media_name.setObjectName("mediaName")
         self.media_drop_hint = QLabel("可把视频 / 音频拖到窗口，或按回车选择")
         self.media_drop_hint.setObjectName("dropHint")
-        media_text.addWidget(self.media_name)
+        media_name_row = QHBoxLayout()
+        media_name_row.setSpacing(8)
+        media_name_row.addWidget(self.media_name)
+        self.media_ready_badge = QLabel()
+        self.media_ready_badge.setObjectName("mediaReadyBadge")
+        bind_text(self.media_ready_badge, '已就绪')
+        self.media_ready_badge.hide()
+        media_name_row.addWidget(self.media_ready_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        media_name_row.addStretch(1)
+        media_text.addLayout(media_name_row)
         media_text.addWidget(self.media_drop_hint)
+        from .media_intake import SUPPORTED_MEDIA_SUFFIXES
+        formats = sorted(suffix.lstrip(".").upper() for suffix in SUPPORTED_MEDIA_SUFFIXES)
+        self.media_formats = QLabel("  ·  ".join(formats))
+        self.media_formats.setObjectName("mediaFormats")
+        self.media_formats.hide()
+        media_text.addWidget(self.media_formats)
         self.media_origin_label = QLabel("来自兔白字幕工程")
         self.media_origin_label.setObjectName("studioOrigin")
         self.media_origin_label.hide()
         media_text.addWidget(self.media_origin_label)
         media_row.addLayout(media_text, 1)
+        self._media_text_index = media_row.count() - 1
+        media_row.addSpacing(12)
         self.choose_media_button = AnimatedButton("选择素材")
         self.choose_media_button.setObjectName("softAction")
         install_themed_icon(self.choose_media_button, "fa5s.folder-open")
@@ -4945,6 +5347,8 @@ class MainWindow(QWidget):
         bind_text(self.clear_single_media_button, '移除素材', property='toolTip')
         self.clear_single_media_button.clicked.connect(self._clear_media_paths)
         media_row.addWidget(self.clear_single_media_button)
+        self.media_tail_space = QSpacerItem(0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        media_row.addSpacerItem(self.media_tail_space)
         layout.addWidget(self.media_frame)
         # A visible input list keeps multi-file ingestion reversible. The drop
         # card remains the primary action; rows expose type/status and removal.
@@ -4955,42 +5359,71 @@ class MainWindow(QWidget):
         self.media_input_list_layout.setSpacing(4)
         self.media_input_list.hide()
         layout.addWidget(self.media_input_list)
-        layout.addSpacing(4)
-        from .home_studio_entry import StudioEntryCard
+        layout.addSpacing(2)
+        # 2026-10-08 (user): the left third is the project entrance — one
+        # cover of the latest project with its name and info, a few other
+        # recent project names, and the way into the Studio. A cover or row
+        # opens that project; the button or card background opens the library.
+        from .home_studio_entry import RecentProjectHero, RecentProjectList, StudioEntryCard
         studio_entry = StudioEntryCard()
         studio_entry.setObjectName("studioEntryCard")
+        studio_entry.show_backdrop = False
         studio_entry.clicked.connect(lambda: self.open_studio_project())
         entry_layout = QVBoxLayout(studio_entry)
-        entry_layout.setContentsMargins(20, 20, 20, 16)
-        entry_layout.setSpacing(8)
+        entry_layout.setContentsMargins(20, 18, 20, 18)
+        entry_layout.setSpacing(12)
+        entry_head = QHBoxLayout()
+        entry_head.setSpacing(14)
+        entry_icon = QLabel()
+        entry_icon.setObjectName("homeCardIcon")
+        entry_icon.setFixedSize(40, 40)
+        entry_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.studio_entry_icon = entry_icon
+        entry_head.addWidget(entry_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         entry_text = QVBoxLayout()
-        entry_text.setSpacing(8)
-        entry_text.addStretch(1)
+        entry_text.setSpacing(2)
         entry_eyebrow = QLabel("字幕与视频编辑")
         entry_eyebrow.setObjectName("studioEntryEyebrow")
-        entry_text.addWidget(entry_eyebrow, 0, Qt.AlignmentFlag.AlignLeft)
+        entry_eyebrow.setParent(studio_entry)
+        entry_eyebrow.hide()
         entry_title = QLabel("字幕工作台")
-        entry_title.setObjectName("studioEntryTitle")
+        entry_title.setObjectName("homeSectionTitle")
         entry_text.addWidget(entry_title)
-        entry_hint = QLabel("校对每一句，剪出好片段。\n字幕、画面与样式，在这里一起完成。")
-        entry_hint.setObjectName("studioEntryHint")
+        entry_hint = QLabel("校对字幕、剪辑片段、调整样式并压制成片")
+        entry_hint.setObjectName("homeSectionHint")
         entry_hint.setWordWrap(True)
         entry_text.addWidget(entry_hint)
+        # Kept for callers/audits; the gallery below shows the same project.
         self.studio_entry_recent = QLabel("最近：暂无工程")
         self.studio_entry_recent.setObjectName("studioEntryHint")
-        self.studio_entry_recent.setWordWrap(True)
-        entry_text.addWidget(self.studio_entry_recent)
-        for label in (entry_eyebrow, entry_title, entry_hint, self.studio_entry_recent):
+        self.studio_entry_recent.setParent(studio_entry)
+        self.studio_entry_recent.hide()
+        for label in (entry_icon, entry_title, entry_hint):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        entry_text.addStretch(1)
-        entry_layout.addLayout(entry_text, 1)
-        entry_open = AnimatedButton("进入兔白字幕 Studio  →")
+        entry_head.addLayout(entry_text, 1)
+        entry_layout.addLayout(entry_head)
+
+        def open_recent(path):
+            self.open_studio_project(path) if path else self.open_studio_project()
+
+        self.studio_recent_hero = RecentProjectHero(studio_entry)
+        self.studio_recent_hero.open_requested.connect(open_recent)
+        entry_layout.addWidget(self.studio_recent_hero, 1)
+        self.studio_recent_caption = QLabel("最近工程")
+        self.studio_recent_caption.setObjectName("homeFactCaption")
+        entry_layout.addWidget(self.studio_recent_caption)
+        self.studio_recent_list = RecentProjectList(studio_entry, limit=2)
+        self.studio_recent_list.open_requested.connect(open_recent)
+        self.studio_recent_list.preview_requested.connect(self._preview_recent_project)
+        entry_layout.addWidget(self.studio_recent_list)
+        # The cover caps at 16:10; any spare height stays above the button.
+        entry_layout.addStretch(0)
+        entry_open = AnimatedButton("进入字幕工作台")
         entry_open.setObjectName("studioEntryPrimary")
         install_themed_icon(entry_open, "fa5s.closed-captioning")
         entry_open.clicked.connect(lambda: self.open_studio_project())
         from .design.presentation import button_role
-        button_role(entry_open, "primary", size="large")
+        button_role(entry_open, "secondary", size="default")
         self.studio_entry_open = entry_open
         entry_layout.addWidget(entry_open)
         self.studio_entry_card = studio_entry
@@ -5002,33 +5435,60 @@ class MainWindow(QWidget):
         surface.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         surface.setMinimumHeight(320)
         self.settings_surface = surface
+        # 2026-10-08 home columns (user): left = content & terms, then the
+        # Studio gallery; right = recognition plan, then AI segmentation.
+        # Each column stacks at natural height; blocks are not forced equal.
         surface_layout = QHBoxLayout(surface)
-        surface_layout.setContentsMargins(22, 18, 22, 18)
-        surface_layout.setSpacing(22)
+        surface_layout.setContentsMargins(0, 2, 0, 0)
+        surface_layout.setSpacing(20)
         left = QVBoxLayout()
-        left.setSpacing(10)
+        left.setSpacing(16)
         self.settings_left_column = left
         content_profile = QFrame()
         content_profile.setObjectName("homeContentProfile")
         self.content_profile_card = content_profile
         profile_layout = QVBoxLayout(content_profile)
-        profile_layout.setContentsMargins(14, 12, 14, 12)
-        profile_layout.setSpacing(6)
+        profile_layout.setContentsMargins(20, 16, 20, 16)
+        profile_layout.setSpacing(9)
+        # 2026-10-08: the content name lives once, in the combo; the term
+        # switch and its state line live once, in the term panel below.
+        content_head = QHBoxLayout()
+        content_head.setSpacing(12)
+        self.content_icon = QLabel()
+        self.content_icon.setObjectName("homeCardIcon")
+        self.content_icon.setFixedSize(40, 40)
+        self.content_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_head.addWidget(self.content_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         current_eyebrow = QLabel("内容与术语")
-        current_eyebrow.setObjectName("muted")
-        current_eyebrow.setParent(content_profile)
-        current_eyebrow.hide()
+        current_eyebrow.setObjectName("homeSectionTitle")
+        content_head.addWidget(current_eyebrow)
+        content_head.addStretch(1)
+        profile_layout.addLayout(content_head)
+        # Two framed panels of equal height: content choice | terms
+        # (glossary correction and the optional web check as parallel rows).
+        content_body = QHBoxLayout()
+        content_body.setSpacing(14)
+        # Left: name, input and recent chips without an extra frame.
+        choice_panel = QWidget()
+        choice_panel.setObjectName("homeContentPlain")
+        self.content_choice_panel = choice_panel
+        content_choice = QVBoxLayout(choice_panel)
+        content_choice.setContentsMargins(2, 4, 4, 4)
+        content_choice.setSpacing(10)
+        content_body.addWidget(choice_panel, 1)
+        profile_layout.addLayout(content_body)
         self.current_content_title = QLabel("通用内容")
         self.current_content_title.setObjectName("contentHeroTitle")
-        profile_layout.addWidget(self.current_content_title)
+        self.current_content_title.setParent(content_profile)
+        self.current_content_title.hide()
         name_label = QLabel("游戏 / 内容名称")
-        name_label.setStyleSheet("font-weight: 600;")
-        name_label.setParent(content_profile)
-        name_label.hide()
+        name_label.setObjectName("homeFieldLabel")
+        content_choice.addWidget(name_label)
+        bind_text(self.content_profile_card, '游戏 / 内容名称', property='accessibleDescription')
         self.game_box = EditableHistoryCombo()
         choices = []
         seen = set()
-        for value in (*self.legacy.load_runtime_game_history(), *self.legacy.BUILTIN_GAME_PROFILES):
+        for value in (*term_library_game_names(self.legacy), *self.legacy.load_runtime_game_history()):
             canonical = self.legacy.canonicalize_runtime_game_name(value)
             identity = self.legacy.runtime_game_identity(canonical)
             if canonical and identity not in seen:
@@ -5038,38 +5498,66 @@ class MainWindow(QWidget):
         self.game_box.setCurrentIndex(-1)
         bind_text(self.game_box, '选择历史记录或内置游戏，也可以直接输入；留空为通用模式', property='placeholderText')
         bind_text(self.game_box, '点击右侧箭头选择历史记录或内置游戏；输入新名称也会自动保存', property='toolTip')
-        profile_layout.addWidget(self.game_box)
-        self.terms = SwitchControl("游戏术语增强")
-        bind_text(self.terms, '本地图鉴候选 + 联网复核；PVP 内容建议开启', property='toolTip')
+        self.game_box.setObjectName("homeContentCombo")
+        content_choice.addWidget(self.game_box)
+        # Recent content names as one-click chips (same history as the combo).
+        from .home_widgets import QuickPickRow
+        self.content_quick_picks = QuickPickRow("最近")
+        self.content_quick_picks.picked.connect(self._pick_recent_content)
+        content_choice.addWidget(self.content_quick_picks)
+        self.game_box.currentTextChanged.connect(self._sync_content_quick_picks)
+        self.terms = SwitchControl("术语库校对")
+        self.terms.setObjectName("homeSwitch")
+        self._restore_glossary_switch()
+        bind_text(self.terms, '使用本批已确认词库进行本地匹配和文字校对；联网核验独立选择', property='toolTip')
         self.game_box.currentTextChanged.connect(self._auto_enable_terms)
         self.terms.toggled.connect(lambda _checked: self._resolve_glossary_binding())
         self.game_box.currentTextChanged.connect(self._refresh_asr_summary)
         self.game_box.currentTextChanged.connect(
             lambda value: bind_text(self.current_content_title, value.strip() or '通用内容')
         )
-        # 术语增强开关与术语库入口同区：两者是同一件事的深浅两级。
+        # The term panel: switch, real state line and the enabled libraries.
+        batch_glossary = QFrame()
+        batch_glossary.setObjectName("homeBatchGlossary")
+        self.batch_glossary_card = batch_glossary
+        batch_layout = QVBoxLayout(batch_glossary)
+        batch_layout.setContentsMargins(16, 12, 16, 12)
+        batch_layout.setSpacing(6)
         terms_row = QHBoxLayout()
         terms_row.setSpacing(8)
         terms_row.addWidget(self.terms, 1)
-        terms_help = AnimatedButton("ⓘ")
+        terms_help = AnimatedButton("")
         terms_help.setObjectName("flat")
-        terms_help.setFixedSize(28, 28)
-        bind_text(terms_help, '本地图鉴候选 + 联网复核，提高游戏专名识别准确度；PVP 等内容建议开启。', property='toolTip')
+        terms_help.setFixedSize(30, 30)
+        install_themed_icon(terms_help, "fa5s.info-circle", "secondary")
+        bind_text(terms_help, '已确认词库可直接参与校对，不需要每次重新联网。', property='toolTip')
         terms_help.clicked.connect(
             lambda: QMessageBox.information(
                 self,
                 tr('术语增强说明'),
-                tr('术语增强会把本批启用的词库和已确认专名作为识别参考。\n\n本地图鉴只提供弱候选，不会仅凭名字相似强制改字；联网复核时再结合上下文确认专名。\n\n游戏、PVP 或专名密集的内容建议开启；通用闲聊可关闭。'),
+                tr('本批已确认的术语库可直接参与文字校对。\n\n联网补充核验是独立的可选步骤，需要实际搜索能力；未配置时仍保留已完成的字幕和本地词库修改。\n\n网页信息只证明术语和语境，无法替代原音复核。'),
             )
         )
         terms_row.addWidget(terms_help)
         manage = AnimatedButton("管理术语库")
+        manage.setObjectName("homeHeaderAction")
         install_themed_icon(manage, "fa5s.book-open")
         manage.clicked.connect(self._manage_terms)
         manage.setMaximumWidth(175)  # soft; EN/JA label must not truncate
-        terms_row.addWidget(manage)
+        content_head.addWidget(manage)
         self.add_glossary_button = manage
-        profile_layout.addLayout(terms_row)
+        batch_layout.addLayout(terms_row)
+        self.term_state_label = QLabel("")
+        self.term_state_label.setObjectName("homeTermState")
+        self.term_state_label.setWordWrap(True)
+        # Indented to the switch label (track 46px + gap) so the panel reads
+        # as one statement: switch, its state, the enabled libraries.
+        self.term_state_label.setContentsMargins(46, 0, 0, 0)
+        batch_layout.addWidget(self.term_state_label)
+        self.term_search = SwitchControl('联网补充核验（可选）')
+        self.term_search.setObjectName("homeSwitch")
+        self.term_search.setChecked(False)
+        bind_text(self.term_search, '仅本次任务启用；需可验证的搜索能力。当前文字校对服务保持不变，未配置搜索时不会发送请求。', property='toolTip')
         # 手动添加术语：入口收敛到术语库；首页不再常驻添加框（批准图 #1/#2）。
         self.term_input = QLineEdit()
         bind_text(self.term_input, '添加专名（角色名 / 技能名 / 物品名），回车确认', property='placeholderText')
@@ -5080,53 +5568,60 @@ class MainWindow(QWidget):
         term_hint = QLabel("")
         term_hint.setObjectName("muted")
         term_hint.setWordWrap(True)
-        profile_layout.addWidget(term_hint)
+        content_choice.addWidget(term_hint)
         term_hint.hide()
         self.term_hint = term_hint
-        # The batch glossary is a compact subsection of the same content
-        # profile; it is not a second competing homepage card.
-        batch_glossary = QFrame()
-        batch_glossary.setObjectName("homeBatchGlossary")
-        self.batch_glossary_card = batch_glossary
-        batch_layout = QVBoxLayout(batch_glossary)
-        batch_layout.setContentsMargins(0, 10, 0, 0)
-        batch_layout.setSpacing(5)
-        enabled_label = QLabel("本批字幕词库")
-        enabled_label.setObjectName("homeCardTitle")
-        batch_layout.addWidget(enabled_label)
+        # The ON/OFF status text stays the switch-state contract (tests and
+        # audits); the visible state line above avoids repeating the switch.
         self.batch_glossary_status = QLabel("术语增强 OFF")
         self.batch_glossary_status.setObjectName("homeGlossaryStatus")
-        self.batch_glossary_status.setWordWrap(True)
-        batch_layout.addWidget(self.batch_glossary_status)
-        glossary_note = QLabel("启用后用于专名、角色名与错词修正")
-        glossary_note.setObjectName("muted")
-        glossary_note.setWordWrap(True)
-        batch_layout.addWidget(glossary_note)
+        self.batch_glossary_status.setParent(batch_glossary)
+        self.batch_glossary_status.hide()
         self.glossary_chips_layout = QHBoxLayout()
         self.glossary_chips_layout.setSpacing(6)
+        self.glossary_chips_layout.setContentsMargins(46, 0, 0, 0)
         batch_layout.addLayout(self.glossary_chips_layout)
-        profile_layout.addWidget(batch_glossary)
-        left.addWidget(content_profile, 0)
-        left.addWidget(studio_entry, 1)
+        terms_rule = QFrame()
+        terms_rule.setObjectName("homePanelRule")
+        terms_rule.setFixedHeight(1)
+        batch_layout.addSpacing(4)
+        batch_layout.addWidget(terms_rule)
+        batch_layout.addSpacing(4)
+        batch_layout.addWidget(self.term_search)
+        self.term_search_note = QLabel("仅本次任务启用；需可验证的搜索能力")
+        self.term_search_note.setObjectName("homeTermState")
+        self.term_search_note.setProperty("tone", "off")
+        self.term_search_note.setWordWrap(True)
+        self.term_search_note.setContentsMargins(46, 0, 0, 0)
+        batch_layout.addWidget(self.term_search_note)
+        batch_layout.addStretch(1)
+        content_body.addWidget(batch_glossary, 1)
+        content_choice.addStretch(1)
+        # AI segmentation card; filled once the AI tile exists.
+        self.home_process_card = QFrame()
+        self.home_process_card.setObjectName("homeProcessCard")
+        process_layout = QVBoxLayout(self.home_process_card)
+        process_layout.setContentsMargins(4, 4, 4, 14)
+        process_layout.setSpacing(4)
 
-        right = QVBoxLayout()
-        right.setSpacing(8)
-        self.settings_right_column = right
+        plan_block = QWidget()
+        plan_block.setObjectName("homePlanBlock")
+        right = QVBoxLayout(plan_block)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(14)
         recognition_header = QHBoxLayout()
         recognition_header.setSpacing(8)
         recognition_heading = QLabel("识别方案")
-        recognition_heading.setObjectName("termGameTitle")
+        recognition_heading.setObjectName("homeSectionTitle")
         recognition_header.addWidget(recognition_heading)
-        recognition_header.addStretch(1)
         self.home_task_settings_button = AnimatedButton("高级设置")
-        self.home_task_settings_button.setObjectName("softAction")
+        self.home_task_settings_button.setObjectName("homeHeaderAction")
         install_themed_icon(self.home_task_settings_button, "fa5s.cog")
         bind_text(self.home_task_settings_button, '设置对白覆盖、说话人数、复核轨与缓存策略', property='toolTip')
         self.home_task_settings_button.clicked.connect(
             self._open_task_settings_from_workshop
         )
         recognition_header.addWidget(self.home_task_settings_button)
-        right.addLayout(recognition_header)
         recognition_note = QLabel("三个角色协作，可点击任一模型卡进行更换")
         recognition_note.setObjectName("pageSubtitle")
         recognition_note.hide()
@@ -5144,7 +5639,7 @@ class MainWindow(QWidget):
         self.project_profile_manage.setObjectName("softAction")
         install_themed_icon(self.project_profile_manage, "fa5s.ellipsis-h")
         bind_text(self.project_profile_manage, '管理 Project / Game Profile', property='toolTip')
-        self.project_profile_manage.setFixedSize(34, 32)
+        self.project_profile_manage.setFixedSize(36, 36)
         self.project_profile_manage.clicked.connect(self._show_project_profile_menu)
         profile_row.addWidget(self.project_profile_manage)
         self.profile_recommendation = QLabel("")
@@ -5169,18 +5664,30 @@ class MainWindow(QWidget):
         self.recognition_plan_hint.setWordWrap(True)
         self.recognition_plan_hint.hide()
         plan_row.addLayout(profile_row, 1)
-        right.addLayout(plan_row)
+        # Wide windows: one header row (title, goal, saved plan, advanced);
+        # narrower ones put goal / plan on their own line (2026-10-08). The
+        # dropdowns may shrink so neither form widens the page.
+        for combo in (self.recognition_mode_combo, self.project_profile_combo):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+        plan_row.setContentsMargins(8, 0, 0, 0)
+        self.plan_controls = QWidget()
+        self.plan_controls.setLayout(plan_row)
+        self.plan_header_layout = recognition_header
+        recognition_header.insertWidget(1, self.plan_controls, 1)
+        # 2026-10-08 (user): the plan toolbar sits on the 本批字幕 heading row
+        # so the three model cards start level with the Studio card.
+        page_heading.addLayout(recognition_header, 3)
+        self.page_subtitle = page_subtitle
         # 识别方案：三张角色模型卡（批准图核心区）
         from twobyteasr.ui_recognition import RecognitionPlanWidget
 
         self.recognition_plan = RecognitionPlanWidget()
+        # Its height band is set per window tier (and zoom) in apply_density.
+        self.recognition_plan.setProperty("uiZoomOwnSize", True)
         self.recognition_plan.role_requested.connect(self._open_model_picker)
         self.recognition_plan.recovery_requested.connect(self._recognition_recovery)
-        right.addWidget(self.recognition_plan, 1)
-        self.speaker_plan_summary = QLabel('')
-        self.speaker_plan_summary.setWordWrap(True)
-        self.speaker_plan_summary.setObjectName('muted')
-        right.addWidget(self.speaker_plan_summary)
+        right.addWidget(self.recognition_plan)
         # 兼容属性：旧测试/逻辑引用（内容由 _refresh_asr_summary 同步）
         self.recognition_summary = QLabel("")
         self.recognition_summary.hide()
@@ -5190,12 +5697,17 @@ class MainWindow(QWidget):
         self.run_next_action.hide()
         self.recognition_action = AnimatedButton("")
         self.recognition_action.hide()
-        surface_layout.addLayout(left, 34)
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setStyleSheet(f"color: {LINE};")
-        surface_layout.addWidget(divider)
-        surface_layout.addLayout(right, 66)
+        # Right two thirds: plan, AI, content & terms as one column; the
+        # left project card takes exactly that height (follows the right).
+        produce = QVBoxLayout()
+        produce.setSpacing(16)
+        produce.addWidget(plan_block)
+        produce.addWidget(self.home_process_card)
+        produce.addWidget(content_profile)
+        self.settings_right_column = produce
+        left.addWidget(studio_entry, 1)
+        surface_layout.addLayout(left, 1)
+        surface_layout.addLayout(produce, 2)
         layout.addWidget(surface)
 
         settings = self.legacy.RUNTIME_SETTINGS
@@ -5212,7 +5724,9 @@ class MainWindow(QWidget):
         self.qwen_asr_api_provider = FramelessPopupCombo()
         for key, preset in ASR_API_PRESETS.items():
             self.qwen_asr_api_provider.addItem(preset["label"], key)
-        api_provider = settings["models"].get("qwen_asr_api_provider", "dashscope")
+        api_provider = settings["models"].get("qwen_asr_api_provider", "qwen31_filetrans")
+        if api_provider not in ASR_API_PRESETS:
+            self.qwen_asr_api_provider.addItem(str(api_provider), api_provider)
         self.qwen_asr_api_provider.setCurrentIndex(
             max(0, self.qwen_asr_api_provider.findData(api_provider))
         )
@@ -5220,18 +5734,18 @@ class MainWindow(QWidget):
         self.primary_asr_backend.setProperty("selectedFirst", True)
         self.qwen_asr_api_provider.setProperty("selectedFirst", True)
         self.qwen_asr_api_model = QLineEdit(
-            settings["models"].get("qwen_asr_api_model", "qwen3-asr-flash")
+            settings["models"].get("qwen_asr_api_model", "qwen-audio-3.1-asr-flash-filetrans")
         )
         self.qwen_asr_api_url = QLineEdit(
-            settings["models"].get("qwen_asr_api_url", "")
+            settings["models"].get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"])
         )
         self.qwen_asr_api_key = QLineEdit()
         self.qwen_asr_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         from .llm_config import read_asr_api_key
 
         qwen_key, qwen_key_source = read_asr_api_key(
-            str(self.legacy.RUNTIME_SETTINGS.get("models", {}).get("qwen_asr_api_provider", "dashscope") or "dashscope"),
-            str(self.legacy.RUNTIME_SETTINGS.get("models", {}).get("qwen_asr_api_url", "") or ""),
+            str(self.legacy.RUNTIME_SETTINGS.get("models", {}).get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans"),
+            str(self.legacy.RUNTIME_SETTINGS.get("models", {}).get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"]) or ""),
         )
         (bind_text(self.qwen_asr_api_key, '已保存（···{value0}，留空保持）', property='placeholderText', value0=qwen_key[-4:]) if qwen_key else bind_text(self.qwen_asr_api_key, '请输入当前 ASR 服务的 API Key', property='placeholderText'))
         # P0-4: "获取模型" flow. Prefer dropdown from /v1/models; manual entry is fallback.
@@ -5301,7 +5815,7 @@ class MainWindow(QWidget):
         asr_form.addRow("字幕时间轴", self.firered_asr_backend)
         self.asr_panel.content_layout.addLayout(asr_form)
         asr_note = QLabel(
-            "MOSS 仍是长视频与多人内容的推荐主力；其它主力模型当前按单说话人输出，适合单人、轻量或多语种素材。"
+            "使用所选主转写模型的原生说话人结果；没有该能力时保留一条字幕轨。"
             "本地 Qwen 通常识别更准确，会为每个时间片段增加一份独立文字与词汇证据；"
             "API 可选阿里百炼、Groq、OpenAI 或自定义兼容服务，更快且不占本地显存，"
             "但需要对应服务的 Key，识别精度和国内可访问性取决于服务商。"
@@ -5357,6 +5871,7 @@ class MainWindow(QWidget):
         ):
             signal.connect(self._mark_asr_configuration_dirty)
         self._apply_asr_backend_mode()
+        self._refresh_content_choices()
         self._refresh_asr_summary()
         # Best-effort: prefill combo from cache on first paint if we have a base URL
         QTimer.singleShot(0, self, self._try_restore_asr_models_from_cache)
@@ -5382,9 +5897,9 @@ class MainWindow(QWidget):
         )
         bind_text(self.ai_grouping, '关闭后不请求断句模型，也不需要断句 API Key；将使用 MOSS 自然语句、FireRed 停顿与本地护栏断句。', property='toolTip')
         self.ai_panel.content_layout.addWidget(self.ai_grouping)
-        self.prefer_arabic_numbers = SwitchControl('新字幕优先使用阿拉伯数字（保留每次数字与重复）')
+        self.prefer_arabic_numbers = SwitchControl('数字规范化（保留口语小数字）')
         self.prefer_arabic_numbers.setChecked(settings['switches'].get('prefer_arabic_numbers', True))
-        bind_text(self.prefer_arabic_numbers, '只影响之后生成的字幕；不改已编辑的工程。数字只换写法，不求和或去重。', property='toolTip')
+        bind_text(self.prefer_arabic_numbers, '只影响之后生成的字幕；普通整数1～9保留原文，明确数值从10开始转为阿拉伯数字；小数、百分比和比例除外。保留约数、成语和已确认术语，不求和或去重，不改已保存工程。', property='toolTip')
         self.ai_panel.content_layout.addWidget(self.prefer_arabic_numbers)
         self.prefer_arabic_numbers.toggled.connect(self._mark_ai_configuration_dirty)
         self.unified_glm = SwitchControl("同一云端模型负责字幕校对与全文断句（推荐）")
@@ -5439,6 +5954,8 @@ class MainWindow(QWidget):
             editor.base_url.textChanged.connect(self._mark_ai_configuration_dirty)
             editor.protocol.currentIndexChanged.connect(self._mark_ai_configuration_dirty)
             editor.key.textChanged.connect(self._mark_ai_configuration_dirty)
+            editor.json_mode.toggled.connect(self._mark_ai_configuration_dirty)
+            editor.structured_output.toggled.connect(self._mark_ai_configuration_dirty)
         self.ai_grouping.toggled.connect(self._mark_ai_configuration_dirty)
         self.unified_glm.toggled.connect(self._mark_ai_configuration_dirty)
         self.share_key.toggled.connect(self._mark_ai_configuration_dirty)
@@ -5480,6 +5997,13 @@ class MainWindow(QWidget):
         bind_text(self.speaker_tracks, '默认关闭；需要按主播分轨导入其它工具时再打开', property='toolTip')
         self.advanced_disclosure.content_layout.addWidget(self.speaker_tracks)
         speaker_row = QHBoxLayout()
+        source_row=QHBoxLayout()
+        source_row.addWidget(bind_text(QLabel(),'说话人来源'))
+        self.speaker_source=FramelessPopupCombo()
+        self.speaker_source.addItem(tr('跟随当前主模型'),'native')
+        self.speaker_source.setCurrentIndex(0)
+        source_row.addWidget(self.speaker_source);source_row.addStretch(1)
+        self.advanced_disclosure.content_layout.addLayout(source_row)
         speaker_label = QLabel("预计说话人数")
         self.expected_speakers = FramelessPopupCombo()
         self.expected_speakers.addItems(["自动", "1", "2", "3", "4", "5", "6"])
@@ -5511,7 +6035,7 @@ class MainWindow(QWidget):
         # ------------------------------------------------------------
         # 首页只保留直接影响本批任务的 AI 智能断句入口。
         # ------------------------------------------------------------
-        from twobyteasr.ui_widgets import SettingTile, make_tile_row
+        from twobyteasr.ui_widgets import SettingTile
 
         self.setting_tiles: dict[str, SettingTile] = {}
         self._tile_panels = [
@@ -5522,6 +6046,9 @@ class MainWindow(QWidget):
             tile = SettingTile(title, "", icon_name)
             self.setting_tiles[key] = tile
             tiles.append(tile)
+            if key == "ai":
+                # Opens the AI settings dialog (_build_home_process_card).
+                continue
 
             def _toggle(tile=tile, key=key):
                 panels = {k: p for k, p, _t, _i in self._tile_panels}
@@ -5540,9 +6067,16 @@ class MainWindow(QWidget):
             tile.toggled.connect(
                 lambda _checked=False, tile=tile, key=key: _toggle(tile, key)
             )
+        self._build_home_process_card(tiles[0])
         self._refresh_ai_summary()
-        layout.addLayout(make_tile_row(tiles))
         for key, panel, _t, _i in self._tile_panels:
+            if key == "ai":
+                # Lives off-page; the AI settings dialog borrows it. Hidden
+                # explicitly: a re-parented child is otherwise shown with the
+                # page and floated over the home page's top-left corner.
+                panel.setParent(page)
+                panel.hide()
+                continue
             layout.addWidget(panel)
             panel.toggled.connect(
                 lambda checked, key=key: self.setting_tiles[key].setChecked(checked)
@@ -5553,6 +6087,8 @@ class MainWindow(QWidget):
         for panel in (self.advanced_disclosure, self.advanced_panel):
             panel.setParent(page)
             panel.setVisible(False)
+        # Spare height stays below both columns instead of stretching a card.
+        layout.addStretch(1)
         self.ai_panel.set_expanded(self.ai_panel._expanded, animate=False)
         # NOTE: The primary "取消 / 开始生成字幕" bar is now owned as self.bottom_bar
         # at the content_host level (fixed, outside any scroll). Do not add another here.
@@ -5575,7 +6111,7 @@ class MainWindow(QWidget):
     def _refresh_studio_entry_card(self) -> None:
         if not hasattr(self, "studio_entry_recent"):
             return
-        studio = getattr(self, "studio_page", None)
+        studio = self.built_page("studio")
         if studio is not None:
             records = studio.recent_project_records()
         else:
@@ -5589,12 +6125,356 @@ class MainWindow(QWidget):
                 bind_text(self.studio_entry_recent, '工程记录读取失败：{exc}', exc=exc)
                 self.studio_entry_card.set_cover_path("")
                 return
-        from .home_studio_entry import latest_studio_entry
+        from .home_studio_entry import latest_studio_entry, recent_studio_entries
         name, cover_path = latest_studio_entry(records)
         bind_text(self.studio_entry_recent, "最近：{name}", name=name) if name else bind_text(self.studio_entry_recent, "最近：暂无工程")
         card = getattr(self, "studio_entry_card", None)
         if card is not None:
             card.set_cover_path(cover_path)
+        hero = getattr(self, "studio_recent_hero", None)
+        if hero is not None:
+            entries = recent_studio_entries(records, limit=3)
+            key = (entries, current_language())
+            if key != getattr(self, "_studio_recent_key", None):
+                self._studio_recent_key = key
+                self._studio_recent_entries = entries
+                hero.set_entry(entries[0] if entries else None)
+                # The cover is the current project; the list holds the two
+                # other recent ones, and hovering a row previews it.
+                self.studio_recent_list.set_entries(entries[1:])
+                self.studio_recent_caption.setVisible(len(entries) > 1)
+
+    def _refresh_readiness_bar(self, plan_items) -> None:
+        """Missing items as buttons that open their fix, and the reason the
+        start button is disabled (2026-10-08). Start stays media-gated."""
+        layout = getattr(self, "readiness_chips_layout", None)
+        if layout is None:
+            return
+        from .ui_recognition import _ROLE_LABELS
+        language = getattr(self, "_ui_language", current_language())
+        self._last_plan_items = list(plan_items)
+        # Narrow windows name the role only; the tooltip keeps the detail.
+        compact = ui_zoom.logical(self.width()) < 1600
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().hide()  # never left visible until the deferred delete
+                item.widget().deleteLater()
+        media_missing = not getattr(self, "media_paths", None)
+        items = []
+        if media_missing:
+            items.append(("media", translate("选择素材", language), self._choose_media))
+        for role, status in plan_items:
+            action = "安装模型" if status == "需要下载" else "配置 API"
+            items.append(("plan", f"{translate(_ROLE_LABELS.get(role, role), language)} · {translate(status, language)}",
+                          lambda _=False, r=role, a=action: self._recognition_recovery(r, a)))
+        for kind, text, handler in items:
+            chip = QPushButton(text.split(" · ")[0] if compact else text)
+            chip.setToolTip(text)
+            chip.setProperty("uiZoomOwnSize", True)  # minimum follows its (zoomed) size hint
+            chip.setMinimumWidth(chip.sizeHint().width())
+            chip.setObjectName("readinessChip")
+            chip.setProperty("kind", kind)
+            chip.setProperty("flexibleWidth", True)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            install_themed_icon(chip, "fa5s.file-import" if kind == "media" else "fa5s.exclamation-circle",
+                                "accent" if kind == "media" else "warning")
+            chip.clicked.connect(handler)
+            layout.addWidget(chip)
+        # One group of clickable missing items; the button only says why.
+        self.start_hint.hide()
+        reason = translate("先选择素材才能开始", language) if media_missing else ""
+        self.start_button.setToolTip(reason or translate("开始生成字幕 (Ctrl+Enter)", language))
+
+    def _preview_recent_project(self, index: int) -> None:
+        timer = getattr(self, "_studio_preview_timer", None)
+        if timer is None:
+            timer = self._studio_preview_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(140)
+            timer.timeout.connect(lambda: self._show_recent_project(0))
+        if index < 0:
+            timer.start()
+            return
+        timer.stop()
+        self._show_recent_project(index + 1)
+
+    def _show_recent_project(self, index: int) -> None:
+        """index 0 is the current project (cover); rows are 1 and 2."""
+        entries = getattr(self, "_studio_recent_entries", [])
+        if 0 <= index < len(entries):
+            self.studio_recent_hero.set_entry(entries[index])
+            self.studio_recent_list.set_current(index - 1)
+
+    def _build_home_process_card(self, tile) -> None:
+        """AI segmentation summary (2026-10-08): the current service and model,
+        separate saved / key / connection facts, and a 设置 AI button. All
+        settings open in a dialog; nothing expands on the home page."""
+        card = self.home_process_card
+        layout = card.layout()
+        tile.chevron.hide()
+        self.ai_settings_button = AnimatedButton("设置 AI")
+        self.ai_settings_button.setObjectName("homeAiSettings")
+        install_themed_icon(self.ai_settings_button, "fa5s.sliders-h", "secondary")
+        self.ai_settings_button.clicked.connect(lambda: self._open_ai_settings_dialog())
+        tile.layout().addWidget(self.ai_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        tile.clicked.connect(lambda _checked=False: self._open_ai_settings_dialog())
+        layout.addWidget(tile)
+        self.home_fact_row = QWidget()
+        row = QHBoxLayout(self.home_fact_row)
+        row.setContentsMargins(70, 0, 16, 0)
+        row.setSpacing(8)
+        self._ai_state_chips = {}
+        for key in ("saved", "key", "connection"):
+            chip = QLabel()
+            chip.setObjectName("homeFactChip")
+            row.addWidget(chip)
+            self._ai_state_chips[key] = chip
+        row.addStretch(1)
+        layout.addWidget(self.home_fact_row)
+        self._refresh_home_process_facts()
+
+    def _refresh_home_process_facts(self, *_args) -> None:
+        """Saved settings, key and connection are three facts, never one
+        "ready" (user, 2026-10-08)."""
+        chips = getattr(self, "_ai_state_chips", None)
+        if not chips:
+            return
+        from .llm_config import effective_ai_identity
+        language = getattr(self, "_ui_language", current_language())
+
+        def show(name, text, state):
+            chip = chips[name]
+            chip.setVisible(bool(text))
+            chip.setText(translate(text, language) if text else "")
+            chip.setProperty("state", state)
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+
+        saved = self.legacy.RUNTIME_SETTINGS
+        switches = saved.get("switches", {})
+        polish_on = bool(switches.get("enable_ai_polish", True))
+        group_on = bool(switches.get("use_ai_grouping", True))
+        tile = getattr(self, "setting_tiles", {}).get("ai")
+        if not (polish_on or group_on):
+            if tile is not None:
+                tile.set_summary(translate("未启用 AI · 使用本地规则断句", language))
+            show("saved", "AI 已关闭", "off")
+            show("key", "", "off")
+            show("connection", "", "off")
+            return
+        stage = "polish" if polish_on else "group"
+        try:
+            identity = effective_ai_identity(saved, stage)
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+            identity = {}
+        if tile is not None and identity:
+            tile.set_summary(f"{identity.get('label', '')} · {identity.get('model') or translate('默认模型', language)}")
+        if getattr(self, "_ai_has_draft", False):
+            show("saved", "有未保存的修改", "warn")
+        else:
+            show("saved", "设置已保存", "on")
+        if str(identity.get("transport", "")) == AITransport.OPENAI_COMPATIBLE.value:
+            show("key", "密钥已配置" if identity.get("credential_configured") else "未配置密钥",
+                 "on" if identity.get("credential_configured") else "warn")
+        else:
+            show("key", "使用账号登录", "off")
+        editor = self.polish_editor if stage == "polish" else self.group_editor
+        result = getattr(editor, "last_connection_ok", None)
+        if result is None:
+            show("connection", "尚未测试连接", "off")
+        else:
+            show("connection", "连接正常" if result else "连接失败", "on" if result else "warn")
+
+    def _ai_settings_snapshot(self) -> dict:
+        names = ("ai_polish", "ai_grouping", "prefer_arabic_numbers", "unified_glm", "share_key")
+        return {"polish": self.polish_editor.values(), "group": self.group_editor.values(),
+                "switches": {name: getattr(self, name).isChecked() for name in names if hasattr(self, name)},
+                "asr_dirty": getattr(self, "_asr_config_dirty", False),
+                "status": (self.ai_save_status.objectName(), self.ai_save_status.text())}
+
+    def _restore_ai_settings(self, snapshot: dict) -> None:
+        """Cancel: put every control back exactly as it was when opened."""
+        from PySide6.QtCore import QSignalBlocker
+        for name, value in snapshot["switches"].items():
+            control = getattr(self, name)
+            blocker = QSignalBlocker(control)
+            control.setChecked(value)
+            del blocker
+        for editor, key in ((self.polish_editor, "polish"), (self.group_editor, "group")):
+            try:
+                editor.restore_profile_values(snapshot[key], self.legacy.RUNTIME_SETTINGS)
+            except (KeyError, ValueError):
+                pass
+        self._apply_unified_glm_mode(self.unified_glm.isChecked())
+        if hasattr(self, "refresh_group"):
+            self.refresh_group.setEnabled(self.ai_grouping.isChecked())
+        self._asr_config_dirty = snapshot["asr_dirty"]
+        name, status = snapshot["status"]
+        self.ai_save_status.setObjectName(name)
+        self.ai_save_status.setText(status)
+        self.ai_save_status.style().unpolish(self.ai_save_status)
+        self.ai_save_status.style().polish(self.ai_save_status)
+
+    def _open_ai_settings_dialog(self, on_finished=None) -> None:
+        """AI segmentation & proofreading settings (2026-10-08): fixed title,
+        close, Cancel and Save; the form scrolls between them. Cancel restores
+        every control; the home page's media, settings and scroll stay put."""
+        tile = getattr(self, "setting_tiles", {}).get("ai")
+        if tile is not None and tile.isChecked():
+            tile.setChecked(False)
+        current = getattr(self, "_ai_settings_dialog", None)
+        if current is not None and current.isVisible():
+            current.raise_()
+            current.activateWindow()
+            return
+        from .design.presentation import button_role
+        panel = self.ai_panel
+        snapshot = self._ai_settings_snapshot()
+        dialog = SpringDialog(self)
+        self._ai_settings_dialog = dialog
+        dialog.setObjectName("aiSettingsDialog")
+        bind_text(dialog, 'AI 智能断句设置', property='windowTitle')
+        dialog.setWindowIcon(_app_icon())
+        dialog.resize(min(1040, max(720, self.width() - 160)), min(800, max(520, self.height() - 120)))
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        header = QFrame(dialog)
+        header.setObjectName("aiDialogHeader")
+        head = QHBoxLayout(header)
+        head.setContentsMargins(24, 18, 16, 14)
+        head.setSpacing(12)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        title = QLabel("AI 智能断句设置")
+        title.setObjectName("aiDialogTitle")
+        subtitle = QLabel("字幕校对、全文断句与数字规范化共用这里的服务、模型与密钥")
+        subtitle.setObjectName("aiDialogSubtitle")
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        head.addLayout(titles, 1)
+        close = button_role(QPushButton(""), "ghost")
+        close.setFixedSize(36, 36)
+        install_themed_icon(close, "fa5s.times", "secondary")
+        close.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        bind_text(close, '关闭 AI 设置', property='accessibleName')
+        bind_text(close, '关闭（不保存修改）', property='toolTip')
+        close.clicked.connect(dialog.reject)
+        head.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
+        outer.addWidget(header)
+        scroll = QScrollArea(dialog)
+        scroll.setObjectName("aiDialogScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget()
+        body.setObjectName("aiDialogBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 4, 24, 16)
+        body_layout.setSpacing(0)
+        panel.setParent(body)
+        body_layout.addWidget(panel)
+        body_layout.addStretch(1)
+        panel.header.hide()
+        self.save_ai_button.hide()
+        panel.setVisible(True)
+        panel.set_expanded(True, animate=False)
+        # Inside the scrolling form the panel may grow (advanced groups).
+        panel.content.setMaximumHeight(16777215)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+        footer = QFrame(dialog)
+        footer.setObjectName("aiDialogFooter")
+        foot = QHBoxLayout(footer)
+        foot.setContentsMargins(24, 12, 24, 16)
+        foot.setSpacing(10)
+        foot.addStretch(1)
+        cancel = button_role(QPushButton("取消"), "secondary")
+        cancel.clicked.connect(dialog.reject)
+        save = QPushButton("保存设置")
+        save.setObjectName("primary")
+        button_role(save, "primary")
+        foot.addWidget(cancel)
+        foot.addWidget(save)
+        outer.addWidget(footer)
+        self.ai_dialog_save_button = save
+        saved = [False]
+
+        def save_and_close():
+            if self._save_ai_configuration(show_feedback=True):
+                saved[0] = True
+                dialog.accept()
+
+        save.clicked.connect(save_and_close)
+
+        def finished(_result):
+            if not saved[0]:
+                self._restore_ai_settings(snapshot)
+            panel.set_expanded(False, animate=False)
+            panel.setParent(self.settings_page_widget)
+            panel.hide()
+            self.save_ai_button.show()
+            self._ai_settings_dialog = None
+            self._refresh_ai_summary()
+            if on_finished is not None:
+                on_finished()
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.show()
+        # CollapsibleFrame.showEvent re-caps the content height; inside the
+        # scrolling form it must grow freely (advanced groups, two editors).
+        panel.content.setMaximumHeight(16777215)
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _apply_media_mode(self, ready: bool) -> None:
+        """Empty: a tall, centred drop zone. Loaded: the compact one-line row."""
+        layout = getattr(self, "media_row_layout", None)
+        if layout is None:
+            return
+        hero = not ready
+        policy = QSizePolicy.Policy.Expanding if hero else QSizePolicy.Policy.Fixed
+        for spacer in (self.media_lead_space, self.media_tail_space):
+            spacer.changeSize(0, 0, policy, QSizePolicy.Policy.Minimum)
+        self.media_kind_gap.changeSize(0 if hero else 20, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        layout.setStretch(self._media_text_index, 0 if hero else 1)
+        self.media_kind_label.setVisible(not hero)
+        self.media_formats.setVisible(hero)
+        tall = ui_zoom.logical(self.height()) >= 900
+        icon = (64 if tall else 52) if hero else 36
+        self.media_type_icon.setFixedSize(icon, icon)
+        layout.setContentsMargins(*((28, 18, 28, 18) if hero else (12, 8, 12, 8)))
+        layout.setSpacing(18 if hero else 6)
+        if hero:
+            height = 130 if ui_zoom.logical(self.height()) >= 1150 else 124 if tall else 116
+            self.media_frame.setMinimumHeight(height)
+            self.media_frame.setMaximumHeight(height)
+        else:
+            self.media_frame.setMinimumHeight(66)
+            self.media_frame.setMaximumHeight(16777215)
+        self.choose_media_button.setProperty("heroAction", hero)
+        install_themed_icon(self.choose_media_button, "fa5s.folder-open", "on_accent" if hero else "primary")
+        self.choose_media_button.style().unpolish(self.choose_media_button)
+        self.choose_media_button.style().polish(self.choose_media_button)
+        layout.invalidate()
+
+    def _style_home_icons(self) -> None:
+        icon = getattr(self, "studio_entry_icon", None)
+        if icon is None:
+            return
+        import qtawesome as qta
+        theme = _active_theme_definition()
+        zones = theme.zone_colors
+        icon.setPixmap(qta.icon("fa5s.closed-captioning", color=zones["studio"]).pixmap(QSize(20, 20)))
+        content_icon = getattr(self, "content_icon", None)
+        if content_icon is not None:
+            content_icon.setPixmap(qta.icon("fa5s.tags", color=zones["content"]).pixmap(QSize(18, 18)))
+        tile = getattr(self, "setting_tiles", {}).get("ai")
+        if tile is not None:
+            tile.icon_label.setPixmap(qta.icon("fa5s.project-diagram", color=zones["ai"]).pixmap(QSize(19, 19)))
+
 
     def _action_bar(self):
         from .design.presentation import button_role
@@ -5608,7 +6488,21 @@ class MainWindow(QWidget):
         self.action_status = QLabel("")
         self.action_status.setObjectName("statusGood")
         bar_layout.addWidget(self.action_status)
+        # 2026-10-08: what is missing, as clickable items that open the fix.
+        self.readiness_chips_layout = QHBoxLayout()
+        self.readiness_chips_layout.setSpacing(6)
+        bar_layout.addSpacing(6)
+        bar_layout.addLayout(self.readiness_chips_layout)
         bar_layout.addStretch(1)
+        # Why start is unavailable, as a link to the fix (start stays disabled).
+        self.start_hint = QPushButton("")
+        self.start_hint.setObjectName("startHint")
+        self.start_hint.setProperty("flexibleWidth", True)
+        self.start_hint.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.start_hint.clicked.connect(lambda: getattr(self, "_start_hint_action", lambda: None)())
+        self.start_hint.hide()
+        bar_layout.addWidget(self.start_hint)
+        bar_layout.addSpacing(10)
         studio_button = AnimatedButton("字幕工作台")
         studio_button.setObjectName("studioFooterButton")
         studio_button.setIcon(_icon("fa5s.closed-captioning"))
@@ -5636,125 +6530,287 @@ class MainWindow(QWidget):
         return bar
 
     def _progress_page(self):
+        """Recognition progress (2026-10-07): overall progress, current phase,
+        what is running and elapsed time first; feed and full log second."""
         page = QWidget()
+        page.setObjectName("progressPage")
+        self.progress_page_root = page
+        page.setStyleSheet(progress_page_qss(_active_theme_definition()))
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 14, 24, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(28, 18, 28, 14)
+        layout.setSpacing(14)
 
-        hero = QFrame()
-        hero.setObjectName("progressHero")
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(20, 15, 16, 15)
-        hero_layout.setSpacing(13)
+        # 2026-10-08 (M13, user): no frame around the overview. A frameless
+        # header with the run bar, then an independent phase row; header,
+        # phases and both columns share the page's edges and one spacing.
+        hero = QWidget()
+        hero.setObjectName("progressHeader")
+        self.progress_hero = hero
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(0, 0, 0, 0)
+        hero_layout.setSpacing(12)
+        head = QHBoxLayout()
+        head.setSpacing(28)
         hero_text = QVBoxLayout()
-        hero_text.setSpacing(2)
+        hero_text.setSpacing(4)
         title = QLabel("2ByteASR 正在制作字幕")
-        title.setStyleSheet(f"font-family: {TITLE_FONT_STACK}; font-size: 22px; font-weight: 800;")
+        title.setObjectName("progressTitle")
+        self.progress_title = title
         hero_text.addWidget(title)
         self.progress_context = QLabel("正在准备任务…")
-        self.progress_context.setObjectName("muted")
+        self.progress_context.setObjectName("progressContext")
+        # One short line; a wrapping label would make the whole window
+        # height-for-width and Qt then refuses short windows (M12).
         hero_text.addWidget(self.progress_context)
-        hero_layout.addLayout(hero_text, 1)
+        head.addLayout(hero_text, 1)
+        steps_box = QVBoxLayout()
+        steps_box.setSpacing(2)
+        steps_caption = QLabel("已完成")
+        steps_caption.setObjectName("progressElapsedCaption")
+        steps_caption.setAlignment(Qt.AlignmentFlag.AlignRight)
+        steps_box.addWidget(steps_caption)
+        self.progress_steps = QLabel("0 / 11 步")
+        self.progress_steps.setObjectName("progressStat")
+        self.progress_steps.setAlignment(Qt.AlignmentFlag.AlignRight)
+        steps_box.addWidget(self.progress_steps)
+        head.addLayout(steps_box)
+        elapsed_box = QVBoxLayout()
+        elapsed_box.setSpacing(2)
+        elapsed_caption = QLabel("已用时")
+        elapsed_caption.setObjectName("progressElapsedCaption")
+        elapsed_caption.setAlignment(Qt.AlignmentFlag.AlignRight)
+        elapsed_box.addWidget(elapsed_caption)
+        self.stage_elapsed = QLabel("00:00")
+        self.stage_elapsed.setObjectName("progressElapsed")
+        self.stage_elapsed.setAlignment(Qt.AlignmentFlag.AlignRight)
+        elapsed_box.addWidget(self.stage_elapsed)
+        head.addLayout(elapsed_box)
+        head_rule = QFrame()
+        head_rule.setObjectName("progressFooterRule")
+        head_rule.setFixedWidth(1)
+        head_rule.setMinimumHeight(40)
+        head.addWidget(head_rule, 0, Qt.AlignmentFlag.AlignVCenter)
         self.progress_percent = QLabel("0%")
         self.progress_percent.setObjectName("progressPercent")
-        hero_layout.addWidget(self.progress_percent)
-        layout.addWidget(hero)
+        self.progress_percent.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.progress_percent.setMinimumWidth(92)
+        bind_text(self.progress_percent, '按已完成的步骤计算；正在运行的步骤有真实批次进度时计入。保存成功后才显示 100%', property='toolTip')
+        head.addWidget(self.progress_percent)
+        hero_layout.addLayout(head)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 1000)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        layout.addWidget(self.progress_bar)
-        self.recognition_live_status = QLabel('等待真实识别结果；文字将在已完成批次返回后显示')
-        self.recognition_live_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.recognition_live_status.setWordWrap(True)
-        layout.addWidget(self.recognition_live_status)
+        # 2026-10-08 (M12): always determinate. Steps are drawn as segments;
+        # the running step's segment brightens only on real output events.
+        self.progress_bar = StageProgressBar()
+        self.progress_bar.setObjectName("progressBar")
+        self.progress_bar.setFixedHeight(8)
+        hero_layout.addWidget(self.progress_bar)
+        layout.addWidget(hero)
         self._recognition_live_work = {}
+        self._phase_degraded = {}
         self._progress_motion = QPropertyAnimation(self.progress_bar, b"value", self)
         self._progress_motion.setDuration(460)
         self._progress_motion.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         phase_row = QHBoxLayout()
-        phase_row.setSpacing(8)
+        phase_row.setSpacing(14)
         self.phase_cards = [
-            ProgressPhaseCard("fa5s.wave-square", "本地识别", "转写与主播", GREEN),
-            ProgressPhaseCard("fa5s.magic", "字幕校对", "模型安全纠错", AMBER),
-            ProgressPhaseCard("fa5s.comment-alt", "全文断句", "语义与时间轴", BLUE),
-            ProgressPhaseCard("fa5s.file-export", "保存结果", "工程与报告", CORAL),
+            ProgressPhaseCard("fa5s.wave-square", "本地识别", "转写与主播", GREEN, number=1),
+            ProgressPhaseCard("fa5s.magic", "字幕校对", "模型安全纠错", AMBER, number=2),
+            ProgressPhaseCard("fa5s.comment-alt", "全文断句", "语义与时间轴", BLUE, number=3),
+            ProgressPhaseCard("fa5s.file-export", "保存结果", "工程与报告", CORAL, number=4),
         ]
         for card in self.phase_cards:
             phase_row.addWidget(card, 1)
         layout.addLayout(phase_row)
 
-        detail_row = QHBoxLayout()
-        detail_row.setSpacing(10)
-        left_column = QVBoxLayout()
-        left_column.setSpacing(10)
+        self.progress_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.progress_splitter.setObjectName("progressSplitter")
+        self.progress_splitter.setChildrenCollapsible(False)
+        self.progress_splitter.setHandleWidth(14)
+        left_host = QWidget()
+        left_host.setObjectName("progressLeftContent")
+        left_column = QVBoxLayout(left_host)
+        left_column.setContentsMargins(0, 0, 0, 0)
+        left_column.setSpacing(14)
 
         current_card = QFrame()
         current_card.setObjectName("currentStageCard")
+        self.current_stage_card = current_card
         current_layout = QVBoxLayout(current_card)
-        current_layout.setContentsMargins(15, 12, 15, 13)
-        current_layout.setSpacing(4)
+        current_layout.setContentsMargins(20, 14, 20, 16)
+        current_layout.setSpacing(8)
         eyebrow_row = QHBoxLayout()
+        eyebrow_row.setSpacing(10)
         eyebrow = QLabel("当前步骤")
         eyebrow.setObjectName("stageEyebrow")
         eyebrow_row.addWidget(eyebrow)
-        self.running_indicator = RunningIndicator()
-        eyebrow_row.addWidget(self.running_indicator)
+        self.stage_step_label = QLabel()
+        self.stage_step_label.setObjectName("stageStep")
+        eyebrow_row.addWidget(self.stage_step_label)
         eyebrow_row.addStretch(1)
-        self.stage_elapsed = QLabel("00:00")
-        self.stage_elapsed.setObjectName("consoleBadge")
-        eyebrow_row.addWidget(self.stage_elapsed)
+        # Device / service is context, not the headline (M13).
+        self.stage_device_label = QLabel()
+        self.stage_device_label.setObjectName("stageDevice")
+        eyebrow_row.addWidget(self.stage_device_label)
+        self.running_indicator = RunningIndicator()
+        self.running_indicator.set_status('准备中', 'muted')
+        eyebrow_row.addWidget(self.running_indicator)
         current_layout.addLayout(eyebrow_row)
+        # 2026-10-08 (M12): the action in plain words first, then its live
+        # facts (elapsed, real output, last output, device).
+        # 2026-10-09 (M14, user): action and a one-line description on the
+        # left, the live facts as a label / value column on the right.
+        stage_body = QHBoxLayout()
+        stage_body.setSpacing(28)
+        stage_lead = QVBoxLayout()
+        stage_lead.setSpacing(4)
         self.progress_stage = QLabel("等待启动")
         self.progress_stage.setObjectName("stageLarge")
         self.progress_stage.setWordWrap(True)
-        current_layout.addWidget(self.progress_stage)
+        stage_lead.addWidget(self.progress_stage)
         self.progress_resource = QLabel("准备检查运行环境")
-        self.progress_resource.setObjectName("muted")
+        self.progress_resource.setObjectName("stageSubtitle")
         self.progress_resource.setWordWrap(True)
-        current_layout.addWidget(self.progress_resource)
+        stage_lead.addWidget(self.progress_resource)
+        stage_lead.addStretch(1)
+        stage_body.addLayout(stage_lead, 1)
+        self.stage_metrics = StageMetricGrid()
+        self.stage_metrics.setMinimumWidth(200)
+        self.stage_metrics.hide()
+        stage_body.addWidget(self.stage_metrics, 0, Qt.AlignmentFlag.AlignTop)
+        current_layout.addLayout(stage_body)
+        # One-line notice; the full explanation opens on demand.
+        self.stage_note_row = QFrame()
+        self.stage_note_row.setObjectName("stageNoteRow")
+        note_layout = QGridLayout(self.stage_note_row)
+        note_layout.setContentsMargins(12, 6, 8, 6)
+        note_layout.setHorizontalSpacing(8)
+        note_layout.setVerticalSpacing(4)
+        self.stage_note_icon = QLabel()
+        self.stage_note_icon.setObjectName("stageNoteIcon")
+        self.stage_note_icon.setFixedSize(16, 16)
+        note_layout.addWidget(self.stage_note_icon, 0, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.stage_note = ElidedValueLabel()
+        self.stage_note.setObjectName("stageNote")
+        self.stage_note.setMinimumWidth(0)
+        self.stage_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        note_layout.addWidget(self.stage_note, 0, 1)
+        self.stage_note_more = QToolButton()
+        self.stage_note_more.setObjectName("stageNoteMore")
+        self.stage_note_more.setCheckable(True)
+        self.stage_note_more.setCursor(Qt.CursorShape.PointingHandCursor)
+        bind_text(self.stage_note_more, '查看详情')
+        note_layout.addWidget(self.stage_note_more, 0, 2, Qt.AlignmentFlag.AlignVCenter)
+        self.stage_note_detail = QLabel()
+        self.stage_note_detail.setObjectName("stageNoteDetail")
+        self.stage_note_detail.setWordWrap(True)
+        self.stage_note_detail.hide()
+        note_layout.addWidget(self.stage_note_detail, 1, 1, 1, 2)
+        note_layout.setColumnStretch(1, 1)
+        self.stage_note_more.toggled.connect(self._toggle_stage_note_detail)
+        self.stage_note_row.hide()
+        current_layout.addWidget(self.stage_note_row)
         self.active_tasks_label = QLabel("尚无运行中的子任务")
         self.active_tasks_label.setWordWrap(True)
         self._style_active_tasks_label()
+        self.active_tasks_label.hide()
         current_layout.addWidget(self.active_tasks_label)
+        # Raw live rows stay for audits; the metrics above and the preview
+        # below show the same events in readable form.
+        live_caption = QLabel("实时识别输出")
+        live_caption.setObjectName("sectionNote")
+        live_caption.hide()
+        self.progress_live_caption = live_caption
+        current_layout.addWidget(live_caption)
+        self.recognition_live_status = ElidedRowsLabel()
+        self.recognition_live_status.setText('等待真实识别结果；文字将在已完成批次返回后显示')
+        self.recognition_live_status.hide()
+        current_layout.addWidget(self.recognition_live_status)
         left_column.addWidget(current_card)
 
         feed_card = QFrame()
         feed_card.setObjectName("eventFeedCard")
         feed_layout = QVBoxLayout(feed_card)
-        feed_layout.setContentsMargins(13, 10, 13, 11)
+        feed_layout.setContentsMargins(18, 14, 14, 14)
+        feed_layout.setSpacing(8)
         feed_header = QHBoxLayout()
-        feed_title = QLabel("任务动态")
-        feed_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        feed_title = QLabel("处理记录")
+        feed_title.setObjectName("sectionCaption")
         feed_header.addWidget(feed_title)
         feed_header.addStretch(1)
-        feed_note = QLabel("结构化进度")
-        feed_note.setObjectName("consoleBadge")
+        feed_note = QLabel("每一步的用时与结果")
+        feed_note.setObjectName("sectionNote")
         feed_header.addWidget(feed_note)
         feed_layout.addLayout(feed_header)
-        self.event_log = QListWidget()
+        self.event_log = FeedList()
         self.event_log.setObjectName("eventFeed")
         self.event_log.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.event_log.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.event_log.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.event_log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # The record is the left column's body (M13); the preview below
+        # keeps a few rows only.
         feed_layout.addWidget(self.event_log, 1)
+        # 2026-10-08 (M12): the newest readable text, marked as not yet
+        # proofread until a later step says otherwise.
+        feed_rule = QFrame()
+        feed_rule.setObjectName("feedRule")
+        feed_rule.setFixedHeight(1)
+        feed_layout.addSpacing(2)
+        feed_layout.addWidget(feed_rule)
+        feed_layout.addSpacing(2)
+        preview_header = QHBoxLayout()
+        preview_title = QLabel("最新识别内容")
+        preview_title.setObjectName("sectionCaption")
+        preview_header.addWidget(preview_title)
+        preview_header.addStretch(1)
+        self.preview_source = QLabel()
+        self.preview_source.setObjectName("sectionNote")
+        preview_header.addWidget(self.preview_source)
+        feed_layout.addLayout(preview_header)
+        self.recognition_preview = RecognitionPreview()
+        feed_layout.addWidget(self.recognition_preview, 0)
         left_column.addWidget(feed_card, 1)
-        detail_row.addLayout(left_column, 5)
+        # 2026-10-08 (M12): on short windows the left column scrolls instead
+        # of forcing the window taller than the screen.
+        left_scroll = QScrollArea()
+        left_scroll.setObjectName("progressLeftScroll")
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left_host)
+        self.progress_left_column = left_scroll
+        self.progress_left_content = left_host
+        self.progress_splitter.addWidget(left_scroll)
 
         console_card = QFrame()
         console_card.setObjectName("consoleCard")
         console_layout = QVBoxLayout(console_card)
-        console_layout.setContentsMargins(13, 10, 13, 11)
+        console_layout.setContentsMargins(16, 12, 12, 12)
+        console_layout.setSpacing(8)
         console_header = QHBoxLayout()
+        console_header.setSpacing(10)
         console_title = QLabel("完整运行日志")
-        console_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        console_title.setObjectName("sectionCaption")
         console_header.addWidget(console_title)
-        console_header.addStretch(1)
         console_badge = QLabel("已接入原 CMD 输出")
-        console_badge.setObjectName("consoleBadge")
+        console_badge.setObjectName("sectionNote")
         console_header.addWidget(console_badge)
+        console_header.addStretch(1)
+        self.copy_console_button = AnimatedButton("复制全部")
+        self.copy_console_button.setProperty("buttonRole", "ghost")
+        self.copy_console_button.setProperty("controlSize", "compact")
+        install_themed_icon(self.copy_console_button, "fa5s.copy", "secondary")
+        self.copy_console_button.clicked.connect(self._copy_console_log)
+        console_header.addWidget(self.copy_console_button)
+        self.expand_console_button = AnimatedButton("放大日志")
+        self.expand_console_button.setProperty("buttonRole", "ghost")
+        self.expand_console_button.setProperty("controlSize", "compact")
+        self.expand_console_button.setCheckable(True)
+        install_themed_icon(self.expand_console_button, "fa5s.expand-alt", "secondary")
+        bind_text(self.expand_console_button, '放大日志，暂时收起左侧步骤与任务动态（会记住选择）', property='toolTip')
+        self.expand_console_button.toggled.connect(self._set_console_expanded)
+        console_header.addWidget(self.expand_console_button)
         console_layout.addLayout(console_header)
         self.console_log = QTextEdit()
         self.console_log.setObjectName("consoleLog")
@@ -5768,10 +6824,14 @@ class MainWindow(QWidget):
             self._show_console_context_menu
         )
         console_layout.addWidget(self.console_log, 1)
-        detail_row.addWidget(console_card, 7)
-        layout.addLayout(detail_row, 1)
+        self.progress_splitter.addWidget(console_card)
+        self.progress_splitter.setStretchFactor(0, 5)
+        self.progress_splitter.setStretchFactor(1, 7)
+        self.progress_splitter.splitterMoved.connect(self._remember_progress_layout)
+        layout.addWidget(self.progress_splitter, 1)
 
         row = QHBoxLayout()
+        row.setSpacing(10)
         self.progress_hint = QLabel("运行日志会同步保存在项目报告中")
         self.progress_hint.setObjectName("muted")
         row.addWidget(self.progress_hint)
@@ -5791,12 +6851,15 @@ class MainWindow(QWidget):
         self.cancel_run_button.clicked.connect(self._cancel_run)
         row.addWidget(self.cancel_run_button)
         layout.addLayout(row)
+        self._restore_progress_layout()
+        self._progress_resize_watcher = ResizeWatcher(page, self._adapt_progress_density)
 
         self._active_stages = {}
         self._completed_stages = set()
         self._skipped_stages = set()
         self._recognition_terminal = ''
         self._failed_stages = set()
+        self._reset_progress_presentation()
         self._stage_total = 11
         self._current_media_index = 1
         self._current_media_total = max(1, len(self.media_paths))
@@ -5809,230 +6872,564 @@ class MainWindow(QWidget):
         self._progress_timer.timeout.connect(self._update_progress_clock)
         return page
 
+    def _adapt_progress_density(self):
+        """Compact spacing on short pages instead of shrinking type."""
+        root = getattr(self, 'progress_page_root', None)
+        if root is None:
+            return
+        compact = ui_zoom.logical(root.height()) < 700
+        if getattr(self, '_progress_compact', None) == compact:
+            return
+        self._progress_compact = compact
+        root.layout().setContentsMargins(28, 10 if compact else 18, 28, 10 if compact else 14)
+        root.layout().setSpacing(10 if compact else 14)
+        self.progress_hero.layout().setSpacing(8 if compact else 12)
+        for card in self.phase_cards:
+            # Two text lines (16px title + 13px state) need ~60px; compact
+            # trims padding, never clips the state line.
+            card.setMinimumHeight(62 if compact else 70)
+            card.layout().setContentsMargins(52, 8 if compact else 11, 14, 8 if compact else 11)
+        self.current_stage_card.layout().setContentsMargins(20, 10 if compact else 14, 20, 10 if compact else 16)
+        self.current_stage_card.layout().setSpacing(6 if compact else 8)
+        self.stage_metrics.set_compact(compact)
+        self.recognition_preview.set_max_rows(1 if compact else 4)
+
+    def _progress_settings(self):
+        from .theme_manager import SETTINGS_APP, SETTINGS_ORG
+        return QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+    def _restore_progress_layout(self):
+        settings = self._progress_settings()
+        sizes = settings.value("progress/splitterSizes")
+        try:
+            sizes = [int(value) for value in (sizes or ())]
+        except (TypeError, ValueError):
+            sizes = []
+        if len(sizes) == 2 and all(value > 0 for value in sizes):
+            self.progress_splitter.setSizes(sizes)
+        expanded = str(settings.value("progress/logExpanded", "false")).lower() in {"1", "true"}
+        self.expand_console_button.setChecked(expanded)
+        self._set_console_expanded(expanded, remember=False)
+
+    def _remember_progress_layout(self, *_args):
+        sizes = self.progress_splitter.sizes()
+        if len(sizes) == 2 and all(sizes):
+            self._progress_settings().setValue("progress/splitterSizes", sizes)
+
+    def _set_console_expanded(self, expanded, remember=True):
+        expanded = bool(expanded)
+        self.progress_left_column.setVisible(not expanded)
+        bind_text(self.expand_console_button, '还原布局' if expanded else '放大日志')
+        install_themed_icon(self.expand_console_button, "fa5s.compress-alt" if expanded else "fa5s.expand-alt", "secondary")
+        if remember:
+            self._progress_settings().setValue("progress/logExpanded", expanded)
+
+    def _copy_console_log(self):
+        lines = getattr(self, '_console_lines', None)
+        QApplication.clipboard().setText('\n'.join(lines) if lines else self.console_log.toPlainText())
+
+    def _restyle_progress_page(self):
+        root = getattr(self, 'progress_page_root', None)
+        if root is not None:
+            root.setStyleSheet(progress_page_qss(_active_theme_definition()))
+        lines = getattr(self, '_console_lines', None)
+        levels = getattr(self, '_console_levels', None)
+        if lines and hasattr(self, 'console_log'):
+            levels = levels if levels and len(levels) == len(lines) else ['stdout'] * len(lines)
+            theme = _active_theme_definition()
+            self._console_fragments = [log_line_html(line, level, theme) for line, level in zip(lines, levels)]
+            set_log_html_keep_left(self.console_log, ''.join(self._console_fragments[-800:]))
+            bar = self.console_log.verticalScrollBar()
+            bar.setValue(bar.maximum())
+
     def _show_console_context_menu(self, position):
         menu = QMenu(self.console_log)
-        menu.setObjectName("warmContextMenu")
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background: {SURFACE}; color: {INK};
-                border: 1px solid {LINE}; border-radius: 8px;
-                padding: 5px;
-                font-family: {UI_FONT_STACK}; font-size: 13px;
-            }}
-            QMenu::item {{ padding: 7px 28px 7px 10px; border-radius: 5px; }}
-            QMenu::item:selected {{ background: {GREEN_SOFT}; color: {INK}; }}
-            QMenu::item:disabled {{ color: {MUTED_LIGHT}; }}
-        """)
-        copy_action = menu.addAction("复制")
+        menu.setObjectName("consoleContextMenu")
+        copy_action = menu.addAction(tr("复制"))
         copy_action.setShortcut("Ctrl+C")
         copy_action.setEnabled(self.console_log.textCursor().hasSelection())
-        select_all_action = menu.addAction("全选")
+        copy_all_action = menu.addAction(tr("复制全部"))
+        select_all_action = menu.addAction(tr("全选"))
         select_all_action.setShortcut("Ctrl+A")
         selected = menu.exec(self.console_log.mapToGlobal(position))
         if selected is copy_action:
             self.console_log.copy()
+        elif selected is copy_all_action:
+            self._copy_console_log()
         elif selected is select_all_action:
             self.console_log.selectAll()
 
     def _result_page(self):
+        from .completion_widgets import (CompletionContent, CompletionActionCard, CompletionActionGrid,
+                                         CompletionMoreButton, CompletionTaskSelector, CompletionFilename, CompletionTitle,
+                                         CompletionAccordionHeader, CompletionInfoPanel, COMPLETION_RADIUS_MAIN, COMPLETION_RADIUS_SMALL,
+                                         COMPLETION_MAX_WIDTH, COMPLETION_TOP_GAP, CompletionSecondaryButton)
+        scroll = QScrollArea()
+        scroll.setObjectName('completionScroll')
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 18, 28, 20)
-        layout.setSpacing(11)
+        scroll.setWidget(page)
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(28, COMPLETION_TOP_GAP, 28, COMPLETION_TOP_GAP)
+        outer.addStretch(1)
+        self.result_content = CompletionContent()
+        self.result_content.setMaximumWidth(COMPLETION_MAX_WIDTH)
+        self.result_content.setMinimumWidth(0)
+        self.result_content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout = QVBoxLayout(self.result_content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        outer.addWidget(self.result_content, 1000)
+        outer.setAlignment(self.result_content, Qt.AlignmentFlag.AlignTop)
+        outer.addStretch(1)
         summary_card = QFrame()
-        summary_card.setObjectName("resultSummaryCard")
+        summary_card.setObjectName('resultSummaryCard')
+        summary_card.setProperty('completionRadius', COMPLETION_RADIUS_MAIN)
+        summary_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.result_summary_card = summary_card
         summary_layout = QHBoxLayout(summary_card)
-        summary_layout.setContentsMargins(22, 18, 22, 18)
+        # 2026-10-09 (M14, user): a shorter two-sided summary — result and
+        # file on the left; cue count, time and the review entry on the right.
+        summary_layout.setContentsMargins(22, 16, 22, 16)
         summary_layout.setSpacing(16)
         self.result_icon = QLabel()
-        self.result_icon.setFixedSize(88, 88)
-        self.result_icon.setStyleSheet("padding:0; margin:0; border:none;")
+        self.result_icon.setFixedSize(40, 40)
+        self.result_icon.setStyleSheet('padding:0; margin:0; border:none; background:transparent;')
         self.result_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        summary_layout.addWidget(self.result_icon)
+        summary_layout.addWidget(self.result_icon, 0, Qt.AlignmentFlag.AlignTop)
         summary_copy = QVBoxLayout()
         summary_copy.setSpacing(4)
-        self.result_title = QLabel("任务完成")
-        self.result_title.setWordWrap(True)
-        self.result_title.setStyleSheet(f"font-family: {TITLE_FONT_STACK}; font-size: 22px; font-weight: 800;")
+        self.result_title = CompletionTitle('字幕已生成')
+        self.result_title.qualifier_clicked.connect(
+            lambda: self._completion_action('repolish', self._open_glossary_proofread))
         summary_copy.addWidget(self.result_title)
-        self.result_summary = QLabel("")
+        self.result_summary = QLabel('')
         self.result_summary.setWordWrap(True)
-        self.result_summary.setObjectName("muted")
+        self.result_summary.setObjectName('resultSummaryStats')
         summary_copy.addWidget(self.result_summary)
-        self.result_review_summary = QLabel("")
-        self.result_review_summary.setWordWrap(True)
-        self.result_review_summary.setObjectName("resultReviewSummary")
-        summary_copy.addWidget(self.result_review_summary)
-        summary_layout.addLayout(summary_copy, 1)
-        summary_host = QHBoxLayout()
-        summary_host.addWidget(summary_card, 1)
-        layout.addLayout(summary_host)
-        self.result_task_selector = QComboBox()
-        self.result_task_selector.setMinimumContentsLength(20)
+        self.result_single_filename = CompletionFilename('')
+        self.result_single_filename.setObjectName('resultSummaryFile')
+        self.result_single_filename.setMinimumWidth(0)
+        summary_copy.addWidget(self.result_single_filename)
+        self.result_task_selector = CompletionTaskSelector()
+        self.result_task_selector.setProperty("completionRole", "secondary")
+        self.result_task_selector.setProperty("completionRadius", COMPLETION_RADIUS_SMALL)
+        self.result_task_selector.setMinimumWidth(0)
+        self.result_task_selector.setMinimumContentsLength(12)
         self.result_task_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.result_task_selector.currentIndexChanged.connect(self._select_completion_task)
-        layout.addWidget(self.result_task_selector)
-        self.result_task_summary = QLabel("")
-        self.result_task_summary.setWordWrap(True)
-        layout.addWidget(self.result_task_summary)
-
-        detail_row = QHBoxLayout()
-        detail_row.setSpacing(11)
-        files_card = QFrame()
-        files_card.setObjectName("resultFilesCard")
-        files_layout = QVBoxLayout(files_card)
-        files_layout.setContentsMargins(13, 10, 13, 12)
-        files_title = QLabel("任务与输出")
-        files_title.setStyleSheet("font-size: 15px; font-weight: 800;")
-        files_layout.addWidget(files_title)
-        self.result_files = QTextEdit()
-        self.result_files.setObjectName("resultFiles")
-        self.result_files.setReadOnly(True)
-        files_layout.addWidget(self.result_files, 1)
-        detail_row.addWidget(files_card, 5)
-
-        log_card = QFrame()
-        log_card.setObjectName("resultLogCard")
-        log_layout = QVBoxLayout(log_card)
-        log_layout.setContentsMargins(13, 10, 13, 12)
-        result_log_header = QHBoxLayout()
-        result_log_title = QLabel("本次完整运行日志")
-        result_log_title.setStyleSheet("font-size: 15px; font-weight: 800;")
-        result_log_header.addWidget(result_log_title)
-        result_log_header.addStretch(1)
-        result_log_badge = QLabel("成功与失败均保留")
-        result_log_badge.setObjectName("consoleBadge")
-        result_log_header.addWidget(result_log_badge)
-        log_layout.addLayout(result_log_header)
-        self.result_console = QTextEdit()
-        self.result_console.setObjectName("resultConsole")
-        self.result_console.setReadOnly(True)
-        self.result_console.setWordWrapMode(QTextOption.WrapMode.NoWrap)
-        log_layout.addWidget(self.result_console, 1)
-        detail_row.addWidget(log_card, 7)
-        self.result_detail_row = QWidget()
-        self.result_detail_row.setLayout(detail_row)
-        self.result_detail_row.hide()
-
-        details_toggle = QToolButton()
-        bind_text(details_toggle, '运行详情')
-        details_toggle.setCheckable(True)
-        details_toggle.setArrowType(Qt.ArrowType.RightArrow)
-        details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        details_toggle.toggled.connect(
-            lambda expanded: (
-                self.result_detail_row.setVisible(expanded),
-                details_toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow),
-            )
-        )
-        self.result_details_toggle = details_toggle
-
-        primary_row = QHBoxLayout()
-        primary_row.setSpacing(14)
-        self.export_result_button = AnimatedButton("导出字幕")
-        self.export_result_button.setObjectName("primary")
-        self.export_result_button.setMinimumHeight(44)
-        self.export_result_button.setStyleSheet("font-size:14px; font-weight:800; padding:10px 18px;")
-        self.export_result_button.clicked.connect(self._export_completion_result)
-        primary_row.addWidget(self.export_result_button, 1)
-        self.burn_subtitle_result_button = AnimatedButton("压制字幕视频")
-        self.burn_subtitle_result_button.setObjectName("softAction")
-        install_themed_icon(self.burn_subtitle_result_button, "fa5s.film")
-        self.burn_subtitle_result_button.setMinimumHeight(44)
-        bind_text(self.burn_subtitle_result_button, '进入工作台调整字幕与样式，确认后再导出视频', property='toolTip')
-        self.burn_subtitle_result_button.setStyleSheet("font-size:14px; font-weight:800; padding:10px 18px;")
-        self.burn_subtitle_result_button.clicked.connect(self._open_render_from_result)
-        primary_row.addWidget(self.burn_subtitle_result_button, 1)
-        close = AnimatedButton("完成并返回主菜单")
-        close.setObjectName("secondaryCTA")
-        close.setMinimumHeight(36)
-        bind_text(close, '保存工程并返回字幕识别', property='toolTip')
-        close.setStyleSheet("font-size:14px; font-weight:800; padding:10px 18px;")
-        close.clicked.connect(self._return_to_main_menu)
-        layout.addLayout(primary_row)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.open_studio_result_button = AnimatedButton("打开字幕工作台")
-        self.open_studio_result_button.setObjectName("softAction")
-        self.open_studio_result_button.setIcon(_icon("fa5s.closed-captioning"))
-        self.open_studio_result_button.clicked.connect(
-            lambda: self.open_studio_project(getattr(self, "_last_studio_project", ""), mode="edit", source="completion_edit")
-        )
-        open_reports = AnimatedButton("打开报告目录")
-        open_reports.setObjectName("softAction")
-        open_reports.setMinimumSize(150, 42)
-        open_reports.setIcon(_icon("fa5s.folder-open"))
-        open_reports.clicked.connect(
-            lambda: (
-                Path(self.legacy.task_reporting.REPORT_ROOT).mkdir(parents=True, exist_ok=True),
-                os.startfile(str(self.legacy.task_reporting.REPORT_ROOT)),
-            )
-        )
-        open_subtitles = AnimatedButton("打开字幕目录")
-        open_subtitles.setObjectName("softAction")
-        open_subtitles.setMinimumSize(150, 42)
-        open_subtitles.setIcon(_icon("fa5s.folder-open"))
-        open_subtitles.clicked.connect(self._open_subtitle_dir)
-        self.retry_failed_button = AnimatedButton("重试失败项")
-        self.retry_failed_button.setObjectName("softAction")
-        self.retry_failed_button.setIcon(_icon("fa5s.redo"))
+        summary_copy.addWidget(self.result_task_selector)
+        # The full sentence stays in result_summary (history/audits read it);
+        # with a result the page shows this short qualifier plus the stats.
+        self.result_summary_meta = QLabel('')
+        self.result_summary_meta.setObjectName('resultSummaryMeta')
+        self.result_summary_meta.setWordWrap(True)
+        self.result_summary_meta.hide()
+        summary_copy.addWidget(self.result_summary_meta)
+        self.result_review_summary = QLabel('')
+        self.result_review_summary.setWordWrap(True)
+        self.result_review_summary.hide()
+        summary_copy.addWidget(self.result_review_summary)
+        self.result_review_status = QToolButton()
+        self.result_review_status.setObjectName("completionReviewChip")
+        self.result_review_status.setProperty("completionRole", "chip")
+        self.result_review_status.setProperty("completionRadius", COMPLETION_RADIUS_SMALL)
+        self.result_review_status.setText('有待检查项')
+        self.result_review_status.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.result_review_status.setMinimumHeight(32)
+        self.result_review_status.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        install_themed_icon(self.result_review_status, 'fa5s.flag', 'warning')
+        self.result_review_status.clicked.connect(self._show_completion_review_details)
+        summary_notices = QHBoxLayout()
+        summary_notices.setContentsMargins(0, 4, 0, 0)
+        summary_notices.setSpacing(10)
+        # Retry belongs beside the unfinished notice it resolves (2026-10-07);
+        # it only appears for retryable outcomes with known run options.
+        self.retry_failed_button = AnimatedButton('重试失败项')
+        self.retry_failed_button.setObjectName('completionRetry')
+        self.retry_failed_button.setProperty('completionRole', 'chip')
+        self.retry_failed_button.setProperty('completionRadius', COMPLETION_RADIUS_SMALL)
+        self.retry_failed_button.setMinimumHeight(32)
+        install_themed_icon(self.retry_failed_button, 'fa5s.redo', 'accent')
         self.retry_failed_button.clicked.connect(self._retry_failed_items)
         self.retry_failed_button.hide()
-        row.addWidget(self.retry_failed_button)
-        self.open_priority_review_button = AnimatedButton("开始优先审核")
-        self.open_priority_review_button.setObjectName("softAction")
-        self.open_priority_review_button.setIcon(_icon("fa5s.flag"))
-        self.open_priority_review_button.clicked.connect(self._open_priority_review_from_result)
+        summary_notices.addWidget(self.retry_failed_button, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.result_exception_summary = QLabel('')
+        self.result_exception_summary.setObjectName('resultSummaryNote')
+        self.result_exception_summary.setWordWrap(True)
+        self.result_exception_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        summary_notices.addWidget(self.result_exception_summary, 1)
+        summary_notices.addStretch(1)
+        summary_copy.addLayout(summary_notices)
+        self.result_task_summary = QLabel('')
+        self.result_task_summary.setWordWrap(True)
+        summary_copy.addWidget(self.result_task_summary)
+        summary_layout.addLayout(summary_copy, 1)
+        self.result_stats = QWidget()
+        self.result_stats.setObjectName('resultStats')
+        stats_layout = QHBoxLayout(self.result_stats)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setSpacing(28)
+        self.result_stat_values = {}
+        self.result_stat_captions = {}
+        for key, caption in (('count', '条字幕'), ('elapsed', '用时')):
+            block = QVBoxLayout()
+            block.setSpacing(0)
+            value = QLabel('—')
+            value.setObjectName('resultStatValue')
+            value.setAlignment(Qt.AlignmentFlag.AlignRight)
+            label = QLabel(caption)
+            label.setObjectName('resultStatCaption')
+            label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            block.addWidget(value)
+            block.addWidget(label)
+            stats_layout.addLayout(block)
+            self.result_stat_values[key] = value
+            self.result_stat_captions[key] = label
+        stats_layout.addWidget(self.result_review_status, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.result_stats.hide()
+        summary_layout.addWidget(self.result_stats, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(summary_card)
+        self.result_files_toggle = CompletionAccordionHeader('任务与输出')
+        self.result_log_toggle = CompletionAccordionHeader('运行日志')
+        self.result_files = QTextEdit()
+        self.result_files.setObjectName('resultFiles')
+        self.result_files.setProperty('completionRadius', COMPLETION_RADIUS_MAIN)
+        self.result_files.setReadOnly(True)
+        self.result_files_panel = CompletionInfoPanel(self.result_files_toggle, self.result_files)
+        layout.addWidget(self.result_files_panel)
+        self.result_console = QTextEdit()
+        self.result_console.setObjectName('resultConsole')
+        self.result_console.setProperty('completionRadius', COMPLETION_RADIUS_MAIN)
+        self.result_console.setReadOnly(True)
+        self.result_console.setWordWrapMode(QTextOption.WrapMode.NoWrap)
+        self.result_log_panel = CompletionInfoPanel(self.result_log_toggle, self.result_console)
+        self.result_log_panel.mode_changed.connect(lambda: self._toggle_completion_log(self.result_log_panel.mode == 'full'))
+        layout.addWidget(self.result_log_panel)
+        self.result_details_toggle = self.result_log_toggle
+        self.result_detail_row = self.result_console
+        self.export_result_button = CompletionActionCard('导出字幕', '保存 SRT、ASS、TXT 等字幕文件', 'fa5s.file-export', hue='primary')
+        self.open_studio_result_button = CompletionActionCard('打开字幕工作台', '检查字幕、调整时间轴与字幕样式', 'fa5s.closed-captioning', hue='brand')
+        self.result_return_button = CompletionActionCard('完成并返回主菜单', '确认结果已保存，返回主菜单', 'fa5s.home', hue='finish')
+        self.export_result_button.clicked.connect(lambda: self._completion_action('export', self._export_completion_result))
+        self.open_studio_result_button.clicked.connect(lambda: self._completion_action('studio', self._open_studio_from_result))
+        self.result_return_button.clicked.connect(lambda: self._completion_action('return', self._return_to_main_menu))
+        self.result_action_grid = CompletionActionGrid((self.export_result_button, self.open_studio_result_button, self.result_return_button))
+        layout.addWidget(self.result_action_grid)
+        # The delivered subtitles themselves, below the actions (2026-10-07).
+        from .completion_widgets import CompletionPreview
+        self.result_preview = CompletionPreview()
+        layout.addWidget(self.result_preview)
+        self.open_priority_review_button = CompletionSecondaryButton('开始优先审核')
+        self.open_priority_review_button.setObjectName('softAction')
+        install_themed_icon(self.open_priority_review_button, 'fa5s.flag', 'secondary')
+        self.open_priority_review_button.clicked.connect(lambda: self._completion_action('review', self._open_priority_review_from_result))
         self.open_priority_review_button.hide()
-        row.addWidget(self.open_priority_review_button)
-        self.open_studio_result_button.setMinimumHeight(44)
-        self.open_studio_result_button.setStyleSheet("font-size:14px; font-weight:800; padding:10px 18px;")
-        primary_row.insertWidget(1, self.open_studio_result_button, 1)
-        self.recover_recognition_button = AnimatedButton('恢复已有识别结果…')
-        self.recover_recognition_button.setObjectName('softAction')
-        self.recover_recognition_button.clicked.connect(self._recover_recognition_output)
-        self.open_subtitle_result_button = open_subtitles
-        open_subtitles.hide()
-        row.addStretch(1)
-        layout.addLayout(row)
-        navigation = QHBoxLayout()
-        navigation.addWidget(close)
-        navigation.addWidget(open_subtitles)
-        navigation.addWidget(open_reports)
-        navigation.addWidget(self.recover_recognition_button)
-        navigation.addStretch(1)
-        navigation.addWidget(details_toggle)
-        layout.addLayout(navigation)
-        layout.addWidget(self.result_detail_row, 1)
-        layout.addStretch(0)
-        return page
+        # 2026-10-09 (M14, user): a proofreading workspace on the result
+        # itself — choose libraries, add terms, review and apply suggestions.
+        self.repolish_current_glossary_button = CompletionSecondaryButton('AI 词库校对…')
+        self.repolish_current_glossary_button.setObjectName('softAction')
+        install_themed_icon(self.repolish_current_glossary_button, 'fa5s.book', 'secondary')
+        bind_text(self.repolish_current_glossary_button, '整理词库、对照原文与建议，勾选后才写回字幕；写回后可在字幕工作台撤销', property='toolTip')
+        self.repolish_current_glossary_button.clicked.connect(lambda: self._completion_action('repolish', self._open_glossary_proofread))
+        self.result_more_button = CompletionMoreButton()
+        self.result_more_button.setText('更多操作')
+        self.result_more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.result_more_menu = QMenu(self.result_more_button)
+        self.result_more_menu.setProperty("completionRole", "secondary")
+        self.result_more_menu.setProperty("completionRadius", COMPLETION_RADIUS_SMALL)
+        self.result_more_menu.addAction('打开报告目录', self._open_completion_report_directory)
+        self.open_subtitle_result_button = self.result_more_menu.addAction('打开字幕目录', self._open_subtitle_dir)
+        self.open_subtitle_result_button.setEnabled(False)
+        self.recover_recognition_button = self.result_more_menu.addAction('恢复已有识别结果…', self._recover_recognition_output)
+        self.result_more_menu.addAction('复制输出路径', self._copy_completion_output_paths)
+        self.result_more_menu.addAction('复制完整运行日志', self._copy_completion_log)
+        self.retry_term_action = self.result_more_menu.addAction('重试联网核验', lambda: self._retry_completion_stage('terminology'))
+        self.retry_term_action.setVisible(False)
+        self.result_more_menu.addSeparator()
+        self.result_more_menu.addAction('AI 模型与密钥…', self._open_ai_provider_config)
+        self.result_more_button.setMenu(self.result_more_menu)
+        self.result_action_grid.set_secondary_actions((self.open_priority_review_button,
+            self.repolish_current_glossary_button, self.result_more_button))
+        self.result_secondary_bar = self.result_action_grid
+        self.result_secondary_layout = self.result_action_grid.grid
+        self.result_content.bind_actions(layout,
+            (self.export_result_button, self.open_studio_result_button, self.result_return_button),
+            viewport=scroll.viewport(), summary_layout=summary_layout, summary_copy=summary_copy, page_layout=outer,
+            panels=(self.result_files_panel, self.result_log_panel), action_grid=self.result_action_grid)
+        return scroll
+
+    def _open_completion_from_history(self, record):
+        if getattr(self, '_run_in_progress', False) or getattr(self, '_completion_retry_in_progress', False):
+            QMessageBox.information(self, tr('任务正在运行'), tr('本批识别仍在运行。结束后可打开历史识别结果。'))
+            return
+        from .service import MediaResult, QueueResult
+        payload = record.payload
+        result = payload.get('result') or {}
+        outputs = result.get('outputs') or {}
+        item = MediaResult(media_path=str((payload.get('media') or {}).get('path') or record.media_name),
+            status=str(payload.get('status') or 'unknown'), project_path=str(outputs.get('project') or ''),
+            srt_path=str(outputs.get('srt') or ''), report_json_path=str(record.path),
+            report_text_path=str(record.path.with_suffix('.txt')),
+            elapsed_seconds=float(result.get('elapsed_seconds') or 0))
+        self._last_run_options = None
+        self._handle_result(QueueResult((item,), item.elapsed_seconds))
+        events = payload.get('events') or []
+        self._completion_log_lines = tuple(json.dumps(row, ensure_ascii=False) for row in events)
+        self._completion_log_fragments = tuple(self._completion_plain_log_fragment(line) for line in self._completion_log_lines)
+        self._completion_log_loaded = 0
+        self._completion_log_generation += 1
+        self.result_console.clear()
+        bind_text(self.result_log_toggle, '运行日志 · 本次报告事件')
+
+    def _show_completion_review_details(self):
+        self.result_files_panel.set_mode('full')
+        self.result_files.setFocus()
+
+    @staticmethod
+    def _completion_task_key(item):
+        path = str(getattr(item, 'report_json_path', '') or getattr(item, 'project_path', '') or item.media_path)
+        return str(getattr(item, 'job_id', '') or '') + ':' + path
 
     def _select_completion_task(self, index):
-        tasks = getattr(self, "_completion_tasks", [])
+        tasks = getattr(self, '_completion_tasks', [])
         task = tasks[index] if 0 <= index < len(tasks) else None
-        self._last_studio_project = task[0].project_path if task and task[1] else ""
-        self._last_recognition_report = task[0].report_json_path if task else ""
-        available = bool(task and task[1])
-        for button in (self.export_result_button, self.open_studio_result_button, self.burn_subtitle_result_button):
+        self.result_task_selector.setVisible(len(tasks) > 1)
+        self.result_single_filename.setVisible(len(tasks) == 1)
+        self._last_studio_project = task[0].project_path if task and task[1] else ''
+        self._last_result_ref_json = getattr(task[0], 'result_ref_json', '') if task and task[1] else ''
+        self._last_recognition_report = task[0].report_json_path if task else ''
+        evidence = self._completion_task_evidence.get(self._completion_task_key(task[0]), {}) if task else {}
+        selected_outcome = evidence.get('outcome')
+        available = bool(task and task[1] and selected_outcome and selected_outcome.result_usable)
+        for button in (self.export_result_button, self.open_studio_result_button):
             button.setEnabled(available)
+        self.repolish_current_glossary_button.setVisible(True)
+        self.repolish_current_glossary_button.setEnabled(available)
+        self.result_return_button.setEnabled(True)
+        if not available:
+            self._last_studio_project = ''
         if not task:
-            self.result_task_summary.setProperty("i18nTemplate",None)
-            self.result_task_summary.clear()
+            self._last_srt_dir = ''
+            self.open_subtitle_result_button.setEnabled(False)
+            self.open_priority_review_button.show()
+            self.open_priority_review_button.setEnabled(False)
+            self.result_review_status.hide()
+            self.result_stats.hide()
+            self.result_summary_meta.hide()
+            self.result_summary.show()
+            self.result_single_filename.clear()
+            self.result_task_selector.setToolTip('')
+            bind_text(self.result_task_summary, '')
+            self.result_task_summary.hide()
+            self._refresh_completion_summaries()
             return
         item, project = task
-        if project:
-            from .studio_edit_sequence import timeline_duration_ms, projected_cues
-            template = "时间轴 {duration} 秒 · {count} 条字幕 · 耗时 {elapsed} 秒"
-            arguments = dict(duration=f"{timeline_duration_ms(project)/1000:.1f}",
-                count=len(projected_cues(project)),elapsed=f"{item.elapsed_seconds:.1f}")
-            self.result_task_summary.setProperty("i18nTemplate",template)
-            self.result_task_summary.setProperty("i18nArguments",arguments)
-            self.result_task_summary.setText(
-                translate(template,getattr(self,"_ui_language","zh")).format(**arguments))
+        evidence = self._completion_task_evidence.get(self._completion_task_key(item), {})
+        outcome = evidence.get('outcome')
+        self._last_srt_dir = str(Path(item.srt_path).parent) if item.srt_path else ''
+        self.open_subtitle_result_button.setEnabled(bool(self._last_srt_dir))
+        self._completion_output_paths = list(evidence.get('output_paths', ()))
+        if evidence.get('display_payload') is not None:
+            detail_lines = list(outcome.localized_detail_lines(getattr(self, '_ui_language', 'zh')))
+            detail_lines.extend(outcome.problems + outcome.review_notes)
+            if 'path_entries' in evidence:
+                detail_lines.extend(translate(label, getattr(self, '_ui_language', 'zh')) + '：' + str(target)
+                                    for label, target in evidence['path_entries'])
+            else:
+                detail_lines.extend(evidence.get('path_lines', ()))
+            content = '<b>' + html.escape(translate(outcome.status_label, getattr(self, '_ui_language', 'zh'))) + '</b><br>' + '<br>'.join(html.escape(line) for line in detail_lines)
+            self.result_files.setHtml(content)
         else:
-            self.result_task_summary.setProperty("i18nTemplate",None)
-            self.result_task_summary.setText(item.error or item.status)
+            self.result_files.setHtml(evidence.get('details_html', ''))
+        filename = Path(item.media_path).name
+        self.result_single_filename.set_full_name(filename)
+        self.result_task_selector.setToolTip(filename)
+        self.open_priority_review_button.show()
+        self.open_priority_review_button.setEnabled(bool(available and outcome and outcome.has_review))
+        self.result_review_status.setVisible(bool(outcome and outcome.has_review))
+        if outcome:
+            bind_text(self.result_title, outcome.title)
+            # 2026-10-09 (M15, user): an unfinished AI check is a button to
+            # AI proofreading, not only a status.
+            if available and outcome.polish_status == 'partial' and ' · ' in outcome.title:
+                self.result_title.set_qualifier_action(
+                    tr('去 AI 校对 ›'),
+                    tr('有 {count} 段文字的 AI 校对没有完成。点击打开 AI 词库校对，可用「AI 校对建议」补做；勾选后才写回。',
+                       count=outcome.fallback_records) if outcome.fallback_records else
+                    tr('部分字幕的 AI 校对没有完成。点击打开 AI 词库校对，可用「AI 校对建议」补做；勾选后才写回。'))
+            else:
+                self.result_title.set_qualifier_action('')
+            elapsed = float(item.elapsed_seconds or outcome.elapsed_seconds)
+            minutes, seconds = divmod(round(elapsed), 60)
+            duration = f'{minutes}:{seconds:02d}' if minutes else f'{seconds}s'
+            qualified = ' · ' in outcome.title
+            polish = '' if (qualified and outcome.polish_status == 'partial') else translate(
+                'AI文字检查已执行' if outcome.polish_status == 'completed' else outcome.polish_label,
+                getattr(self, '_ui_language', 'zh'))
+            bind_text(self.result_summary, '{count} 条字幕 · 采纳 {accepted} 处文字修改 · 本文件耗时 {elapsed}{polish}',
+                      accepted=outcome.accepted_edits, count=outcome.final_cues, elapsed=duration,
+                      polish=(' · ' + polish) if polish else '')
+            self.result_stat_values['count'].setText(str(outcome.final_cues))
+            self.result_stat_values['elapsed'].setText(duration)
+            bind_text(self.result_summary_meta, '采纳 {accepted} 处文字修改{polish}', accepted=outcome.accepted_edits,
+                      polish=(' · ' + polish) if polish else '')
+            if len(tasks) > 1:
+                batch = translate('整批：完成 {success} 个 · 部分完成 {partial} 个 · 失败 {failure} 个 · 取消 {cancel} 个 · 跳过 {skipped} 个 · 待确认 {unknown} 个 · 耗时 {elapsed} 秒', getattr(self, '_ui_language', 'zh')).format(**getattr(self, '_completion_batch_counts', {}))
+                self.result_summary.setText(self.result_summary.text() + '\n' + batch)
+                self.result_summary_meta.setText(self.result_summary_meta.text() + '\n' + batch)
+            self.result_summary.hide()
+            self.result_summary_meta.show()
+            self.result_stats.show()
+            bind_text(self.result_review_status, '有待检查项 · {count} 项', count=outcome.review_issue_count)
+            self.result_review_status.setToolTip('\n'.join(outcome.problems + outcome.review_notes))
+            bind_text(self.result_review_summary, '待检查问题 {count} 项', count=outcome.review_issue_count)
+            self.result_review_summary.hide()
+            messages = []
+            if outcome.polish_status == 'partial' and ' · ' not in outcome.title:
+                messages.append(translate('部分AI文字校对未完成', getattr(self, '_ui_language', 'zh')))
+            if outcome.search_status in {'unsupported', 'not_configured', 'failed', 'partial', 'timeout', 'insufficient_evidence'}:
+                messages.append(translate(outcome.search_label, getattr(self, '_ui_language', 'zh')))
+            messages.extend(outcome.core_errors)
+            if item.error and outcome.core_status in {'failed', 'cancelled'}:
+                messages.append(str(item.error)[:220])
+            self.result_exception_summary.setProperty('i18nText', None)
+            self.result_exception_summary.setText(' · '.join(dict.fromkeys(messages)))
+            self.result_exception_summary.setVisible(bool(messages))
+            theme = _active_theme_definition()
+            # Usable result → success mark; the unfinished part is the title's
+            # warning pill, so both facts are stated without contradiction.
+            usable = bool(outcome.result_usable) and outcome.core_status not in {'failed', 'cancelled', 'unknown'}
+            if outcome.core_status == 'failed':
+                color, icon, tone = theme.danger, 'fa5s.exclamation-circle', 'danger'
+            elif outcome.core_status == 'cancelled':
+                color, icon, tone = theme.text_muted, 'fa5s.stop-circle', 'muted'
+            elif outcome.core_status == 'unknown' or not usable:
+                color, icon, tone = theme.warning, 'fa5s.question-circle', 'warning'
+            else:
+                color, icon, tone = theme.success, 'fa5s.check-circle', 'warning' if outcome.core_status == 'partial' else 'success'
+            self.result_title.set_tone(tone)
+            self.result_icon.setPixmap(_icon(icon, color).pixmap(QSize(32, 32)))
+            # Card wash follows the result itself (usable → success); the
+            # unfinished part stays in the title pill and the review chip.
+            outcome_tone = 'success' if usable and outcome.core_status not in {'unknown'} else tone
+            self.result_summary_card.setProperty('outcome', outcome_tone)
+            self.result_summary_card.style().unpolish(self.result_summary_card)
+            self.result_summary_card.style().polish(self.result_summary_card)
+        project_error = evidence.get('project_error', '')
+        self.result_task_summary.setProperty('i18nTemplate', None)
+        self.result_task_summary.setProperty('i18nArguments', {})
+        self.result_task_summary.setToolTip(project_error)
+        if project_error:
+            bind_text(self.result_task_summary, '工程无法载入：{reason}\n请通过“更多操作 → 恢复已有识别结果”恢复副本。', reason=project_error[:200])
+        else:
+            bind_text(self.result_task_summary, '')
+        self.result_task_summary.setVisible(bool(project_error))
+        retryable = bool(outcome and (outcome.polish_retryable or outcome.search_retryable or outcome.core_status == 'failed'))
+        self.retry_failed_button.setVisible(bool(retryable and getattr(self, '_last_run_options', None)))
+        self.retry_failed_button.setEnabled(retryable)
+        if outcome and outcome.polish_retryable:
+            bind_text(self.retry_failed_button, '重试未完成 AI 校对')
+        elif outcome and outcome.search_retryable:
+            bind_text(self.retry_failed_button, '重试联网核验')
+        else:
+            bind_text(self.retry_failed_button, '重试失败项')
+        self.retry_term_action.setVisible(bool(outcome and outcome.search_retryable and getattr(self, '_last_run_options', None)))
+        self._refresh_completion_summaries()
+
+    def _refresh_completion_summaries(self):
+        from .completion_summary import completion_summary
+        tasks = getattr(self, '_completion_tasks', ())
+        index = self.result_task_selector.currentIndex()
+        if not tasks or not 0 <= index < len(tasks):
+            self._completion_summary = None
+            self.result_files_panel.set_summary_lines(())
+            self.result_log_panel.set_summary_lines(())
+            self._refresh_completion_preview()
+            return
+        self._refresh_completion_preview()
+        # The preview re-reads a project Studio or proofreading saved.
+        item, project = self._completion_tasks[index]
+        evidence = self._completion_task_evidence.get(self._completion_task_key(item), {})
+        outcome = evidence.get('outcome')
+        if outcome is None:
+            return
+        summary = completion_summary(evidence.get('display_payload'), outcome,
+            media_path=item.media_path, project_path=item.project_path, project_loaded=project is not None,
+            project_cues=len(project.cues) if project is not None else None,
+            project_error=evidence.get('project_error', ''), language=getattr(self, '_ui_language', 'zh'))
+        self._completion_summary = summary
+        self.result_files_panel.set_summary_lines(summary.task_lines)
+        self.result_log_panel.set_summary_lines(summary.log_lines)
+
+    def _refresh_completion_preview(self):
+        """First cues of the selected task's saved project (re-read after Studio edits)."""
+        preview = getattr(self, 'result_preview', None)
+        if preview is None:
+            return
+        tasks = getattr(self, '_completion_tasks', ())
+        index = self.result_task_selector.currentIndex() if hasattr(self, 'result_task_selector') else -1
+        if not tasks or not 0 <= index < len(tasks):
+            preview.set_rows((), 0)
+            return
+        item, project = tasks[index]
+        path = Path(item.project_path) if getattr(item, 'project_path', '') else None
+        try:
+            stamp = path.stat().st_mtime_ns if path is not None else None
+        except OSError:
+            stamp = None
+        cache = getattr(self, '_completion_preview_stamps', {})
+        if stamp is not None and project is not None and cache.get(str(path)) not in (None, stamp):
+            from .studio_project import load_project
+            try:
+                project = load_project(path)
+                self._completion_tasks[index] = (item, project)
+            except (OSError, ValueError, TypeError):
+                pass
+        if stamp is not None:
+            self._completion_preview_stamps = {**cache, str(path): stamp}
+        if project is None:
+            preview.set_rows((), 0)
+            return
+        from .speaker_names import display_speaker_name
+        from .studio_cue_table import _speaker_color
+        speakers = {speaker.id: speaker for speaker in project.speakers}
+        cues = sorted(project.cues, key=lambda cue: (cue.start_ms, cue.end_ms))
+        rows = []
+        for cue in cues:
+            seconds, millis = divmod(max(0, int(cue.start_ms)), 1000)
+            minutes, seconds = divmod(seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            stamp_text = (f'{hours}:{minutes:02d}:{seconds:02d}.{millis // 100}' if hours
+                          else f'{minutes:02d}:{seconds:02d}.{millis // 100}')
+            speaker = speakers.get(cue.speaker_id)
+            name = display_speaker_name(project, speaker) if speaker is not None else cue.speaker_id
+            rows.append((stamp_text, name, _speaker_color(project, cue.speaker_id).name(),
+                         ' '.join(str(cue.text).split())))
+        preview.set_rows(rows, len(cues))
+        self._sync_completion_count(item, len(cues))
+
+    def _sync_completion_count(self, item, project_cues):
+        """The big count is the saved project's (what preview, proofreading
+        and export read); a different recognition count is named, not hidden
+        (2026-10-09, M15, user)."""
+        values = getattr(self, 'result_stat_values', {})
+        captions = getattr(self, 'result_stat_captions', {})
+        if 'count' not in values:
+            return
+        evidence = self._completion_task_evidence.get(self._completion_task_key(item), {})
+        outcome = evidence.get('outcome')
+        recognized = outcome.final_cues if outcome is not None else None
+        values['count'].setText(str(project_cues))
+        if recognized is not None and recognized != project_cues:
+            bind_text(captions['count'], '条字幕 · 识别时 {count} 条', count=recognized)
+            bind_text(captions['count'], '字幕工程在识别后被修改过（例如剪辑或删改字幕）。预览、AI 词库校对和导出都按工程当前的 {current} 条字幕。',
+                      property='toolTip', current=project_cues)
+        else:
+            bind_text(captions['count'], '条字幕')
+            captions['count'].setToolTip('')
 
     def _export_completion_result(self):
         from .completion_export import CompletionExportDialog
@@ -6041,12 +7438,217 @@ class MainWindow(QWidget):
         if not 0 <= index < len(tasks) or tasks[index][1] is None:
             return
         item, project = tasks[index]
+        # Export the currently saved project after Studio edits, never the
+        # stale object loaded when the original completion event arrived.
+        if item.project_path:
+            from .studio_project import load_project
+            try:
+                project = load_project(item.project_path)
+                self._completion_tasks[index] = (item, project)
+            except (OSError, ValueError, TypeError) as exc:
+                QMessageBox.warning(self, tr('无法导出字幕'), str(exc))
+                return
         dialog = CompletionExportDialog(project, Path(item.media_path).stem, self,
                                         getattr(self, "_ui_language", "zh"))
         if dialog.exec() and dialog.artifacts:
             self._last_srt_dir = str(dialog.artifacts[0].path.parent)
-            self.open_subtitle_result_button.show()
+            self.open_subtitle_result_button.setEnabled(True)
             self.result_files.append("\n".join(str(a.path) for a in dialog.artifacts))
+            self._completion_output_paths.extend(str(a.path) for a in dialog.artifacts)
+
+    def _completion_action(self, name, callback):
+        """One activation across reentrant dialogs and rapid double-clicks."""
+        if getattr(self, '_completion_action_busy', False):
+            return
+        now = time.monotonic()
+        interval = max(.65, QApplication.doubleClickInterval() / 1000 + .05)
+        last_actions = getattr(self, '_completion_action_last_by_name', {})
+        if now - last_actions.get(name, -1.0) < interval:
+            return
+        self._completion_action_busy = True
+        self._completion_action_last_by_name = {**last_actions, name: now}
+        try:
+            callback()
+        finally:
+            self._completion_action_busy = False
+
+    def _open_studio_from_result(self):
+        project = getattr(self, '_last_studio_project', '')
+        self._open_completion_project(project, mode='edit', source='completion_edit')
+
+    def _open_completion_project(self, project, *, mode, source, on_ready=None):
+        if not project or getattr(self, '_completion_project_opening', False):
+            return
+        self._completion_project_opening = True
+        reference = getattr(self, '_last_result_ref_json', '') if str(project) == str(getattr(self, '_last_studio_project', '')) else ''
+        if reference:
+            # Delivered and checked exactly in _handle_result. From here on it
+            # is the user's project: proofreading and Studio edits are its
+            # content, so only its identity is checked (2026-10-10).
+            from .recognition_result import working_reference
+            reference = working_reference(reference)
+        def ready(studio):
+            self._completion_project_opening = False
+            if on_ready is not None:
+                on_ready(studio)
+        try:
+            kwargs = dict(mode=mode, source=source, on_ready=ready)
+            if reference:
+                kwargs['expected_result_ref'] = reference
+            self.open_studio_project(project, **kwargs)
+        finally:
+            # Failed readiness has no success callback. Release when the
+            # production readiness gate finishes or the open is rejected.
+            QTimer.singleShot(100, self, self._release_completion_project_opening)
+
+    def _release_completion_project_opening(self):
+        if not getattr(self, '_completion_project_opening', False):
+            return
+        readiness = getattr(self.built_page("studio"), '_readiness', None)
+        if readiness is not None and readiness.active:
+            QTimer.singleShot(100, self, self._release_completion_project_opening)
+        else:
+            self._completion_project_opening = False
+
+    def _open_glossary_proofread(self):
+        """The selected task's saved project in the AI glossary workspace."""
+        tasks = getattr(self, '_completion_tasks', [])
+        index = self.result_task_selector.currentIndex()
+        if not 0 <= index < len(tasks) or tasks[index][1] is None or not tasks[index][0].project_path:
+            return
+        if not self._prepare_glossary_for_task():
+            return
+        item, project = tasks[index]
+        outcome = self._completion_task_evidence.get(self._completion_task_key(item), {}).get('outcome')
+        hint = ''
+        if outcome is not None and outcome.polish_status == 'partial':
+            hint = (tr('识别时有 {count} 段文字的 AI 校对没有完成。点「AI 校对建议」可按所选词库对全部字幕补做（会调用你配置的校对模型），勾选后才写回。',
+                       count=outcome.fallback_records) if outcome.fallback_records else
+                    tr('识别时部分字幕的 AI 校对没有完成。点「AI 校对建议」可按所选词库对全部字幕补做（会调用你配置的校对模型），勾选后才写回。'))
+        from .studio_project import load_project
+        try:
+            fresh = load_project(item.project_path)
+        except (OSError, ValueError, TypeError):
+            fresh = project
+        self._show_glossary_proofread(item.project_path, fresh, hint=hint)
+
+    def _open_studio_glossary_proofread(self):
+        """Review the editor's current document, including unsaved changes."""
+        studio = self.studio_page
+        if studio.project is None or not self._prepare_glossary_for_task():
+            return
+        studio.timeline._commit_inline_edit()
+        if getattr(studio, '_canvas_editor', None) is not None:
+            studio._commit_canvas_inline_edit(advance=False)
+        studio.video.set_paused(True)
+        self._show_glossary_proofread(studio.project_path, studio.project, studio=studio)
+
+    def _show_glossary_proofread(self, path, project, *, hint='', studio=None):
+        self._glossary_proofread_return = studio if studio is not None else self.pages.widget(2)
+        page = getattr(self, 'glossary_proofread_page', None)
+        opening = time.perf_counter()
+        if page is None:
+            from .glossary_proofread import GlossaryProofreadPage
+            page = GlossaryProofreadPage(self)
+            _startup_mark("PROOFREAD_PAGE_BUILT", duration_ms=round((time.perf_counter() - opening) * 1000, 1))
+            page.back_requested.connect(lambda: self._switch_page(self._glossary_proofread_return))
+            page.applied.connect(self._glossary_proofread_applied)
+            QApplication.instance().aboutToQuit.connect(page.shutdown)
+            self.glossary_proofread_page = page
+            self.pages.addWidget(page)
+        bind_text(page.back_button, '返回字幕工作台' if studio is not None else '返回结果')
+        self._switch_page(page)
+        # Bind after the page transition; text review also tolerates the
+        # asynchronous source-duration probe from native playback.
+        switched = time.perf_counter()
+        page.open_task(path, project, hint=hint, studio=studio)
+        _startup_mark("PROOFREAD_TASK_OPENED", switch_ms=round((switched - opening) * 1000, 1),
+                      open_task_ms=round((time.perf_counter() - switched) * 1000, 1))
+
+    def _glossary_proofread_applied(self, path):
+        """Applied changes reach the result page, its export and Studio."""
+        from .studio_project import load_project
+        tasks = getattr(self, '_completion_tasks', [])
+        for index, (item, _project) in enumerate(list(tasks)):
+            if str(item.project_path) == str(path):
+                try:
+                    tasks[index] = (item, load_project(path))
+                except (OSError, ValueError, TypeError):
+                    continue
+        self._completion_preview_stamps = {}
+        self._refresh_completion_preview()
+
+    def _repolish_completion_with_current_glossary(self):
+        project = getattr(self, '_last_studio_project', '')
+        if not project:
+            return
+        if not self._prepare_glossary_for_task():
+            return
+        def preview(studio):
+            from .studio_find_replace import FindReplaceDialog
+            dialog = FindReplaceDialog(studio, studio)
+            dialog.tabs.setCurrentIndex(3)
+            dialog.exec()
+        self._open_completion_project(project, mode='edit', source='completion_current_glossary', on_ready=preview)
+
+    def _open_completion_report_directory(self):
+        report = getattr(self, '_last_recognition_report', '')
+        target = Path(report).parent if report else Path(self.legacy.task_reporting.REPORT_ROOT)
+        target.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    def _copy_completion_output_paths(self):
+        QApplication.clipboard().setText('\n'.join(getattr(self, '_completion_output_paths', ())))
+
+    def _copy_completion_log(self):
+        QApplication.clipboard().setText('\n'.join(getattr(self, '_completion_log_lines', ())) or self.console_log.toPlainText())
+
+    def _completion_plain_log_fragment(self, line):
+        # QTextDocument defaults can retain an earlier page's dark ink. Give
+        # plain/history logs an explicit foreground on the console surface.
+        theme = _active_theme_definition()
+        background = QColor(theme.media)
+        foreground = theme.text
+        if QColor(foreground).lightnessF() < 0.5 and background.lightnessF() < 0.5:
+            foreground = '#edf0e9'
+        return f'<div style="white-space:pre; color:{foreground};">{html.escape(line)}</div>'
+
+    def _prepare_completion_log(self):
+        """Record the full run immediately; defer document layout until opened."""
+        if not hasattr(self, 'result_log_toggle'):
+            set_log_html_keep_left(self.result_console, self.console_log.toHtml())
+            return
+        bind_text(self.result_log_toggle, '运行日志')
+        self._completion_log_lines = tuple(getattr(self, '_console_lines', ()))
+        self._completion_log_fragments = tuple(getattr(self, '_console_fragments', ()))
+        if not self._completion_log_fragments:
+            self._completion_log_lines = tuple(self.console_log.toPlainText().splitlines())
+            self._completion_log_fragments = tuple(self._completion_plain_log_fragment(line)
+                                                   for line in self._completion_log_lines)
+        self._completion_log_loaded = 0
+        self._completion_log_generation = getattr(self, '_completion_log_generation', 0) + 1
+        self.result_console.clear()
+        # 2026-10-07 contract: both folds start collapsed; their headers still
+        # show the first real facts, and the user's own choice is not overridden.
+        self.result_log_panel.set_mode('collapsed')
+        self.result_files_panel.set_mode('collapsed')
+        self._refresh_completion_summaries()
+
+    def _toggle_completion_log(self, expanded):
+        if expanded and hasattr(self, '_completion_log_fragments'):
+            self._render_completion_log_batch(self._completion_log_generation)
+
+    def _render_completion_log_batch(self, generation):
+        if generation != self._completion_log_generation or not self.result_log_toggle.isChecked():
+            return
+        start = self._completion_log_loaded
+        end = min(start + 100, len(self._completion_log_fragments))
+        if end == start:
+            return
+        append_log_html_keep_left(self.result_console, ''.join(self._completion_log_fragments[start:end]))
+        self._completion_log_loaded = end
+        if end < len(self._completion_log_fragments):
+            QTimer.singleShot(0, self, lambda: self._render_completion_log_batch(generation))
 
     def _style_active_tasks_label(self) -> None:
         theme = _active_theme_definition()
@@ -6057,9 +7659,38 @@ class MainWindow(QWidget):
             )
 
     def _return_to_main_menu(self):
-        """Leave a completed/failed result on screen until the user is ready,
-        then return to recognition without terminating the workbench process."""
-        dialog = getattr(self, "_completion_dialog", None)
+        """Confirm persisted delivery before leaving, independent of startup preference."""
+        from .studio_project import load_project
+        from .studio_edit_sequence import projected_cues
+        studio = self.built_page("studio")
+        studio_path = str(getattr(studio, 'project_path', '') or '')
+        if studio and studio_path and any(str(item.project_path) == studio_path for item, _ in getattr(self, '_completion_tasks', ())):
+            stack = getattr(getattr(studio, 'session', None), 'undo_stack', None)
+            if (stack is not None and not stack.isClean()) or getattr(studio, '_recovered_autosave_pending', False):
+                studio.project_controller.save()
+                if (stack is not None and not stack.isClean()) or getattr(studio, '_recovered_autosave_pending', False):
+                    bind_text(self.result_task_summary, '结果尚未安全保存，请先保存工作台修改。')
+                    self.result_task_summary.show()
+                    return
+        for item, project in getattr(self, '_completion_tasks', ()):
+            expected = self._completion_task_evidence.get(self._completion_task_key(item), {}).get('outcome')
+            if item.status not in {'success', 'degraded_success', 'completed'} and not (expected and expected.delivery_recovered):
+                continue
+            try:
+                if not item.project_path:
+                    raise ValueError(tr('本次任务没有保存可用的工程文件'))
+                saved = load_project(item.project_path)
+                expected = self._completion_task_evidence.get(self._completion_task_key(item), {}).get('outcome')
+                if expected and expected.core_errors:
+                    raise ValueError('; '.join(expected.core_errors))
+                if expected and expected.final_cues and not projected_cues(saved):
+                    raise ValueError(tr('保存的工程没有可用字幕'))
+            except (OSError, ValueError, TypeError) as exc:
+                bind_text(self.result_task_summary, '结果尚未安全保存：{reason}。请先恢复已有识别结果。', reason=str(exc)[:220])
+                self.result_task_summary.show()
+                QMessageBox.warning(self, tr('无法完成并返回'), tr('结果尚未安全保存，请先恢复已有识别结果。') + '\n' + str(exc))
+                return
+        dialog = getattr(self, '_completion_dialog', None)
         if dialog is not None:
             dialog.close()
         self._switch_page(0)
@@ -6071,15 +7702,7 @@ class MainWindow(QWidget):
         project = getattr(self, "_last_studio_project", "")
         if not project:
             return
-        self.open_studio_project(project, mode="review", source="completion_review")
-
-    def _open_render_from_result(self) -> None:
-        project = getattr(self, "_last_studio_project", "")
-        if not project:
-            return
-        # 三十六轮：完成后主按钮落在工作台编辑区（用户要先调整字幕再导出），
-        # 不再直达导出对话框；导出仍可从工作台内发起。
-        self.open_studio_project(project, mode="edit", source="completion_studio")
+        self._open_completion_project(project, mode="review", source="completion_review")
 
     def _open_subtitle_dir(self):
         target = getattr(self, "_last_srt_dir", "") or str(Path(self.legacy.SCRIPT_DIR))
@@ -6099,9 +7722,46 @@ class MainWindow(QWidget):
             except Exception:
                 pass
 
+    def _retry_completion_stage(self, stage=None):
+        if getattr(self, '_run_in_progress', False) or getattr(self, '_completion_retry_in_progress', False):
+            return
+        tasks = getattr(self, '_completion_tasks', [])
+        index = self.result_task_selector.currentIndex()
+        if not 0 <= index < len(tasks) or not tasks[index][1]:
+            return
+        item, project = tasks[index]
+        evidence = self._completion_task_evidence.get(self._completion_task_key(item), {})
+        outcome = evidence.get('outcome')
+        stage = stage or ('polish' if outcome and outcome.polish_retryable else 'terminology')
+        if not outcome or not ((stage == 'polish' and outcome.polish_retryable) or (stage == 'terminology' and outcome.search_retryable)):
+            return
+        report = copy.deepcopy(evidence.get('display_payload') or {})
+        snapshot = getattr(self, '_last_run_options', None)
+        def review(studio):
+            from .completion_retry_ui import open_completion_retry_review
+            self._completion_retry_in_progress = True
+            try:
+                receipt = open_completion_retry_review(studio, report, snapshot, stage=stage)
+                if receipt is not None:
+                    evidence.setdefault('retry_receipts', []).append(receipt)
+            finally:
+                self._completion_retry_in_progress = False
+        self._open_completion_project(item.project_path, mode='edit', source='completion_failed_stage_retry', on_ready=review)
+
     def _retry_failed_items(self):
+        tasks = getattr(self, '_completion_tasks', [])
+        index = self.result_task_selector.currentIndex()
+        if 0 <= index < len(tasks) and tasks[index][1]:
+            outcome = self._completion_task_evidence.get(self._completion_task_key(tasks[index][0]), {}).get('outcome')
+            if outcome and outcome.result_usable and (outcome.polish_retryable or outcome.search_retryable):
+                self._retry_completion_stage()
+                return
         failed = getattr(self, "_last_failed_items", [])
-        if not failed:
+        if not failed or getattr(self, '_run_in_progress', False):
+            return
+        snapshot = getattr(self, '_last_run_options', None)
+        if snapshot is None:
+            QMessageBox.information(self, tr('无法重试原任务'), tr('本页没有原任务的配置快照。请返回识别页开始新任务，或按当前词库预览重新校对。'))
             return
         # 配置类失败（缺密钥/缺模型/未登录）盲目重排只会再失败一次；
         # 先引导用户打开 AI 模型与密钥（2026-09-03 用户实录：30 分钟转写
@@ -6125,6 +7785,9 @@ class MainWindow(QWidget):
                 return
         self.media_paths = _merge_media_paths([], [f.media_path for f in failed])
         self._retry_cached_failed=True
+        self._retry_run_options = replace(snapshot, force_refresh_polish=False,
+                                          force_refresh_group=False, overwrite_policy='error')
+        self.retry_failed_button.setEnabled(False)
         self._switch_page(0)
         self._refresh_media_summary()
         # 已完成阶段会命中阶段缓存，重试只重跑失败部分
@@ -6158,29 +7821,46 @@ class MainWindow(QWidget):
             for button, label in navigation:
                 button.setText(tr(label))
                 button.setMinimumWidth(0)
-            self.language_combo.setMinimumWidth(100)
+            ui_zoom.set_size(self.language_combo, min_w=100)
             self.header_content.layout().invalidate()
-            compact = (self.width() < 1050 or self.header_content.width()
+            compact = (ui_zoom.logical(self.width()) < 1050 or self.header_content.width()
                        < self.header_content.layout().sizeHint().width())
             self.header_mascot.setVisible(True)
             self.brand.setVisible(True)
             self.header_subtitle.setVisible(True)
-            self.language_combo.setMinimumWidth(72 if compact else 100)
-            self.app_header.setFixedHeight(104)
+            ui_zoom.set_size(self.language_combo, min_w=72 if compact else 100)
+            # The full brand mascot keeps one size at every window height
+            # (established contract); short pages compact their own spacing.
+            # Logical px: the interface zoom scales them (ui_zoom.set_size).
+            ui_zoom.set_size(self.app_header, fixed_h=104)
             for button, label in navigation:
                 button.setAccessibleName(tr(label))
                 button.setToolTip(tr(label))
                 button.setText("" if compact else translate(label, current_language()))
-                button.setMinimumWidth(36 if compact else 0)
+                ui_zoom.set_size(button, min_w=36 if compact else 0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refresh_header_density()
+        if ui_zoom.zoom_percent() != ui_zoom.DEFAULT_PERCENT:
+            # Responsive code re-sets constant sizes on resize; one zoom pass
+            # after the resize settles scales them again (values the zoom set
+            # itself are left alone).
+            timer = getattr(self, "_ui_zoom_settle", None)
+            if timer is None:
+                timer = self._ui_zoom_settle = QTimer(self)
+                timer.setSingleShot(True)
+                timer.setInterval(120)
+                timer.timeout.connect(lambda: (ui_zoom.apply_to(self.app_header),
+                                               ui_zoom.apply_to(self.pages.currentWidget()),
+                                               ui_zoom.apply_to(self.bottom_bar)))
+            timer.start()
         if hasattr(self, "drop_overlay"):
             self.drop_overlay.setGeometry(self.rect().adjusted(16, 16, -16, -16))
         if hasattr(self, "_modal_host") and self._modal_host.isVisible():
             self._modal_host.resize_to_parent()
-        if not hasattr(self, "studio_page") or self.pages.currentWidget() is not self.studio_page:
+        studio = self.built_page("studio")
+        if studio is None or self.pages.currentWidget() is not studio:
             self.apply_density()
         self._layout_resize_handles()
 
@@ -6254,7 +7934,7 @@ class MainWindow(QWidget):
         WM_NCHITTEST and GetWindowRect both use physical screen pixels.  They
         must not pass through Qt's logical-coordinate mapFromGlobal().
         """
-        if os.name == "nt" and not self.isMaximized():
+        if os.name == "nt" and not (self.isMaximized() or self.isFullScreen()):
             try:
                 import ctypes
                 from ctypes import wintypes
@@ -6397,13 +8077,46 @@ class MainWindow(QWidget):
         组件内 apply_density 覆盖。
         P0 Resize: never force fixed heights on main surfaces that starve content.
         """
-        if hasattr(self, "studio_page") and self.pages.currentWidget() is self.studio_page:
+        studio = self.built_page("studio")
+        if studio is not None and self.pages.currentWidget() is studio:
             return
-        comfortable = self.width() >= 1600
+        # Breakpoints in 100% pixels: a zoomed page takes the smaller window's layout.
+        width, height = ui_zoom.logical(self.width()), ui_zoom.logical(self.height())
+        comfortable = width >= 1600
+        tier = 2 if height >= 1150 else 1 if height >= 900 else 0
+        zoom = ui_zoom.zoom_percent()
+        if hasattr(self, "recognition_plan") and getattr(self, "_home_tier", None) != (tier, comfortable, zoom):
+            previous = getattr(self, "_home_tier", None)
+            self._home_tier = (tier, comfortable, zoom)
+            # The card row has a bounded height per window tier: the card
+            # profile follows its height, and a natural-height column would
+            # otherwise keep whichever profile minimum it started with. The
+            # range stays inside one profile (compact < 300 <= normal < 365);
+            # narrower windows leave room for a wrapped recovery button.
+            if tier == 2:
+                low, high = (306, 306) if comfortable else (306, 360)
+            else:
+                low, high = 240, 296
+            if zoom == ui_zoom.DEFAULT_PERCENT:
+                self.recognition_plan.setMinimumHeight(low)
+                self.recognition_plan.setMaximumHeight(high)
+            else:
+                # Zoomed text wraps more than the band allows: grow, never clip.
+                self.recognition_plan.setMinimumHeight(ui_zoom.px(low))
+                self.recognition_plan.setMaximumHeight(16777215)
+            if hasattr(self, "media_row_layout") and (previous or (None,))[0] != tier:
+                self._apply_media_mode(bool(getattr(self, "media_paths", None)))
+                if not self.media_paths:
+                    self._style_media_summary()
         # Recognition cards also depend on their current height, so let that
         # lightweight cached path run on every resize.
         if hasattr(self, "recognition_plan"):
             self.recognition_plan.apply_density(comfortable)
+        if hasattr(self, "page_subtitle"):
+            # Narrow windows give the heading row to the plan toolbar.
+            self.page_subtitle.setVisible(comfortable)
+        if getattr(self, "_density_comfortable", None) is not comfortable and hasattr(self, "_last_plan_items"):
+            self._refresh_readiness_bar(self._last_plan_items)
         if self._density_comfortable is comfortable:
             return
         self._density_comfortable = comfortable
@@ -6413,8 +8126,9 @@ class MainWindow(QWidget):
         if hasattr(self, "setting_tiles"):
             for tile in self.setting_tiles.values():
                 tile.apply_density(comfortable)
-        if hasattr(self, "workshop_page"):
-            self.workshop_page.apply_density(comfortable)
+        workshop = self.built_page("workshop")
+        if workshop is not None:
+            workshop.apply_density(comfortable)
 
     def refresh_theme_palette(self) -> None:
         """Refresh MainWindow-owned inline colors after a global theme switch."""
@@ -6424,15 +8138,35 @@ class MainWindow(QWidget):
         # QSS), so it must be re-styled here too. A second same-name definition
         # used to shadow this call and left the box on its build-time theme.
         self._style_active_tasks_label()
+        self._restyle_progress_page()
 
     def _style_media_summary(self) -> None:
         theme = _active_theme_definition()
+        ready = bool(getattr(self, "media_paths", None))
         if hasattr(self, "media_type_icon"):
-            self.media_type_icon.setPixmap(themed_icon("fa5s.file-audio", theme=theme).pixmap(QSize(20, 20)))
-        self.media_name.setStyleSheet(f"font-weight: 700; color: {theme.text};")
-        self.media_drop_hint.setStyleSheet(
-            f"color: {theme.text_secondary}; font-size: 13px;"
+            import qtawesome as qta
+
+            # Ready: check on the success chip; empty: brand import glyph.
+            icon = (qta.icon("fa5s.check", color=theme.on_vivid) if ready
+                    else qta.icon("fa5s.file-import", color=theme.accent_text))
+            self.media_type_icon.setPixmap(icon.pixmap(QSize(18, 18)))
+            # Descendant rules keyed on the card's [empty] state need a re-polish.
+            self.media_type_icon.style().unpolish(self.media_type_icon)
+            self.media_type_icon.style().polish(self.media_type_icon)
+        if hasattr(self, "media_ready_badge"):
+            self.media_ready_badge.setVisible(ready)
+        self._apply_media_mode(ready)
+        if hasattr(self, "media_type_icon") and not ready:
+            glyph = max(24, round(self.media_type_icon.width() * 0.42))
+            self.media_type_icon.setPixmap(
+                qta.icon("fa5s.file-import", color=theme.accent_text).pixmap(QSize(glyph, glyph)))
+        self.media_name.setStyleSheet(
+            f"font-size: {16 if ready else 22}px; font-weight: 600; color: {theme.text};"
         )
+        self.media_drop_hint.setStyleSheet(
+            f"color: {theme.text_secondary}; font-size: {13 if ready else 14}px;"
+        )
+        self._style_home_icons()
         if hasattr(self, "media_origin_label"):
             self.media_origin_label.setStyleSheet(
                 f"color:{theme.accent}; font-size:12px; font-weight:700;"
@@ -6453,13 +8187,16 @@ class MainWindow(QWidget):
                 preview += f" 等 {len(self.media_paths)} 个文件"
             self.media_name.setText(preview)
             self.media_name.setToolTip("\n".join(self.media_paths))
-            bind_text(self.media_drop_hint, translate('可继续拖入另一批素材，或点击右侧重新选择', language))
+            # Bind the Chinese source, not a translation: the binding is
+            # re-rendered on every language switch. A translated source stayed
+            # in the language that was active at this refresh.
+            bind_text(self.media_drop_hint, '可继续拖入另一批素材，或点击右侧重新选择')
             bind_text(self.header_status, f'●  {len(self.media_paths)} ' + ('media items ready' if language == 'en' else '个素材已就绪'))
         else:
-            bind_text(self.media_name, translate('把视频或音频拖到这里', language))
+            bind_text(self.media_name, '把视频或音频拖到这里')
             self.media_name.setToolTip("")
-            bind_text(self.media_drop_hint, translate('支持多选；也可以点击右侧“选择素材”', language))
-            bind_text(self.header_status, '● ' + translate('等待素材', language))
+            bind_text(self.media_drop_hint, '支持多选；也可以点击右侧“选择素材”')
+            bind_text(self.header_status, '● {status}', status=tr('等待素材'))
         if hasattr(self, "media_origin_label"):
             self.media_origin_label.setVisible(
                 bool(getattr(self, "_studio_recognition_context", None))
@@ -6579,9 +8316,10 @@ class MainWindow(QWidget):
         )
         self.project_profile_combo.blockSignals(True)
         self.project_profile_combo.clear()
-        self.project_profile_combo.addItem("自定义方案", "")
+        self.project_profile_combo.addItem(tr("自定义方案"), "")
         for profile in self.profile_store.list():
-            self.project_profile_combo.addItem(profile.name, profile.id)
+            label = profile.name + (' · ' + tr('自定义方案') if profile.recognition_plan == 'custom' else '')
+            self.project_profile_combo.addItem(label, profile.id)
             self.project_profile_combo.setItemData(self.project_profile_combo.count()-1, True, Qt.ItemDataRole.UserRole+175)
         index = self.project_profile_combo.findData(selected_id)
         self.project_profile_combo.setCurrentIndex(max(0, index))
@@ -6662,12 +8400,31 @@ class MainWindow(QWidget):
             return
         models = {key: str(asr_config.get(key, "") or "") for key in ASR_CONFIG_KEYS}
         models['speaker_source']=asr_config.get('speaker_source') or 'single'
+        # Profiles use the same exact ASR retirement migration as settings.
+        # Merge over the current snapshot to retain an omitted workspace URL;
+        # then project only fields owned by this ASR bookmark back to controls.
+        from .settings import DEFAULT_SETTINGS, _merge_known_settings
+        supplied = copy.deepcopy(self.legacy.RUNTIME_SETTINGS)
+        supplied.setdefault('models', {}).update({key:value for key,value in models.items() if value})
+        normalized, _ = _merge_known_settings(DEFAULT_SETTINGS, supplied)
+        migrated = (models.get('qwen_asr_api_provider') in {'qwen_filetrans','qwen31_flash','dashscope_qwen_audio'}
+                    or (models.get('qwen_asr_api_provider')=='dashscope' and models.get('qwen_asr_api_model')=='qwen3-asr-flash'))
+        for key,value in list(models.items()):
+            if value or (migrated and key.startswith('qwen_asr_api_')):
+                models[key] = normalized['models'][key]
         # 先落全局（configure_runtime_asr 内部深拷贝+落盘+刷新模块全局），
         # 这样后续 _apply_asr_preset_fields 读到的"已保存值"就是快照本身。
         if persist:
             self.legacy.configure_runtime_asr(models, qwen_asr_key="")
+        if hasattr(self,'speaker_source'):
+            self.speaker_source.blockSignals(True)
+            self.speaker_source.setCurrentIndex(0)
+            self.speaker_source.blockSignals(False)
         provider = models.get("qwen_asr_api_provider", "")
         provider_index = self.qwen_asr_api_provider.findData(provider) if provider else -1
+        if provider and provider_index < 0:
+            self.qwen_asr_api_provider.addItem(provider, provider)
+            provider_index = self.qwen_asr_api_provider.findData(provider)
         if provider_index >= 0 and provider_index != self.qwen_asr_api_provider.currentIndex():
             self.qwen_asr_api_provider.setCurrentIndex(provider_index)
         # 快照值拥有最终决定权（provider 切换信号可能刚按预设填过默认值）。
@@ -6686,12 +8443,10 @@ class MainWindow(QWidget):
         if not hasattr(self, "qwen_asr_api_key"):
             return
         try:
-            provider = str(self.qwen_asr_api_provider.currentData() or "dashscope")
+            provider = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
             base = self.qwen_asr_api_url.text().strip()
-            existing, source = read_api_key(provider, base)
-            if not existing:
-                existing, source = resolve_api_key("qwen_asr")
-            (bind_text(self.qwen_asr_api_key, '已配置：{value0}', property='placeholderText', value0=source) if existing else bind_text(self.qwen_asr_api_key, '请输入 DashScope API Key', property='placeholderText'))
+            existing, source = read_asr_api_key(provider, base)
+            (bind_text(self.qwen_asr_api_key, '已配置：{value0}', property='placeholderText', value0=source) if existing else bind_text(self.qwen_asr_api_key, '请输入当前 ASR 服务的 API Key', property='placeholderText'))
         except Exception:
             pass
 
@@ -6764,6 +8519,7 @@ class MainWindow(QWidget):
         finally:
             self._applying_profile = False
         self.legacy.adopt_profile_runtime_settings(settings, warnings)
+        self._restore_glossary_switch()
         GLOBAL_PROVIDER_REGISTRY.bind(settings)
         self.current_project_profile = profile
         self._applying_profile = True
@@ -6777,8 +8533,9 @@ class MainWindow(QWidget):
                 self.profile_store.set_last_selected(profile.id)
             except (OSError, ValueError) as exc:
                 usage_warning = f'；最近使用记录未保存：{exc}'
-        if bind_project and self.studio_page.project:
-            self.studio_page.project.studio_state["profile_id"] = profile.id
+        studio = self.built_page("studio")
+        if bind_project and studio is not None and studio.project:
+            studio.project.studio_state["profile_id"] = profile.id
         self._asr_config_dirty = False
         self._refresh_project_profile_combo(profile.id)
         self._refresh_glossary_chips()
@@ -6959,7 +8716,7 @@ class MainWindow(QWidget):
             callback()
 
     def _apply_recognition_plan_from_ui(self, _index: int = -1) -> None:
-        if getattr(self, "_applying_recognition_plan", False):
+        if getattr(self, "_applying_recognition_plan", False) or getattr(self, "_applying_profile", False):
             return
         key = str(self.recognition_mode_combo.currentData() or "custom")
         plan = recognition_plan(key)
@@ -7024,7 +8781,8 @@ class MainWindow(QWidget):
 
     def dragEnterEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-        accepted = self._supported_paths(paths)
+        from .external_open import classify_open_paths
+        accepted = [path for kind, path in classify_open_paths(paths) if kind != 'unsupported']
         if accepted:
             event.acceptProposedAction()
             self.drop_overlay.set_file_count(len(accepted))
@@ -7034,7 +8792,8 @@ class MainWindow(QWidget):
 
     def dragMoveEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-        accepted = self._supported_paths(paths)
+        from .external_open import classify_open_paths
+        accepted = [path for kind, path in classify_open_paths(paths) if kind != 'unsupported']
         if accepted:
             self.drop_overlay.set_file_count(len(accepted))
             event.acceptProposedAction()
@@ -7047,7 +8806,8 @@ class MainWindow(QWidget):
 
     def dropEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-        accepted = self._supported_paths(paths)
+        from .external_open import classify_open_paths
+        accepted = [path for kind, path in classify_open_paths(paths) if kind != 'unsupported']
         self._set_drop_active(False)
         if not accepted:
             event.ignore()
@@ -7065,42 +8825,111 @@ class MainWindow(QWidget):
         self.import_media(paths)
         event.acceptProposedAction()
 
+    def _restore_glossary_switch(self):
+        settings = self.legacy.RUNTIME_SETTINGS.get("glossary", {})
+        with QSignalBlocker(self.terms):
+            self.terms.setChecked(bool(settings.get("enable_domain_terms", False)))
+        self._refresh_glossary_chips()
+
+    def _task_glossary_selection(self):
+        context = getattr(self, "_studio_recognition_context", None) or {}
+        if "enabled_glossary_ids" in context:
+            ids = tuple(context["enabled_glossary_ids"])
+            checked = bool(context.get("enable_domain_terms", bool(ids)))
+            return ids if checked else (), checked
+        ids = tuple(self._enabled_glossary_ids())
+        checked = self.terms.isChecked()
+        return ids if checked else (), checked
+
     def _auto_enable_terms(self, value: str):
-        if self.legacy.clean_subtitle_text(value):
-            self.terms.setChecked(True)
+        # Editing the content name must preserve an explicit OFF choice.
         self._resolve_glossary_binding()
 
     def _resolve_glossary_binding(self) -> dict:
         name = self.legacy.canonicalize_runtime_game_name(self.game_box.currentText())
         resolver = GlossaryBindingResolver(self.legacy)
-        result = resolver.resolve(name, self.legacy.runtime_game_identity(name), self.terms.isChecked())
+        content_id = self.game_box.currentData() if self.game_box.currentText() == self.game_box.itemText(self.game_box.currentIndex()) else ""
+        result = resolver.resolve(name, str(content_id or name), self.terms.isChecked())
         self._glossary_binding = result
         if self.terms.isChecked():
             settings = self.legacy.RUNTIME_SETTINGS.setdefault("glossary", {})
-            settings["enabled_glossary_ids"] = list(result["active_glossaries"])
-            settings["enable_domain_terms"] = bool(result["active_glossaries"])
-            if hasattr(self, "batch_glossary_status"):
-                labels = [item["label"] for item in result["matched_glossaries"]]
-                (bind_text(self.batch_glossary_status, '术语增强 ON\n已绑定：{value0}', value0='、'.join(labels)) if labels else bind_text(self.batch_glossary_status, '未找到匹配词库'))
-            self._save_glossary_settings()
-        elif hasattr(self, "batch_glossary_status"):
-            bind_text(self.batch_glossary_status, '术语增强 OFF')
+            settings["enabled_glossary_ids"] = list(dict.fromkeys([*self._enabled_glossary_ids(), *result["active_glossaries"]]))
+        self._save_glossary_settings()
         if hasattr(self, "_refresh_glossary_chips"):
             self._refresh_glossary_chips()
         return result
 
+    def _refresh_content_choices(self):
+        """Refresh the small catalog on library mutations, preserving content and batch."""
+        if not hasattr(self, "game_box"):
+            return
+        text = self.game_box.currentText()
+        identity = self.game_box.currentData()
+        catalog = getattr(self.legacy, "glossary_catalog", lambda: [])() or []
+        self.game_box.blockSignals(True)
+        try:
+            self.game_box.clear()
+            seen = set()
+            for row in catalog:
+                key = str(row.get("id", ""))
+                if key and key not in seen:
+                    self.game_box.addItem(str(row.get("name", key)), key)
+                    seen.add(key)
+            resolve = getattr(self.legacy, "resolve_glossary_identity", self.legacy.runtime_game_identity)
+            for name in self.legacy.load_runtime_game_history():
+                key = str(resolve(name) or self.legacy.runtime_game_identity(name))
+                if key and key not in seen:
+                    self.game_box.addItem(str(name), key)
+                    seen.add(key)
+            index = self.game_box.findData(identity) if identity else -1
+            if index >= 0:
+                self.game_box.setCurrentIndex(index)
+            else:
+                self.game_box.setCurrentIndex(-1)
+                self.game_box.setEditText(text)
+        finally:
+            self.game_box.blockSignals(False)
+        self._refresh_glossary_chips()
+        refresh_picks = getattr(self, "_refresh_content_quick_picks", None)
+        if callable(refresh_picks):
+            refresh_picks()
+
+    def _refresh_content_quick_picks(self) -> None:
+        """Reload the recent content names (library / history mutations)."""
+        try:
+            self._content_quick_names = list(self.legacy.load_runtime_game_history())[:6]
+        except (OSError, ValueError, TypeError, AttributeError):
+            self._content_quick_names = []
+        self._sync_content_quick_picks()
+
+    def _sync_content_quick_picks(self, *_args) -> None:
+        picks = getattr(self, "content_quick_picks", None)
+        if picks is None:
+            return
+        current = self.legacy.canonicalize_runtime_game_name(self.game_box.currentText())
+        picks.set_items(getattr(self, "_content_quick_names", []), current)
+
+    def _pick_recent_content(self, name: str) -> None:
+        index = self.game_box.findText(name)
+        if index >= 0:
+            self.game_box.setCurrentIndex(index)
+        else:
+            self.game_box.setEditText(name)
+
     def _asr_values(self):
-        provider = str(self.qwen_asr_api_provider.currentData() or "dashscope")
-        preset = ASR_API_PRESETS.get(provider, ASR_API_PRESETS["dashscope"])
+        provider = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
+        preset = ASR_API_PRESETS.get(provider)
+        protocol = (preset["protocol"] if preset else
+                    self.legacy.RUNTIME_SETTINGS["models"].get("qwen_asr_api_protocol", ""))
         return {
-            "speaker_source": self.legacy.RUNTIME_SETTINGS['models'].get('speaker_source','single'),
+            "speaker_source": str(self.speaker_source.currentData() or 'native'),
             "primary_asr_backend": str(self.primary_asr_backend.currentData()),
             "qwen_asr_backend": str(self.qwen_asr_backend.currentData()),
             "qwen_asr_model": self.legacy.RUNTIME_SETTINGS["models"].get(
                 "qwen_asr_model", "Qwen/Qwen3-ASR-1.7B"
             ),
             "qwen_asr_api_provider": provider,
-            "qwen_asr_api_protocol": preset["protocol"],
+            "qwen_asr_api_protocol": protocol,
             "qwen_asr_api_model": self.qwen_asr_api_model.text().strip(),
             "qwen_asr_api_url": self.qwen_asr_api_url.text().strip(),
             "firered_asr_backend": str(self.firered_asr_backend.currentData()),
@@ -7118,8 +8947,8 @@ class MainWindow(QWidget):
         Contains a '查看完整教程' action that opens a properly styled dialog.
         """
         btn = self.qwen_api_help_button
-        provider = str(self.qwen_asr_api_provider.currentData() or "dashscope")
-        label = ASR_API_PRESETS.get(provider, ASR_API_PRESETS["dashscope"])["label"]
+        provider = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
+        label = ASR_API_PRESETS.get(provider, ASR_API_PRESETS["qwen31_filetrans"])["label"]
 
         pop = QFrame(self, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         pop.setObjectName("apiHelpPopover")
@@ -7200,7 +9029,7 @@ class MainWindow(QWidget):
         lay.setSpacing(10)
 
         header = QHBoxLayout()
-        header.addWidget(bind_text(QLabel(), '<b>当前选择</b>：{value0}', value0=ASR_API_PRESETS.get(provider, ASR_API_PRESETS['dashscope'])['label']), 1)
+        header.addWidget(bind_text(QLabel(), '<b>当前选择</b>：{value0}', value0=ASR_API_PRESETS.get(provider, ASR_API_PRESETS['qwen31_filetrans'])['label']), 1)
         x = QPushButton("×")
         x.setObjectName("helpCloseX")
         x.setFixedSize(26, 26)
@@ -7241,7 +9070,7 @@ class MainWindow(QWidget):
         dlg.exec()
 
     def _asr_api_provider_changed(self, *_args):
-        provider = str(self.qwen_asr_api_provider.currentData() or "dashscope")
+        provider = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
         # 四十一轮：切回用户已保存过的服务时恢复其保存的模型/地址，
         # 不强制刷回预设值（自定义工作台域名等用户输入必须留住）。
         self._apply_asr_preset_fields(provider)
@@ -7253,8 +9082,8 @@ class MainWindow(QWidget):
     # P0-4: Auto-fetch models from OpenAI-compatible /v1/models
     # ------------------------------------------------------------------
     def _fetch_asr_models(self):
-        provider = str(self.qwen_asr_api_provider.currentData() or "dashscope")
-        if provider in {'spark_asr_v2','qwen31_flash','qwen31_filetrans'}:
+        provider = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
+        if provider in {'spark_asr_v2','qwen31_filetrans'}:
             self.qwen_models_status.setVisible(True)
             bind_text(self.qwen_models_status, '原生接口无模型列表；按官方固定型号调用，实际识别尚需验证。')
             return
@@ -7282,7 +9111,7 @@ class MainWindow(QWidget):
             self.qwen_models_combo.setVisible(False)
             return
         # cache
-        prov = str(self.qwen_asr_api_provider.currentData() or "dashscope")
+        prov = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
         set_cached_models(prov, self.qwen_asr_api_url.text().strip(), models)
         # populate UI
         self.qwen_models_combo.blockSignals(True)
@@ -7317,7 +9146,7 @@ class MainWindow(QWidget):
     def _try_restore_asr_models_from_cache(self):
         """If we have a cached list for current (provider, base), show the dropdown without network."""
         try:
-            prov = str(self.qwen_asr_api_provider.currentData() or "dashscope")
+            prov = str(self.qwen_asr_api_provider.currentData() or "qwen31_filetrans")
             base = self.qwen_asr_api_url.text().strip()
             if not base:
                 return
@@ -7358,11 +9187,6 @@ class MainWindow(QWidget):
         self._refresh_asr_summary()
 
     def _refresh_asr_summary(self):
-        from .speaker_strategy import execution_plan
-        speaker_plan=execution_plan(self.legacy.RUNTIME_SETTINGS)
-        if hasattr(self,'speaker_plan_summary'):
-            active=getattr(self,'current_project_profile',None)
-            bind_text(self.speaker_plan_summary, tr('说话人区分：{strategy} · 当前方案：{profile}\n{steps}', strategy=tr(speaker_plan.label), profile=active.name if active else tr('当前默认配置'), steps=' → '.join((tr(step) for step in speaker_plan.steps))))
         if not hasattr(self, "asr_panel"):
             return
         language = getattr(self, "_ui_language", current_language())
@@ -7413,8 +9237,8 @@ class MainWindow(QWidget):
         _models_cfg = self.legacy.RUNTIME_SETTINGS.get("models", {})
         key_ready = bool(
             read_asr_api_key(
-                str(_models_cfg.get("qwen_asr_api_provider", "dashscope") or "dashscope"),
-                str(_models_cfg.get("qwen_asr_api_url", "") or ""),
+                str(_models_cfg.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans"),
+                str(_models_cfg.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"]) or ""),
             )[0]
             or self.qwen_asr_api_key.text().strip()
         )
@@ -7505,6 +9329,7 @@ class MainWindow(QWidget):
         # CTA 状态：识别方案与 N 个词库就绪
         if hasattr(self, "action_status"):
             problems = []
+            plan_items = []
             for role, backend in (
                 ("primary", primary_backend),
                 ("timeline", firered_backend),
@@ -7513,18 +9338,20 @@ class MainWindow(QWidget):
                 _kind, status, _tone = _status(role, backend)
                 if status in {"需要下载", "未配置"}:
                     problems.append(status)
+                    plan_items.append((role, status))
+            refresh_bar = getattr(self, "_refresh_readiness_bar", None)
+            if callable(refresh_bar):
+                refresh_bar(plan_items)
             glossary_count = len(self._enabled_glossary_ids())
             if problems:
                 self.action_status.setObjectName("statusWarn")
                 pending = ", ".join(translate(item, language) for item in dict.fromkeys(problems))
                 if language == "en":
-                    text = f"⚠ Recognition plan needs attention: {pending}"
+                    text = "⚠ Before starting:"
                 elif language == "ja":
-                    text = "⚠ " + translate("识别方案待处理：", language) + "・".join(
-                        translate(item, language) for item in dict.fromkeys(problems)
-                    )
+                    text = "⚠ " + translate("开始前还需处理：", language)
                 else:
-                    text = f"⚠ 识别方案待处理：{'、'.join(dict.fromkeys(problems))}"
+                    text = "⚠ 开始前还需处理："
                 self.action_status.setText(text)
             else:
                 self.action_status.setObjectName("statusGood")
@@ -7534,6 +9361,8 @@ class MainWindow(QWidget):
                     text = "✔ " + translate("识别方案与 {n} 个词库已就绪", language).replace("{n}", str(glossary_count))
                 else:
                     text = f"✔ 识别方案与 {glossary_count} 个词库已就绪"
+                if not getattr(self, "media_paths", None):
+                    text += " · " + translate("开始前还需：", language)
                 self.action_status.setText(text)
             self.action_status.style().unpolish(self.action_status)
             self.action_status.style().polish(self.action_status)
@@ -7547,17 +9376,21 @@ class MainWindow(QWidget):
         - touch model logos/icons (qta + bundled) to prime font/icon caches
         No heavy widget creation or 650-term loads here.
         """
-        if self.pages.currentWidget() is self.studio_page:
+        studio = self.built_page("studio")
+        if studio is not None and self.pages.currentWidget() is studio:
             return  # Home-only caches are irrelevant to Studio's first paint.
         import time as _t
         _t0 = _t.perf_counter()
         try:
             # 1) Model install status (used by workshop + picker cards)
             keys = installed_model_keys(APP_ROOT)
-            # Optionally warm the workshop cache if present (cheap assignment, no UI rebuild)
-            if hasattr(self, "workshop_page"):
+            # Warm the workshop cache (cheap assignment, no UI rebuild). The
+            # page itself is built on first use and picks these keys up then.
+            self._preloaded_installed_model_keys = set(keys)
+            workshop = self.built_page("workshop")
+            if workshop is not None:
                 try:
-                    self.workshop_page._installed = set(keys)
+                    workshop._installed = set(keys)
                 except Exception:
                     pass
         except Exception:
@@ -8136,6 +9969,7 @@ class MainWindow(QWidget):
             if widget is not None:
                 widget.deleteLater()
         enabled = self._enabled_glossary_ids()
+        effective = bool(getattr(getattr(self, "terms", None), "isChecked", lambda: False)())
         for identity in enabled:
             chip = AnimatedButton("")
             chip.setObjectName("glossaryChip")
@@ -8149,22 +9983,52 @@ class MainWindow(QWidget):
         self.glossary_chips_layout.addStretch(1)
         terms_on = bool(getattr(getattr(self, "terms", None), "isChecked", lambda: False)())
         if hasattr(self, "batch_glossary_status"):
-            if enabled:
+            if enabled and effective:
                 names = [self._glossary_display_name(identity) for identity in enabled[:3]]
                 suffix = "…" if len(enabled) > 3 else ""
-                if current_language() == "en":
-                    self.batch_glossary_status.setText(
-                        f"Glossary ON\nBound: {', '.join(names)}{suffix}"
-                    )
-                else:
-                    bind_text(self.batch_glossary_status, '术语增强 ON\n已绑定：{value0}{suffix}', value0='、'.join(names), suffix=suffix)
+                from .terminology import snapshot_glossaries
+                catalog = getattr(self.legacy, 'glossary_catalog', lambda: [])()
+                key = (tuple(enabled), tuple((r['id'], r.get('revision', '')) for r in catalog))
+                if key != getattr(self, '_home_term_summary_key', None):
+                    self._home_term_summary = snapshot_glossaries(self.legacy, enabled).summary()
+                    self._home_term_summary_key = key
+                summary = self._home_term_summary
+                count = summary['effective_terms']
+                reason = ('；存在冲突，请检查术语库' if summary['conflicts'] else
+                          '；所选词库只有参考项、无已确认词，或词库已不存在' if count == 0 else '')
+                bind_text(self.batch_glossary_status, '术语增强 ON · 本批启用：{names}\n实际生效 {count} 个规范词{reason}', names='、'.join(names) + suffix, count=count, reason=reason)
+            elif enabled:
+                bind_text(self.batch_glossary_status, '术语增强 OFF · 已选择词库；本次不应用')
             elif terms_on:
-                bind_text(self.batch_glossary_status, translate('未找到匹配词库', current_language()))
+                bind_text(self.batch_glossary_status, '术语增强 ON · 未选择词库，本次暂不应用')
             else:
                 bind_text(self.batch_glossary_status, translate('术语增强 OFF', current_language()))
             bind_text(self.add_glossary_button, translate('管理术语库', current_language()))
+        state = getattr(self, "term_state_label", None)
+        if state is not None:
+            if enabled and effective:
+                count = self._home_term_summary['effective_terms']
+                reason = ('；存在冲突，请检查术语库' if self._home_term_summary['conflicts'] else
+                          '；所选词库只有参考项、无已确认词，或词库已不存在' if count == 0 else '')
+                bind_text(state, '生效 {count} 个规范词{reason}', count=count, reason=reason)
+                tone = "warn" if reason else "on"
+            elif enabled:
+                bind_text(state, '已选择词库，本次不应用')
+                tone = "off"
+            elif terms_on:
+                bind_text(state, '未选择词库，本次暂不应用')
+                tone = "warn"
+            else:
+                bind_text(state, '启用后用于专名、角色名与错词修正')
+                tone = "off"
+            state.setProperty("tone", tone)
+            state.style().unpolish(state)
+            state.style().polish(state)
 
     def _glossary_display_name(self, identity: str) -> str:
+        display = getattr(self.legacy, "glossary_display_name", None)
+        if callable(display):
+            return str(display(identity) or identity)
         profiles = getattr(self.legacy, "load_game_profiles", lambda: {})()
         for name, profile in (profiles or {}).items():
             if self.legacy.runtime_game_identity(str(profile.get("identity", name))) == identity:
@@ -8179,20 +10043,26 @@ class MainWindow(QWidget):
         try:
             self.legacy.RUNTIME_SETTINGS.setdefault("glossary", {})
             self.legacy.RUNTIME_SETTINGS["glossary"]["enabled_glossary_ids"] = self._enabled_glossary_ids()
-            self.legacy.RUNTIME_SETTINGS["glossary"]["enable_domain_terms"] = bool(
-                self._enabled_glossary_ids()
-            )
+            self.legacy.RUNTIME_SETTINGS["glossary"]["enable_domain_terms"] = bool(self.terms.isChecked())
             save_runtime_settings(self.legacy.RUNTIME_SETTINGS)
-        except Exception:
-            pass
+        except Exception as exc:
+            if hasattr(self, "term_hint"):
+                self.term_hint.setText(f"词库配置保存失败：{exc}")
+                self.term_hint.show()
+            raise
+        self._refresh_glossary_chips()
+        page = getattr(getattr(self, "term_library_page", None), "library", None)
+        if page is not None:
+            page._refresh_batch_bar()
         self._refresh_asr_summary()
 
     def _remove_glossary(self, identity: str):
         enabled = [i for i in self._enabled_glossary_ids() if i != identity]
         self.legacy.RUNTIME_SETTINGS["glossary"]["enabled_glossary_ids"] = enabled
         self._save_glossary_settings()
-        bind_text(self.term_hint, translate('已从本批词库移除', current_language()))
-        self.term_hint.setVisible(bool(self.term_hint.text()))
+        # Chips and the persistent status already describe the current state.
+        self.term_hint.clear()
+        self.term_hint.hide()
 
     def _pick_glossaries(self):
         """打开可搜索的多选词库选择器。 P0: use ModalHost (no native window), skeleton first."""
@@ -8204,8 +10074,8 @@ class MainWindow(QWidget):
         QTimer.singleShot(0, picker, picker._populate)
 
         def _after_close():
-            chosen = picker.take_result() or []
-            if chosen:
+            chosen = picker.take_result()
+            if chosen is not None:
                 self.legacy.RUNTIME_SETTINGS["glossary"]["enabled_glossary_ids"] = chosen
                 self._save_glossary_settings()
                 (bind_text(self.term_hint, f'{len(chosen)} term libraries enabled for this batch') if current_language() == 'en' else bind_text(self.term_hint, '本批已启用 {value0} 个词库', value0=len(chosen)))
@@ -8254,7 +10124,7 @@ class MainWindow(QWidget):
             # Provider-scoped ASR key persistence: key belongs to provider+base_url, not to model id.
             try:
                 if qk:
-                    save_api_key_for(av.get("qwen_asr_api_provider", "dashscope"), av.get("qwen_asr_api_url", ""), qk)
+                    save_api_key_for(av.get("qwen_asr_api_provider", "qwen31_filetrans"), av.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"]), qk)
             except Exception:
                 pass
             result = persist_asr_configuration(
@@ -8275,12 +10145,10 @@ class MainWindow(QWidget):
             return False
         self.qwen_asr_api_key.clear()
         # Read back using provider-scoped lookup to show correct placeholder for current provider/base.
-        prov = av.get("qwen_asr_api_provider", "dashscope")
-        burl = av.get("qwen_asr_api_url", "")
-        existing, source = read_api_key(prov, burl)
-        if not existing:
-            existing, source = resolve_api_key("qwen_asr")
-        (bind_text(self.qwen_asr_api_key, '已配置：{value0}', property='placeholderText', value0=source) if existing else bind_text(self.qwen_asr_api_key, '请输入 DashScope API Key', property='placeholderText'))
+        prov = av.get("qwen_asr_api_provider", "qwen31_filetrans")
+        burl = av.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"])
+        existing, source = read_asr_api_key(prov, burl)
+        (bind_text(self.qwen_asr_api_key, '已配置：{value0}', property='placeholderText', value0=source) if existing else bind_text(self.qwen_asr_api_key, '请输入当前 ASR 服务的 API Key', property='placeholderText'))
         missing = result["missing_keys"]
         language = getattr(self, "_ui_language", current_language())
         self.asr_save_status.setObjectName("statusWarn" if missing else "statusGood")
@@ -8298,47 +10166,63 @@ class MainWindow(QWidget):
                 )
             except Exception:
                 pass
+        self._refresh_project_profile_combo()
+        self._refresh_workshop_after_asr_change()
         self._refresh_asr_summary()
         return True
 
     def _refresh_ai_summary(self):
+        if getattr(self, '_recognition_page_deferred', False):
+            return
         language = getattr(self, "_ui_language", current_language())
-        group = self.group_editor.model.currentText().strip()
-        if hasattr(self, "ai_grouping") and not self.ai_grouping.isChecked():
-            summary = translate("已关闭 · 使用本地断句规则", language)
-        else:
-            group_transport = str(self.group_editor.transport.currentData() or AITransport.OPENAI_COMPATIBLE.value)
-            if group_transport == AITransport.ANTIGRAVITY_CLI.value:
-                summary = translate("Google Antigravity · 登录态由官方 CLI 管理", language)
-                self.ai_panel.set_summary(summary)
-                return
-            if group_transport == AITransport.GROK_CLI.value:
-                summary = translate("Grok Account · OAuth 由官方 CLI 管理", language)
-                self.ai_panel.set_summary(summary)
-                return
-            group_provider = str(self.group_editor.provider.currentData() or "custom")
-            group_base = normalize_base_url(self.group_editor.base_url.text())
-            configured = bool(read_api_key(group_provider, group_base)[0])
-            if not configured and group_provider in {"bailian", "dashscope"}:
-                configured = bool(resolve_api_key("group")[0])
-            if not configured or not group:
-                summary = translate("选择 API 厂商、模型并填写 API Key", language)
-            else:
-                base_url = self.group_editor.base_url.text().strip().casefold()
-                provider = (
-                    "DeepSeek"
-                    if "deepseek" in base_url or group.casefold().startswith("deepseek")
-                    else self.group_editor.provider.currentText().strip()
-                )
-                # P1: distinguish "key present" vs "verified live". We only know key presence here.
-                # After a successful test in the editor this session the ConnectionTester will have shown "连接正常".
-                # On first load with key we show 未验证 so user knows a live check is still useful.
-                summary = f"{provider} · {group} · " + translate("已配置 · 未验证", language)
-        polish_status = self.polish_editor.model.currentText().strip() if self.ai_polish.isChecked() else translate('未启用', language)
-        summary = translate('校对：{polish} · 断句：{group}', language).format(polish=polish_status, group=summary)
+        from .llm_config import effective_ai_identity
+        saved = self.legacy.RUNTIME_SETTINGS
+        saved_values = {stage: effective_ai_identity(saved, stage) for stage in ('polish', 'group')}
+        def describe(identity, enabled):
+            if not enabled:
+                return translate('未启用', language)
+            return f"{identity['label']} · {identity['model'] or translate('默认模型', language)}"
+        draft_switches = {'unified': self.unified_glm.isChecked(),
+                          'polish': self.ai_polish.isChecked(), 'group': self.ai_grouping.isChecked()}
+        saved_switches = {'unified': bool(saved.get('switches', {}).get('unified_glm_processing', False)),
+                          'polish': bool(saved.get('switches', {}).get('enable_ai_polish', True)),
+                          'group': bool(saved.get('switches', {}).get('use_ai_grouping', True))}
+        def pair(values, switches):
+            if switches['unified'] and switches['polish'] and switches['group'] and values['polish'] == values['group']:
+                return describe(values['polish'], True)
+            return translate('校对：{polish} · 断句：{group}', language).format(
+                polish=describe(values['polish'], switches['polish']), group=describe(values['group'], switches['group']))
+        summary = translate('已保存', language) + '：' + pair(saved_values, saved_switches)
+        try:
+            # Use the save path's validation and unified editor authority. The
+            # preview does not write settings or keys, nor activate a provider.
+            preview = persist_ai_configuration(self.legacy,
+                self.polish_editor.values(), self.group_editor.values(),
+                unified=draft_switches['unified'], share_key=self.share_key.isChecked(),
+                use_ai_grouping=draft_switches['group'], enable_ai_polish=draft_switches['polish'],
+                require_ready=False, dry_run=True)
+            draft_settings = copy.deepcopy(saved)
+            draft_settings.pop('_asr_provider_snapshot', None)
+            draft_settings.setdefault('models', {}).update(preview['models'])
+            draft_settings.setdefault('switches', {}).update({
+                'unified_glm_processing': preview['unified'],
+                'enable_ai_polish': draft_switches['polish'], 'use_ai_grouping': draft_switches['group']})
+            draft_switches['unified'] = preview['unified']
+            drafts = {stage: effective_ai_identity(draft_settings, stage) for stage in ('polish', 'group')}
+            self._ai_has_draft = drafts != saved_values or draft_switches != saved_switches
+            if self._ai_has_draft:
+                summary += ' · ' + translate('未保存草稿', language) + '：' + pair(drafts, draft_switches)
+        except (ValueError, KeyError) as exc:
+            self._ai_has_draft = True
+            summary += ' · ' + translate('未保存草稿', language) + '：' + translate('配置未通过保存校验', language)
+        summary += ' · ' + translate('真实连接需单独测试', language)
         self.ai_panel.set_summary(summary)
         if hasattr(self, "setting_tiles"):
             self.setting_tiles["ai"].set_summary(summary)
+        # The home card shows the current service/model and separate facts.
+        refresh_card = getattr(self, "_refresh_home_process_facts", None)
+        if callable(refresh_card):
+            refresh_card()
 
     def _mark_ai_configuration_dirty(self, *_args):
         if getattr(self, "_applying_profile", False):
@@ -8612,12 +10496,31 @@ class MainWindow(QWidget):
         self.start_button.setEnabled(bool(self.media_paths))
         self.cancel_run_button.setEnabled(False)
 
+    def _prepare_glossary_for_task(self):
+        """Commit an open library editor before a new task freezes its snapshot."""
+        dialog = getattr(self, '_term_library_dialog', None)
+        if dialog is None:
+            return True
+        if getattr(self, '_preparing_glossary_for_task', False):
+            return False
+        self._preparing_glossary_for_task = True
+        try:
+            return bool(dialog.prepare_for_task())
+        finally:
+            self._preparing_glossary_for_task = False
+
     def _start_run(self):
         # P1-4 重入守卫：任意时刻最多一个 active run。必须在任何耗时准备
         # （CUDA 探测、配置保存、文件检查、token/worker 构建）之前声明占用；
         # 重复调用为 no-op（不创建 token、不覆盖 worker、不重置 UI）。
+        if getattr(self, '_completion_retry_in_progress', False):
+            self._run_block_reason = "已有校对或核验预览在进行中，请先完成或取消预览。"
+            return
         if self._run_in_progress:
             self._run_block_reason = "已有识别任务在进行中，请等待完成或先取消。"
+            return
+        if getattr(self, '_retry_run_options', None) is None and not self._prepare_glossary_for_task():
+            self._run_block_reason = '词库编辑尚未提交；请保存或取消编辑后继续。'
             return
         # 四十二轮：早退分支的原因都记录在 _run_block_reason，供 Studio 后台
         # 识别把失败原因显示到字幕列表芯片（弹窗已关，看不到对话框的场景）。
@@ -8629,6 +10532,15 @@ class MainWindow(QWidget):
             if not self.media_paths:
                 self._run_block_reason = "还没有素材：请先拖入或选择视频 / 音频文件。"
                 QMessageBox.information(self, tr('还没有素材'), tr('请先拖入或选择视频 / 音频文件。'))
+                return
+            retry_options = getattr(self, '_retry_run_options', None)
+            if retry_options is not None:
+                # Retrying failed stages has immutable task ownership. Do not
+                # save/read the currently edited Home settings or glossary.
+                self._launch_pipeline_worker(retry_options)
+                self._retry_run_options = None
+                self._retry_cached_failed = False
+                launched = True
                 return
             if self.primary_asr_backend.currentData() == "none":
                 self._run_block_reason = (
@@ -8667,7 +10579,7 @@ class MainWindow(QWidget):
 
                 _models = self.legacy.RUNTIME_SETTINGS.get("models", {})
                 _profile = getattr(self, "current_project_profile", None)
-                _url = str(_models.get("qwen_asr_api_url", "") or "")
+                _url = str(_models.get("qwen_asr_api_url", ASR_API_PRESETS["qwen31_filetrans"]["url"]) or "")
                 GLOBAL_STUDIO_TRACE.emit(
                     "PROFILE_RUN",
                     {
@@ -8738,11 +10650,7 @@ class MainWindow(QWidget):
                     or "all_dialogue"
                 )
             studio_context = getattr(self, "_studio_recognition_context", None) or {}
-            enabled_glossary_ids = tuple(
-                studio_context["enabled_glossary_ids"]
-                if "enabled_glossary_ids" in studio_context
-                else self._enabled_glossary_ids()
-            )
+            enabled_glossary_ids, terms_enabled = self._task_glossary_selection()
             # Persist output extras so the same-folder artifact set stays stable
             # between runs (merged SRT is always written; txt/per-speaker opt-in).
             try:
@@ -8752,10 +10660,15 @@ class MainWindow(QWidget):
                 save_runtime_settings(self.legacy.RUNTIME_SETTINGS)
             except Exception:
                 pass
+            from .terminology import snapshot_glossaries
             options = RunOptions(
                 settings_snapshot_json=json.dumps(self.legacy.RUNTIME_SETTINGS, ensure_ascii=False),
+                glossary_snapshot_json=json.dumps(
+                    snapshot_glossaries(self.legacy, enabled_glossary_ids if terms_enabled else ()).to_dict(),
+                    ensure_ascii=False),
                 content_name=game_name,
-                enable_domain_terms=bool(enabled_glossary_ids),
+                enable_domain_terms=terms_enabled,
+                enable_term_search=bool(getattr(self, 'term_search', None) and self.term_search.isChecked()),
                 enabled_glossary_ids=enabled_glossary_ids,
                 output_review_track=self.review_track.isChecked(),
                 output_jianying_txt=self.jianying_txt.isChecked(),
@@ -8786,50 +10699,11 @@ class MainWindow(QWidget):
                 speaker_source=__import__('twobyteasr.speaker_strategy',fromlist=['resolve']).resolve(
                     self.legacy.RUNTIME_SETTINGS,(getattr(self, "_studio_recognition_context", None) or {}).get("speaker_source")),
             )
-            self.token = CancellationToken()
-            self.worker = PipelineWorker(
-                self.media_paths,
-                options,
-                self.token,
-                self.legacy,
-                self.pipeline,
-                self.startup_self_test,
-            )
-            self.worker.event_received.connect(self._handle_event)
-            self.worker.console_received.connect(self._append_console_line)
-            self.worker.result_ready.connect(self._handle_result)
-            self.worker.unexpected_error.connect(self._handle_unexpected_error)
-            # P1-4 兜底：run() 中 try 之外的异常（如 SignalTextStream 构造
-            # 失败）不会触发 result_ready/unexpected_error；finished 幂等
-            # 释放保证 UI 不会永久锁在运行状态（正常路径 finished 晚于
-            # 上述信号，重复释放无害）。
-            self.worker.finished.connect(self._release_run_state)
-            self.started_at = time.perf_counter()
-            self._active_stages.clear()
-            self._completed_stages.clear()
-            self._skipped_stages = set()
-            self._recognition_terminal = ''
-            self._recognition_live_work = {}
-            if hasattr(self,'recognition_live_status'):
-                bind_text(self.recognition_live_status, '正在准备识别任务；临时转写将在实际批次完成后显示')
-            self._failed_stages.clear()
-            self.event_log.clear()
-            self.console_log.clear()
-            self.progress_bar.setValue(0)
-            self.progress_percent.setText("0%")
-            self.cancel_run_button.setEnabled(True)
-            self._append_feed("准备", "配置已确认，正在建立任务队列", GREEN)
-            self._progress_timer.start()
-            self.workflow.set_active(0)
-            if not getattr(self, "_studio_recognition_context", None):
-                self._switch_page(1)
-                from .ui_motion import recognition_launch_cue
-                recognition_launch_cue(self.pages.currentWidget())
+            self._last_run_options = options
+            self._launch_pipeline_worker(options)
+            launched = True
             started_profile = getattr(self, 'current_project_profile', None)
             started_configuration = self._profile_configuration()
-            self.worker.start()
-            self._retry_cached_failed=False
-            launched = True
             try:
                 self.profile_store.record_started(started_profile.id if started_profile else '',
                     started_configuration, self.media_paths)
@@ -8837,36 +10711,131 @@ class MainWindow(QWidget):
                 bind_text(self.profile_recommendation, '识别已启动；上次运行配置保存失败：{exc}', exc=exc)
         finally:
             if not launched:
-                # 准备阶段（worker.start 前）的任何提前返回 / 异常都必须
-                # 释放占用，否则 UI 会永久锁死在运行状态。
                 self._release_run_state()
 
-    def _stage_group(self, stage_index: int) -> int:
-        if stage_index <= 7:
-            return 0
-        if stage_index == 8:
-            return 1
-        if stage_index <= 10:
-            return 2
-        return 3
+    def _dispatch_recognition_job(self, job_id, callback, *args, allow_committed=False):
+        """Queued signals belong to the launching job, never the current title."""
+        if job_id != getattr(self, '_active_job_id', None):
+            return False
+        if not allow_committed and job_id in getattr(self, '_committed_job_ids', set()):
+            return False
+        callback(*args)
+        return True
 
-    def _append_feed(self, badge: str, message: str, color: str = MUTED):
-        item = QListWidgetItem()
-        card = TaskEventCard(badge, message, color)
-        item.setSizeHint(QSize(0, max(50, card.sizeHint().height())))
-        self.event_log.addItem(item)
-        self.event_log.setItemWidget(item, card)
-        while self.event_log.count() > 60:
-            self.event_log.takeItem(0)
-        self.event_log.scrollToBottom()
+    def _launch_pipeline_worker(self, options):
+        options = replace(options, job_id=uuid.uuid4().hex)
+        self._last_run_options = options
+        self._active_job_id = options.job_id
+        self._committed_job_ids = getattr(self, '_committed_job_ids', set())
+        self._cancelled_job_ids = getattr(self, '_cancelled_job_ids', set())
+        self.token = CancellationToken()
+        self.worker = PipelineWorker(self.media_paths, options, self.token, self.legacy,
+                                     self.pipeline, self.startup_self_test)
+        job_id = options.job_id
+        self.worker.event_received.connect(lambda event: self._dispatch_recognition_job(job_id, self._handle_event, event))
+        self.worker.console_received.connect(lambda line: self._dispatch_recognition_job(job_id, self._append_console_line, line))
+        self.worker.result_ready.connect(lambda result: self._dispatch_recognition_job(job_id, self._handle_result, result))
+        self.worker.unexpected_error.connect(lambda error: self._dispatch_recognition_job(job_id, self._handle_unexpected_error, error))
+        self.worker.finished.connect(lambda: self._dispatch_recognition_job(job_id, self._release_run_state))
+        self.started_at = time.perf_counter()
+        self._active_stages.clear()
+        self._completed_stages.clear()
+        self._skipped_stages = set()
+        self._recognition_terminal = ''
+        self._recognition_live_work = {}
+        self._phase_degraded = {}
+        self._feed_stage_rows = {}
+        self._reset_progress_presentation()
+        if hasattr(self, 'recognition_live_status'):
+            bind_text(self.recognition_live_status, '正在准备识别任务；临时转写将在实际批次完成后显示')
+        self._failed_stages.clear()
+        self.event_log.clear()
+        self.console_log.clear()
+        self._console_lines = []
+        self._console_levels = []
+        self._console_fragments = []
+        self.progress_bar.setValue(0)
+        self.progress_percent.setText('0%')
+        self.cancel_run_button.setEnabled(True)
+        self._append_feed('准备', '配置已确认，正在建立任务队列', GREEN)
+        self._refresh_progress_cards()
+        self._progress_timer.start()
+        self.workflow.set_active(0)
+        if not getattr(self, '_studio_recognition_context', None):
+            self._switch_page(1)
+        self.worker.start()
+        self._retry_cached_failed = False
+
+    def _stage_group(self, stage_index: int) -> int:
+        """Display phase of a step, following the run's real step count
+        (11 with AI proofreading, 10 without, 8 for analysis runs)."""
+        from .progress_model import phase_ranges
+        for index, ids in enumerate(phase_ranges(getattr(self, '_stage_total', 11))):
+            if stage_index in ids:
+                return index
+        return 0 if stage_index < 1 else 3
+
+    def _append_feed(self, badge: str, message: str, color: str = MUTED, *, nested=None, meta='', **arguments):
+        primary = {'开始', '运行中', '完成', '已回退', '失败', '跳过', '准备', '素材', '取消',
+                   '已取消', '未完成', '已停止', '已结束'}
+        nested = badge not in primary if nested is None else nested
+        card = TaskEventCard(badge, message, color, nested=nested, meta=meta)
+        if arguments:
+            card.set_event(badge, template=message, **arguments)
+        self.event_log.add_row(card)
         # Only the newly created card needs a language overlay. Walking the
         # complete window here made long runs progressively more expensive.
         apply_ui_language(card, getattr(self, "_ui_language", "zh"))
+        return card
+
+    def _feed_stage(self, event):
+        """One record row per step: started → finished/fallback/failed in
+        place, named in plain words (technical label on hover), with the
+        live elapsed time while it runs (2026-10-08, M12)."""
+        from shiboken6 import isValid
+        from .progress_model import stage_record_name
+        rows = self.__dict__.setdefault('_feed_stage_rows', {})
+        key = (event.media_index, event.stage_index, str(event.label))
+        name = tr(stage_record_name(event.label))
+        technical = join_text((tr(event.label), tr(event.resource))) if event.resource else tr(event.label)
+        if event.kind == 'stage_started':
+            card = self._append_feed('运行中', '{stage}', meta='00:00', stage=name)
+            if card is not None:
+                card._started_at = time.perf_counter()
+                card.setToolTip(technical)
+            rows[key] = card
+            return
+        card = rows.pop(key, None)
+        group = self._stage_group(event.stage_index)
+        duration = self._duration_text(event.elapsed_seconds)
+        if event.kind == 'stage_skipped':
+            badge, template, arguments, duration = '跳过', '{stage} · 本次配置不适用', dict(stage=name), ''
+        elif event.kind == 'stage_completed' and self._is_ai_text_step(event.stage_index) and group in self._phase_degraded:
+            badge, template, arguments = '已回退', '{stage} · {detail}', dict(
+                stage=name, detail=self._phase_degraded[group])
+        elif event.kind == 'stage_completed':
+            badge, template, arguments = '完成', '{stage}', dict(stage=name)
+        else:
+            badge, template, arguments = '失败', '{stage} · {error}', dict(stage=name, error=tr(event.error))
+        if card is not None and isValid(card):
+            card._started_at = 0
+            card.set_event(badge, template=template, **arguments)
+            card.set_meta(duration)
+            self.event_log.refit(card)
+            self.event_log.scrollToBottom()
+        else:
+            card = self._append_feed(badge, template, meta=duration, **arguments)
+        if card is not None:
+            card.setToolTip(technical)
 
     def _append_console_line(self, line: str, level: str = "stdout"):
         compact = str(line or "").rstrip()
         if not compact:
             return
+        if not hasattr(self, '_console_lines'):
+            self._console_lines = []
+            self._console_fragments = []
+        self._console_lines.append(compact)
         lowered = compact.lower()
         if getattr(self, "_studio_recognition_context", None):
             if "cuda" in lowered or "显存" in compact:
@@ -8875,108 +10844,426 @@ class MainWindow(QWidget):
                 self.studio_page.set_recognition_runtime_stage("加载权重", compact)
             elif "转写" in compact or "短块" in compact:
                 self.studio_page.set_recognition_runtime_stage("识别中", compact)
-        fatal_markers = (
-            "traceback",
-            "[文件失败]",
-            "[阶段失败]",
-            "已停止写入",
-            "fatal error",
-            "致命",
-        )
-        recoverable_markers = (
-            "[警告]",
-            "warning",
-            "最终回退",
-            "连续失败",
-            "403",
-            "forbidden",
-        )
-        if any(marker in lowered for marker in fatal_markers):
-            color, background = "#ffb09d", "#47332e"
-        elif any(marker in lowered for marker in recoverable_markers):
-            color, background = "#f2c66d", "#3d392c"
-        elif level == "stderr":
-            color, background = "#c7d3c5", "#303530"
-        elif "缓存命中" in compact or "缓存写入" in compact:
-            color, background = "#a8d5ef", "#2f383b"
-        elif "完成" in compact or "成功" in compact:
-            color, background = "#a9d8a4", "#303a30"
-        elif compact.startswith("[阶段") or compact.startswith("===="):
-            color, background = "#f4e7bd", "#393832"
-        else:
-            color, background = "#edf0e9", "transparent"
-        safe = html.escape(compact).replace(" ", "&nbsp;")
-        append_log_html_keep_left(
-            self.console_log,
-            f'<div style="color:{color}; background:{background}; margin:1px 0; '
-            f'padding:2px 4px; white-space:pre;">{safe}</div>',
-        )
+        if not hasattr(self, '_console_levels') or len(self._console_levels) != len(self._console_lines) - 1:
+            self._console_levels = ['stdout'] * (len(self._console_lines) - 1)
+        self._console_levels.append(level)
+        fragment = log_line_html(compact, level, _active_theme_definition())
+        self._console_fragments.append(fragment)
+        append_log_html_keep_left(self.console_log, fragment)
+
+    def _reset_progress_presentation(self):
+        """Fresh per-run presentation state (2026-10-08, M12)."""
+        self._stage_live = {}
+        self._stage_partial = {}
+        self._stopped_stages = set()
+        self._last_completed_stage = None
+        self._preview_buffer = []
+        self._preview_family = None
+        self._preview_batches = (0, 0)
+        self._cancel_requested_at = 0.0
+        self._cancel_feed_card = None
+        self._worker_running = {}
+        self._cloud_batches = {}
+        self._delivery_verified = False
+        self._terminal_elapsed = 0.0
+        self._last_clock_second = -1
+        self._workflow_group = None
+        self._current_media_index = 1
+        self._current_media_total = max(1, len(getattr(self, 'media_paths', None) or []))
+        self._current_media_name = ''
+        button = getattr(self, 'cancel_run_button', None)
+        if isinstance(button, QWidget):
+            bind_text(button, '安全取消')
+        preview = getattr(self, 'recognition_preview', None)
+        if isinstance(preview, RecognitionPreview):
+            preview.set_rows([])
+        bar = getattr(self, 'progress_bar', None)
+        if isinstance(bar, StageProgressBar):
+            bar.set_segments(0, ())
+
+    def _focus_stage(self):
+        """The step the current card describes. A step with real live data
+        leads (MOSS runs beside the quick voice check); otherwise the latest
+        started step."""
+        active = getattr(self, '_active_stages', {}) or {}
+        if not active:
+            return None
+        live = getattr(self, '_stage_live', {})
+        with_live = [stage for stage in active if stage in live]
+        return max(with_live) if with_live else max(active)
+
+    def _is_ai_text_step(self, stage_index) -> bool:
+        total = int(getattr(self, '_stage_total', 11) or 11)
+        return stage_index == total - 2 or (total == 11 and stage_index == 8)
+
+    @staticmethod
+    def _duration_text(seconds):
+        from .progress_model import clock
+        seconds = max(0.0, float(seconds or 0))
+        return tr('{seconds:.1f} 秒', seconds=seconds) if seconds < 60 else clock(seconds)
+
+    def _set_stage_device(self, text, tooltip='') -> None:
+        label = getattr(self, 'stage_device_label', None)
+        if label is None:
+            return
+        bind_text(label, text or '')
+        label.setToolTip(str(tooltip or ''))
+        label.setVisible(bool(text))
+
+    def _set_stage_note(self, text, detail='') -> None:
+        """One line on the card; the longer explanation behind 查看详情."""
+        row = getattr(self, 'stage_note_row', None)
+        if row is None:
+            return
+        self.stage_note.setText(str(text or ''))
+        self.stage_note.setToolTip(str(text or ''))
+        self.stage_note_detail.setText(str(detail or ''))
+        self.stage_note_more.setVisible(bool(detail))
+        if not detail and self.stage_note_more.isChecked():
+            self.stage_note_more.setChecked(False)
+        if text and getattr(self, '_stage_note_icon_key', None) is None:
+            self._stage_note_icon_key = True
+            self.stage_note_icon.setPixmap(_icon('fa5s.info-circle', _active_theme_definition().text_muted).pixmap(QSize(14, 14)))
+        row.setVisible(bool(text))
+
+    def _toggle_stage_note_detail(self, checked) -> None:
+        self.stage_note_detail.setVisible(bool(checked) and bool(self.stage_note_detail.text()))
+        bind_text(self.stage_note_more, '收起' if checked else '查看详情')
 
     def _refresh_progress_cards(self):
-        language = getattr(self, "_ui_language", "zh")
+        """2026-10-08 (M12): one honest picture of the run.
+
+        Steps, the running step's live facts, the bar and the record all come
+        from pipeline events. Nothing estimates time left, nothing calls a
+        quiet model stuck or a busy one healthy, and an ended run closes
+        every card. 100% only after the save step completed.
+        """
+        from .progress_model import active_spans, ended_steps, overall_fraction, percent_text, phase_ranges
         terminal = getattr(self, '_recognition_terminal', '')
-        phase_stages = (
-            set(range(1, 8)),
-            {8},
-            {9, 10},
-            {11},
-        )
+        total = max(1, int(getattr(self, '_stage_total', 11) or 11))
+        completed = set(self._completed_stages)
+        skipped = set(getattr(self, '_skipped_stages', ()))
+        failed = set(self._failed_stages)
+        ended = ended_steps(completed, skipped, failed, total)
         active_ids = set(self._active_stages)
-        for index, (card, ids) in enumerate(zip(self.phase_cards, phase_stages)):
-            if ids & self._failed_stages:
+        stopped = set(getattr(self, '_stopped_stages', ())) if terminal else set()
+        degraded = getattr(self, '_phase_degraded', {})
+        succeeded = terminal in {'success', 'degraded_success'}
+        cancelling = bool(getattr(self, '_cancel_requested_at', 0)) and not terminal
+        for index, (card, ids) in enumerate(zip(self.phase_cards, phase_ranges(total))):
+            if not ids:
+                state = "off"
+            elif ids & failed:
                 state = "failed"
-            elif ids <= self._completed_stages or terminal in {'success', 'degraded_success'}:
-                state = "done"
+            elif succeeded or ids <= ended:
+                # A finished phase whose AI step fell back is not "done".
+                state = "degraded" if index in degraded else "done"
+            elif terminal:
+                touched = ids & (ended | stopped)
+                state = ("cancelled" if terminal == 'cancelled' else "stopped") if touched else "notrun"
             elif ids & active_ids:
                 state = "active"
             else:
                 state = "pending"
             card.set_state(state)
+            card.set_detail(degraded.get(index, '') if state == 'degraded' else '')
+            card.set_steps(len(ids & ended), len(ids))
+        focus_id = self._focus_stage()
         if terminal:
-            self.running_indicator.set_running(False)
-            bind_text(self.progress_stage, {'success': '完成', 'degraded_success': '完成，有需复核项', 'failed': '任务结束，有失败项', 'cancelled': '任务已取消'}.get(terminal, '任务结束'))
-            bind_text(self.progress_resource, '字幕文件与工程交付状态见结果页')
-            bind_text(self.active_tasks_label, '识别子任务已退出')
-        elif active_ids:
-            focus_id = max(active_ids)
-            focus = self._active_stages[focus_id]
-            bind_text(self.progress_stage, focus["label"])
-            bind_text(self.progress_resource, focus["resource"])
-            rows = [
-                f'{translate(item["label"], language)}  ·  {translate(item["resource"], language)}'
-                for _, item in sorted(self._active_stages.items())
-            ]
-            prefix = translate("并行运行中" if len(rows) > 1 else "运行中", language)
-            self.active_tasks_label.setText(prefix + "\n" + "\n".join(rows))
-            self.running_indicator.set_running(True)
-            self.workflow.set_active(self._stage_group(focus_id))
-        elif self._completed_stages:
-            last_id = max(self._completed_stages)
-            bind_text(self.progress_stage, translate('正在衔接下一阶段', language))
-            bind_text(self.progress_resource, '阶段 {stage} 已完成，正在准备后续资源', stage=last_id)
-            bind_text(self.active_tasks_label, translate('当前没有并行子任务，正在进行阶段切换', language))
-            self.running_indicator.set_running(False)
+            self._render_terminal_step(terminal, ended, total)
+        elif cancelling:
+            self._render_cancelling_step(focus_id, total)
+        elif focus_id is not None:
+            self._render_active_step(focus_id, total)
+            group = self._stage_group(focus_id)
+            # The refresh also runs once a second; restyle only on change.
+            if getattr(self, '_workflow_group', None) != group:
+                self._workflow_group = group
+                self.workflow.set_active(group)
+        elif ended:
+            self._render_between_steps(ended, total)
         else:
-            self.running_indicator.set_running(False)
+            self._render_preparing_step()
+        self._render_preview()
 
-        total_stages = max(1, self._stage_total)
-        finished = len(self._completed_stages)
         media_total = max(1, self._current_media_total)
         media_index = max(1, self._current_media_index)
-        fraction = ((media_index - 1) + finished / total_stages) / media_total
+        partial = {stage: value for stage, value in getattr(self, '_stage_partial', {}).items() if stage in active_ids}
+        fraction = overall_fraction(total, ended, partial, media_index, media_total)
+        if succeeded and getattr(self, '_delivery_verified', False):
+            fraction = 1.0
         value = max(0, min(1000, int(round(fraction * 1000))))
-        if terminal in {'success', 'degraded_success'}:
-            value = 1000
+        if isinstance(self.progress_bar, StageProgressBar):
+            self.progress_bar.set_segments(total if media_total == 1 else 0,
+                                           () if terminal else active_spans(total, active_ids, media_index, media_total, ended))
+        self.progress_bar.setRange(0, 1000)
         if self.progress_bar.value() != value:
             self._progress_motion.stop()
             self._progress_motion.setStartValue(self.progress_bar.value())
             self._progress_motion.setEndValue(value)
             self._progress_motion.start()
-        self.progress_percent.setText(f"{round(value / 10):.0f}%")
-        bind_text(self.progress_context, '素材 {media_index} / {media_total}  ·  已完成 {finished} / {total_stages} 个阶段', media_index=media_index, media_total=media_total, finished=finished, total_stages=total_stages)
+        self.progress_percent.setText(percent_text(fraction))
+        done = len(ended)
+        steps = getattr(self, 'progress_steps', None)
+        if steps is not None:
+            bind_text(steps, '{done} / {total} 步', done=done, total=total)
         if terminal:
-            skipped = len(getattr(self, '_skipped_stages', ()))
-            bind_text(self.progress_context, '任务已结束 · {value0} 个阶段完成 · {skipped} 个阶段不适用', value0=finished - skipped, skipped=skipped)
+            if succeeded:
+                bind_text(self.progress_context, '已完成 {done} / {total} 步 · 工程已保存' if fraction >= 1
+                          else '已完成 {done} / {total} 步 · 保存状态见结果页', done=done, total=total)
+            elif terminal == 'cancelled':
+                bind_text(self.progress_context, '任务已取消 · 已完成 {done} / {total} 步', done=done, total=total)
+            else:
+                bind_text(self.progress_context, '任务未完成 · 已完成 {done} / {total} 步', done=done, total=total)
+        elif cancelling:
+            bind_text(self.progress_context, '正在安全取消 · 已等待 {seconds} 秒',
+                      seconds=int(max(0, time.perf_counter() - self._cancel_requested_at)))
+        elif getattr(self, '_current_media_name', ''):
+            bind_text(self.progress_context, '素材 {media_index} / {media_total} · {name}',
+                      media_index=media_index, media_total=media_total, name=self._current_media_name)
+        else:
+            bind_text(self.progress_context, '素材 {media_index} / {media_total}',
+                      media_index=media_index, media_total=media_total)
+        title = getattr(self, 'progress_title', None)
+        if title is not None:
+            bind_text(title, '正在安全取消字幕任务' if cancelling else {
+                'success': '字幕已制作完成', 'degraded_success': '字幕已完成，有需复核项',
+                'cancelled': '字幕任务已取消', 'failed': '字幕任务未完成', 'unknown': '任务状态待确认',
+            }.get(terminal, '2ByteASR 正在制作字幕'))
+
+    def _render_active_step(self, focus_id, total):
+        from .progress_model import (clock, moss_action, moss_description, resource_mode, stage_action,
+                                     stage_description, stage_record_name)
+        item = self._active_stages[focus_id]
+        live = getattr(self, '_stage_live', {}).get(focus_id) or {}
+        kind, payload = live.get('kind', ''), live.get('payload') or {}
+        # One clock for everything shown (M13): "last output" can never be
+        # older than the step or the task itself.
+        now_perf = now = time.perf_counter()
+        started = item.get('started')
+        ceiling = min(value for value in (
+            now - started if started else None,
+            now - self.started_at if getattr(self, 'started_at', 0) else None,
+            float('inf')) if value is not None)
+
+        def since(at):
+            return max(0.0, min(now - at, ceiling))
+        moss = kind == 'asr_worker_progress' and payload.get('backend') == 'moss'
+        self.running_indicator.set_status('运行中', 'accent')
+        bind_text(self.stage_step_label, '第 {step} / {total} 步', step=focus_id, total=total)
+        bind_text(self.progress_stage, moss_action(payload.get('phase')) if moss else stage_action(item.get('label')))
+        metrics, quiet = [], None
+        if started:
+            metrics.append((tr('已运行'), clock(now_perf - started)))
+        if moss:
+            tokens = payload.get('generated_tokens')
+            metrics.append((tr('累计输出'), f"{int(tokens):,} tokens" if tokens is not None else tr('尚未开始')))
+            if payload.get('phase') in {'completed', 'needs_review'}:
+                metrics.append((tr('最近输出'), tr('已完成')))
+            elif live.get('at'):
+                quiet = since(live['at'])
+                metrics.append((tr('最近输出'), tr('{seconds} 秒前', seconds=int(quiet))))
+            else:
+                metrics.append((tr('最近输出'), tr('尚无输出')))
+        elif kind == 'asr_evidence_delta':
+            metrics.append((tr('已完成批次'), f"{payload.get('completed_chunks', 0)} / {payload.get('total_chunks', 0)}"))
+            metrics.append((tr('已处理音频'), clock(payload.get('processed_end', 0))))
+        elif kind == 'asr_progress':
+            metrics.append((tr('已返回批次'), f"{payload.get('completed_batches', 0)} / {payload.get('total_batches', 0)}"))
+            metrics.append((tr('临时转写'), tr('{count} 条', count=payload.get('cue_count', 0))))
+        elif kind == 'cloud':
+            if payload.get('total'):
+                metrics.append((tr('已完成批次'), f"{payload.get('done', 0)} / {payload['total']}"))
+            if live.get('at'):
+                quiet = since(live['at'])
+                metrics.append((tr('最近活动'), tr('{seconds} 秒前', seconds=int(quiet))))
+        self.stage_metrics.set_metrics(metrics)
+        mode = resource_mode(item.get('resource'))
+        self._set_stage_device(tr(mode[1]) if mode else '', tr(item.get('resource') or ''))
+        others = [stage for stage in sorted(self._active_stages) if stage != focus_id]
+        if others:
+            parts = []
+            for stage in others:
+                other = self._active_stages[stage]
+                name = tr(stage_record_name(other.get('label')))
+                begun = other.get('started')
+                parts.append(tr('{name}（{elapsed}）', name=name, elapsed=clock(now_perf - begun)) if begun else name)
+            bind_text(self.progress_resource, '同时进行：{steps}', steps=join_text(parts, separator='、'))
+        else:
+            # What the step is doing, in one sentence (M14: no "previous step").
+            description = moss_description(payload.get('phase')) if moss else stage_description(item.get('label'))
+            bind_text(self.progress_resource, description or '')
+        self.progress_resource.setVisible(bool(self.progress_resource.text()))
+        self.active_tasks_label.hide()
+        note, detail = '', ''
+        if quiet is not None and quiet >= 60:
+            if moss and getattr(self, '_worker_running', {}).get('moss'):
+                note = tr('已有 {seconds} 秒未收到新输出。子进程仍在运行。', seconds=int(quiet))
+                detail = tr('整段识别较长的音频时，可能较长时间没有新输出。可以继续等待，也可以安全取消：会在当前步骤可以安全停止时退出。')
+            elif moss:
+                note = tr('已有 {seconds} 秒未收到新输出。', seconds=int(quiet))
+                detail = tr('可以继续等待，也可以安全取消：会在当前步骤可以安全停止时退出。')
+            else:
+                note = tr('已有 {seconds} 秒未收到新数据，请求还没有结束。', seconds=int(quiet))
+                detail = tr('云端模型生成较长内容时，可能较长时间没有返回。可以继续等待，也可以安全取消。')
+        self._set_stage_note(note, detail)
+
+    def _render_cancelling_step(self, focus_id, total):
+        from .progress_model import clock, stage_record_name
+        waited = max(0.0, time.perf_counter() - self._cancel_requested_at)
+        self.running_indicator.set_status('取消中', 'warning')
+        self._set_stage_device('')
+        if focus_id is not None:
+            bind_text(self.stage_step_label, '第 {step} / {total} 步', step=focus_id, total=total)
+        else:
+            bind_text(self.stage_step_label, '')
+        bind_text(self.progress_stage, '正在安全取消…')
+        metrics = [(tr('已等待'), clock(waited))]
+        if focus_id is not None:
+            metrics.append((tr('等待停止'), tr(stage_record_name(self._active_stages[focus_id].get('label')))))
+        workers = getattr(self, '_worker_running', {})
+        if workers:
+            metrics.append((tr('模型子进程'), tr('仍在运行') if any(workers.values()) else tr('已停止')))
+        self.stage_metrics.set_metrics(metrics)
+        bind_text(self.progress_resource, '将在当前可安全停止的阶段边界退出')
+        self.progress_resource.show()
+        self.active_tasks_label.hide()
+        self._set_stage_note(tr('取消会在当前步骤可以安全停止时生效。'), tr('之后的步骤不再执行；正在运行的模型子进程会被停止。'))
+
+    def _render_terminal_step(self, terminal, ended, total):
+        from .progress_model import clock
+        tone, pill = {'success': ('success', '已完成'), 'degraded_success': ('warning', '已完成 · 需复核'),
+                      'cancelled': ('warning', '已取消'), 'failed': ('danger', '未完成')}.get(terminal, ('muted', '待确认'))
+        self.running_indicator.set_status(pill, tone)
+        self._set_stage_device('')
+        bind_text(self.stage_step_label, '')
+        bind_text(self.progress_stage, {'success': '完成', 'degraded_success': '完成，有需复核项', 'failed': '任务结束，有失败项',
+                                        'cancelled': '任务已取消'}.get(terminal, '任务结束'))
+        metrics = []
+        elapsed = getattr(self, '_terminal_elapsed', 0.0)
+        if elapsed:
+            metrics.append((tr('总用时'), clock(elapsed)))
+        metrics.append((tr('完成步骤'), f'{len(ended)} / {total}'))
+        self.stage_metrics.set_metrics(metrics)
+        bind_text(self.progress_resource, '字幕文件与工程交付状态见结果页')
+        self.progress_resource.show()
+        bind_text(self.active_tasks_label, '识别子任务已退出')
+        self.active_tasks_label.hide()
+        self._set_stage_note('')
+
+    def _render_between_steps(self, ended, total):
+        from .progress_model import stage_record_name
+        self.running_indicator.set_status('等待下一步', 'muted')
+        self._set_stage_device('')
+        bind_text(self.stage_step_label, '已完成 {done} / {total} 步', done=len(ended), total=total)
+        bind_text(self.progress_stage, '正在进入下一步')
+        last = getattr(self, '_last_completed_stage', None)
+        metrics = []
+        if last:
+            metrics = [(tr('上一步'), tr(stage_record_name(last[1]))), (tr('用时'), self._duration_text(last[2]))]
+        self.stage_metrics.set_metrics(metrics)
+        bind_text(self.progress_resource, '')
+        self.progress_resource.hide()
+        self.active_tasks_label.hide()
+        self._set_stage_note('')
+
+    def _render_preparing_step(self):
+        self.running_indicator.set_status('准备中', 'muted')
+        self._set_stage_device('')
+        bind_text(self.stage_step_label, '')
+        bind_text(self.progress_stage, '正在准备任务')
+        self.stage_metrics.set_metrics([])
+        bind_text(self.progress_resource, '检查运行环境并建立任务队列')
+        self.progress_resource.show()
+        self.active_tasks_label.hide()
+        self._set_stage_note('')
+
+    def _push_preview(self, kind, payload):
+        from .progress_model import merge_preview, preview_rows
+        family, rows = preview_rows(kind, payload)
+        if not family or not rows:
+            return
+        self._preview_buffer = merge_preview(getattr(self, '_preview_buffer', []), family,
+                                             getattr(self, '_preview_family', None), rows)
+        self._preview_family = family
+        if kind == 'asr_evidence_delta':
+            self._preview_batches = (int(payload.get('completed_chunks') or 0), int(payload.get('total_chunks') or 0))
+
+    def _render_preview(self):
+        preview = getattr(self, 'recognition_preview', None)
+        if preview is None:
+            return
+        from .progress_model import PREVIEW_TAGS, time_label
+        rows = []
+        for row in getattr(self, '_preview_buffer', []):
+            tag, tone = PREVIEW_TAGS.get(row.get('state'), ('尚未校对', 'muted'))
+            when = time_label(row['start']) if row.get('start') is not None else f"#{row.get('cue', '')}"
+            rows.append((when, row.get('text', ''), str(tr(tag)), tone))
+        preview.set_rows(rows)
+        family = getattr(self, '_preview_family', None)
+        if family == 'evidence':
+            done, count = getattr(self, '_preview_batches', (0, 0))
+            bind_text(self.preview_source, 'FireRed 逐字识别 · {done}/{total} 批', done=done, total=count)
+        else:
+            bind_text(self.preview_source, {'draft': '在线识别 · 临时转写', 'polish': 'AI 校对结果',
+                                            'final': '已保存的字幕'}.get(family, ''))
+        if not rows:
+            live = getattr(self, '_stage_live', {}).get(2) or {}
+            moss_running = 2 in getattr(self, '_active_stages', {}) and (live.get('payload') or {}).get('backend') == 'moss'
+            text = ('本次没有收到可预览的文字' if getattr(self, '_recognition_terminal', '') else
+                    'MOSS 正在整段识别，识别结束前不会产生逐句文字；之后逐字识别出的内容会在这里显示最近几句' if moss_running else
+                    '模型返回可读文字后，这里会实时显示最近几句')
+            preview.set_empty_text(str(tr(text)))
+
+    def _tick_live_rows(self):
+        from shiboken6 import isValid
+        from .progress_model import clock
+        now = time.perf_counter()
+        for card in list(getattr(self, '_feed_stage_rows', {}).values()):
+            started = getattr(card, '_started_at', 0)
+            if started and isValid(card):
+                card.set_meta(clock(now - started))
+        card = getattr(self, '_cancel_feed_card', None)
+        requested = getattr(self, '_cancel_requested_at', 0)
+        if card is not None and requested and isValid(card) and not getattr(self, '_recognition_terminal', ''):
+            card.set_meta(tr('已等待 {seconds} 秒', seconds=int(now - requested)))
+
+    def _finish_progress_presentation(self):
+        """Close every open record row when a run ends (M12): nothing keeps
+        saying "running" after the worker is gone."""
+        from shiboken6 import isValid
+        from .progress_model import clock
+        terminal = getattr(self, '_recognition_terminal', '') or 'failed'
+        badge = {'cancelled': '已取消', 'success': '已结束', 'degraded_success': '已结束'}.get(terminal, '未完成')
+        now = time.perf_counter()
+        stopped = set(getattr(self, '_active_stages', {}) or {})
+        rows = getattr(self, '_feed_stage_rows', {}) or {}
+        for (_media, stage_index, _label), card in list(rows.items()):
+            stopped.add(stage_index)
+            if card is not None and isValid(card):
+                card.set_event(badge)
+                started = getattr(card, '_started_at', 0)
+                if started:
+                    card.set_meta(clock(now - started))
+                card._started_at = 0
+        rows.clear()
+        self._stopped_stages = stopped
+        started_at = getattr(self, 'started_at', 0) or 0
+        self._terminal_elapsed = max(0.0, now - started_at) if started_at else 0.0
+        button = getattr(self, 'cancel_run_button', None)
+        if isinstance(button, QWidget):
+            bind_text(button, '安全取消')
+        card = getattr(self, '_cancel_feed_card', None)
+        requested = getattr(self, '_cancel_requested_at', 0)
+        if card is not None and isValid(card):
+            if terminal == 'cancelled':
+                card.set_event('已取消', '已安全取消，之后的步骤没有执行')
+            else:
+                card.set_event('已结束', '取消请求送达前任务已经结束')
+            if requested:
+                card.set_meta(tr('等待 {seconds} 秒', seconds=int(max(0, now - requested))))
+        self._cancel_feed_card = None
+
 
     def _update_progress_clock(self):
         if not self.started_at:
@@ -8993,8 +11280,70 @@ class MainWindow(QWidget):
                 rows.append(tr('{message} · 距最近有效结果 {seconds} 秒',message=message,seconds=int(max(0,now-row['at'])))
                     if row['at'] else tr('{message} · 尚无转写结果',message=message))
             bind_text(self.recognition_live_status, join_text(rows, separator='\n'))
+        # M12: running record rows and the step's live facts tick once a
+        # second; events refresh them immediately in between.
+        if elapsed != getattr(self, '_last_clock_second', -1):
+            self._last_clock_second = elapsed
+            if hasattr(self, 'stage_metrics'):
+                self._tick_live_rows()
+                if not getattr(self, '_recognition_terminal', ''):
+                    self._refresh_progress_cards()
+
+    def _live_stage_for(self, kind, backend):
+        """Which running step a live event belongs to: primary transcription
+        is step 2 (it runs beside the voice check); everything else belongs
+        to the latest started step."""
+        active = getattr(self, '_active_stages', {}) or {}
+        if not active:
+            return None
+        if (backend == 'moss' or kind in {'asr_progress', 'asr_wait'}) and 2 in active:
+            return 2
+        return max(active)
+
+    @staticmethod
+    def _live_fraction(kind, payload):
+        """Real in-step fraction from real counters, or None."""
+        pairs = {'asr_evidence_delta': ('completed_chunks', 'total_chunks'),
+                 'asr_progress': ('completed_batches', 'total_batches')}
+        if kind in pairs:
+            done, total = (float(payload.get(key) or 0) for key in pairs[kind])
+            return done / total if total > 0 else None
+        percent = payload.get('progress_percent') if payload.get('backend') == 'moss' else None
+        return float(percent) / 100 if isinstance(percent, (int, float)) else None
+
+    @staticmethod
+    def _is_fresh_output(kind, payload, prior):
+        """True only when the event carries new real output."""
+        if kind == 'asr_worker_progress' and payload.get('backend') == 'moss':
+            return (int(payload.get('generated_tokens') or 0) > int(prior.get('generated_tokens') or 0)
+                    or payload.get('phase') != prior.get('phase'))
+        if kind == 'asr_evidence_delta':
+            return int(payload.get('completed_chunks') or 0) > int(prior.get('completed_chunks') or 0)
+        if kind == 'asr_progress':
+            return (int(payload.get('completed_batches') or 0) > int(prior.get('completed_batches') or 0)
+                    or int(payload.get('cue_count') or 0) > int(prior.get('cue_count') or 0))
+        return False
 
     def _handle_event(self, event):
+        active_job = getattr(self, '_active_job_id', '')
+        if active_job and str(getattr(event, 'job_id', '') or '') != active_job:
+            return
+        degraded = self.__dict__.setdefault('_phase_degraded', {})
+        if event.kind in {'asr_evidence_delta', 'cue_delta', 'terminology_polish_final'} and hasattr(self, 'recognition_preview'):
+            self._push_preview(event.kind, event.payload)
+        if event.kind == 'polishing_summary':
+            fallback = int(event.payload.get('fallback_cues') or 0)
+            total = fallback + int(event.payload.get('success_cues') or 0)
+            if fallback or int(event.payload.get('fallback_batches') or 0):
+                degraded[1] = tr('{fallback}/{total} 条回退原文', fallback=fallback, total=total)
+        elif event.kind == 'grouping_api_fallback':
+            degraded[2] = tr('部分断句改用本地规则')
+        elif event.kind == 'text_ai_terminal_failure':
+            stage = str(event.payload.get('stage') or '')
+            if stage.startswith('polish'):
+                degraded[1] = tr('AI 校对未完成，保留原文')
+            elif stage.startswith('group'):
+                degraded[2] = tr('AI 断句未完成，使用本地规则')
         if event.kind=='asr_provider_snapshot' and event.payload.get('stage')=='group':
             payload=event.payload
             speaker=payload.get('speaker_source','single')
@@ -9005,7 +11354,7 @@ class MainWindow(QWidget):
             state=payload.get('state')
             label=recognition_event_text(event.kind,payload)
             if not hasattr(self,'_recognition_live_work'):self._recognition_live_work={}
-            self._recognition_live_work['nemotron']={'kind':event.kind,'payload':dict(payload),'at':time.monotonic()}
+            self._recognition_live_work['speaker']={'kind':event.kind,'payload':dict(payload),'at':time.monotonic()}
             self._append_feed('说话人区分',label,BLUE)
             if getattr(self,'_studio_recognition_context',None):self.studio_page.set_recognition_runtime_stage(label,'')
             self._update_progress_clock()
@@ -9014,7 +11363,32 @@ class MainWindow(QWidget):
             label=recognition_event_text(event.kind,payload)
             if not hasattr(self,'_recognition_live_work'):self._recognition_live_work={}
             prior=self._recognition_live_work.get(backend,{})
-            self._recognition_live_work[backend]={'kind':event.kind,'payload':dict(payload),'at':time.monotonic() if event.kind in {'asr_progress','asr_evidence_delta'} else prior.get('at')}
+            activity_at = (time.monotonic() - max(0, float(payload.get('elapsed_seconds', 0)) - float(payload.get('last_activity_elapsed_seconds', 0)))
+                           if backend == 'moss' else time.monotonic() if event.kind in {'asr_progress','asr_evidence_delta'} else prior.get('at'))
+            self._recognition_live_work[backend]={'kind':event.kind,'payload':dict(payload),'at':activity_at}
+            # M12: the bar stays determinate; live facts belong to their step.
+            stage = self._live_stage_for(event.kind, backend)
+            stage_live = self.__dict__.setdefault('_stage_live', {})
+            previous = stage_live.get(stage, {}) if stage is not None else {}
+            # Same clock as the task and step timers (perf_counter).
+            if backend == 'moss':
+                stage_at = time.perf_counter() - max(0.0, float(payload.get('elapsed_seconds', 0) or 0)
+                                                     - float(payload.get('last_activity_elapsed_seconds', 0) or 0))
+            elif event.kind in {'asr_progress', 'asr_evidence_delta'}:
+                stage_at = time.perf_counter()
+            else:
+                stage_at = previous.get('at')
+            richer = previous.get('kind') in {'asr_evidence_delta', 'asr_progress'} and event.kind == 'asr_worker_progress' and backend != 'moss'
+            if stage is not None and not richer:
+                fresh = self._is_fresh_output(event.kind, payload, previous.get('payload') or {})
+                stage_live[stage] = {'kind': event.kind, 'payload': dict(payload), 'at': stage_at, 'backend': backend}
+                fraction = self._live_fraction(event.kind, payload)
+                if fraction is not None:
+                    self.__dict__.setdefault('_stage_partial', {})[stage] = fraction
+                if fresh and isinstance(self.progress_bar, StageProgressBar):
+                    self.progress_bar.note_activity()
+            if backend == 'moss' and getattr(self, '_studio_recognition_context', None):
+                self.studio_page.set_recognition_runtime_stage(label, '')
             self._update_progress_clock()
         elif event.kind in {'studio_project_saving', 'studio_project_saved'}:
             label = '正在保存工程' if event.kind=='studio_project_saving' else '工程已保存，准备载入 Studio'
@@ -9028,15 +11402,29 @@ class MainWindow(QWidget):
             label = "最终字幕" if event.payload.get("state") == "final" else "临时转写（待校对）"
             self._append_feed(label, tr('已接收 {count} 条', count=cue_count), BLUE)
         elif event.kind == "stage_started":
+            if max(1, event.media_index) != self._current_media_index and self._completed_stages:
+                # A new media file restarts the step count; the previous
+                # file's steps stay in the record above.
+                self._completed_stages.clear()
+                self._skipped_stages = set()
+                self._failed_stages.clear()
+                self._stage_live = {}
+                self._stage_partial = {}
+                self._cloud_batches = {}
+                self._preview_buffer, self._preview_family = [], None
             self._stage_total = max(1, event.stage_total)
             self._current_media_index = max(1, event.media_index)
             self._current_media_total = max(1, event.media_total)
+            if event.media_path:
+                self._current_media_name = Path(event.media_path).name
+            if isinstance(self.progress_bar, StageProgressBar):
+                self.progress_bar.note_activity()
             self._active_stages[event.stage_index] = {
                 "label": event.label,
                 "resource": event.resource,
                 "started": time.perf_counter(),
             }
-            self._append_feed("开始", join_text((tr(event.label),tr(event.resource))), self.phase_cards[self._stage_group(event.stage_index)].accent)
+            self._feed_stage(event)
             if getattr(self, "_studio_recognition_context", None):
                 label = str(event.label or "")
                 if "音频" in label or "VAD" in label or "人声" in label:
@@ -9051,38 +11439,94 @@ class MainWindow(QWidget):
         elif event.kind in {"stage_completed", "stage_skipped"}:
             self._active_stages.pop(event.stage_index, None)
             self._completed_stages.add(event.stage_index)
+            getattr(self, '_stage_partial', {}).pop(event.stage_index, None)
+            getattr(self, '_stage_live', {}).pop(event.stage_index, None)
+            if event.kind == 'stage_completed':
+                self._last_completed_stage = (event.stage_index, event.label, event.elapsed_seconds)
             if event.kind == 'stage_skipped':
                 if not hasattr(self, '_skipped_stages'):self._skipped_stages=set()
                 self._skipped_stages.add(event.stage_index)
-                self._append_feed('跳过', tr('{stage} · 本次配置不适用', stage=tr(event.label)), BLUE)
-            else:
-                self._append_feed("完成", tr('{stage} · {seconds:.1f} 秒', stage=tr(event.label), seconds=event.elapsed_seconds), GREEN)
+            self._feed_stage(event)
         elif event.kind in {"stage_failed", "media_failed"}:
             if event.stage_index:
                 self._active_stages.pop(event.stage_index, None)
                 self._failed_stages.add(event.stage_index)
-            self._append_feed("失败", join_text((tr(event.label) if event.label else Path(event.media_path).name, tr(event.error))), CORAL)
+                getattr(self, '_stage_partial', {}).pop(event.stage_index, None)
+                getattr(self, '_stage_live', {}).pop(event.stage_index, None)
+                self._feed_stage(event)
+            else:
+                self._append_feed("失败", join_text((tr(event.label) if event.label else Path(event.media_path).name, tr(event.error))), CORAL)
         elif event.kind == "cache_hit":
             stage = event.payload.get("stage", "")
             self._append_feed("缓存", tr('复用 {stage}，跳过重复计算', stage=tr(stage)), BLUE)
         elif event.kind == "cloud_batches_parallel":
+            stage = max(self._active_stages) if self._active_stages else None
+            if stage is not None:
+                self.__dict__.setdefault('_cloud_batches', {})[stage] = {
+                    'done': 0, 'total': int(event.payload.get('batches') or 0)}
             self._append_feed(
                 "并行",
                 tr('{count} 个云端批次，最多 {workers} 路', count=event.payload.get('batches',0), workers=event.payload.get('workers',1)),
                 PURPLE,
             )
         elif event.kind == "cloud_batch_completed":
-            self._append_feed(
-                "批次",
-                tr('{done} / {total} 完成 · {seconds:.1f} 秒', done=event.payload.get('batch_index',0), total=event.payload.get('batch_total',0), seconds=event.elapsed_seconds),
-                BLUE,
-            )
+            stage = max(self._active_stages) if self._active_stages else None
+            if stage is not None:
+                batches = self.__dict__.setdefault('_cloud_batches', {}).setdefault(stage, {'done': 0, 'total': 0})
+                batches['done'] = int(batches.get('done') or 0) + 1
+                batches['total'] = max(int(batches.get('total') or 0), int(event.payload.get('batch_total') or 0))
+                if batches['total']:
+                    self.__dict__.setdefault('_stage_partial', {})[stage] = batches['done'] / batches['total']
+                live = self.__dict__.setdefault('_stage_live', {}).get(stage) or {}
+                self._stage_live[stage] = {'kind': 'cloud', 'payload': dict(live.get('payload') or {}, **batches),
+                                           'at': time.perf_counter()}
+                if isinstance(self.progress_bar, StageProgressBar):
+                    self.progress_bar.note_activity()
+            fallback = int(event.payload.get('fallback_cues') or 0)
+            if fallback:
+                # A returned batch whose cues fell back is not a completed edit.
+                self._append_feed('已回退', '{done} / {total} · {fallback} 条回退原文 · {seconds:.1f} 秒', BLUE, nested=True,
+                    done=event.payload.get('batch_index', 0), total=event.payload.get('batch_total', 0),
+                    fallback=fallback, seconds=event.elapsed_seconds)
+            else:
+                self._append_feed(
+                    "批次",
+                    tr('{done} / {total} 完成 · {seconds:.1f} 秒', done=event.payload.get('batch_index',0), total=event.payload.get('batch_total',0), seconds=event.elapsed_seconds),
+                    BLUE,
+                )
         elif event.kind == "final_text_conservation_recovery":
             self._append_feed(
                 "自愈",
                 "检测到断句调序，已从校对源段安全重建并重新校验",
                 GREEN,
             )
+        elif event.kind == 'asr_provider_progress':
+            # Each provider event is real network activity for the AI step.
+            stage = max(self._active_stages) if self._active_stages else None
+            if stage is not None:
+                live = self.__dict__.setdefault('_stage_live', {}).get(stage) or {}
+                prior = live.get('payload') or {} if live.get('kind') == 'cloud' else {}
+                count = int(event.payload.get('event_count') or 0)
+                fresh = count != int(prior.get('event_count') or -1)
+                batches = getattr(self, '_cloud_batches', {}).get(stage, {})
+                self._stage_live[stage] = {'kind': 'cloud', 'payload': dict(prior, **batches, event_count=count),
+                                           'at': time.perf_counter() if fresh else live.get('at')}
+                if fresh and isinstance(self.progress_bar, StageProgressBar):
+                    self.progress_bar.note_activity()
+        elif event.kind == 'asr_worker_started':
+            name = str(event.payload.get('backend') or event.payload.get('model_id') or '')
+            self.__dict__.setdefault('_worker_running', {})[name] = True
+        elif event.kind == 'asr_worker_exited':
+            name = str(event.payload.get('backend') or event.payload.get('model_id') or '')
+            self.__dict__.setdefault('_worker_running', {})[name] = False
+            if getattr(self, '_cancel_requested_at', 0):
+                display = {'moss': 'MOSS', 'firered': 'FireRed', 'qwen3-asr': 'Qwen3-ASR'}.get(name, name)
+                self._append_feed('已停止', '{model} 子进程已停止', MUTED, model=display)
+        elif event.kind in {'media_cancelled', 'queue_cancelled'}:
+            if event.kind == 'media_cancelled' and event.media_path:
+                self._append_feed('已取消', '{name} 已停止处理', AMBER, name=Path(event.media_path).name)
+            elif event.kind == 'queue_cancelled':
+                self._append_feed('已取消', '队列已停止，正在整理任务报告', AMBER)
         elif event.kind == "media_completed":
             self._append_feed("素材", tr('已完成 {name}', name=Path(event.media_path).name), GREEN)
             if getattr(self, "_studio_recognition_context", None):
@@ -9092,22 +11536,32 @@ class MainWindow(QWidget):
     def _cancel_run(self):
         if not self.token:
             return
+        job_id = getattr(self, '_active_job_id', '')
+        self._cancelled_job_ids = getattr(self, '_cancelled_job_ids', set()) | {job_id}
         self.token.cancel()
         self.cancel_run_button.setEnabled(False)
+        # 2026-10-08 (M12): the request stays visible until the run really
+        # ends — live waiting time, the step being stopped, worker exits.
+        self._cancel_requested_at = time.perf_counter()
+        if isinstance(self.cancel_run_button, QWidget):
+            bind_text(self.cancel_run_button, '正在取消…')
         bind_text(self.progress_stage, '正在安全取消…')
         bind_text(self.progress_resource, '将在当前可安全停止的阶段边界退出')
-        self._append_feed("取消", "已发出安全取消请求，正在等待当前阶段收尾", AMBER)
+        self._cancel_feed_card = self._append_feed("取消", "已发出安全取消请求，正在等待当前阶段收尾", AMBER,
+                                                   meta=tr('已等待 {seconds} 秒', seconds=0))
+        if hasattr(self, 'phase_cards'):
+            self._refresh_progress_cards()
         # 四十三轮：Studio 后台识别的取消此前只写主页进度页控件——留在
         # Studio 的用户完全看不到反馈（"点了取消没反应"）。同步落到
         # 字幕列表芯片与"暂无字幕"状态卡，并禁用取消按钮防重复点击。
         if getattr(self, "_studio_recognition_context", None):
-            studio_page = getattr(self, "studio_page", None)
+            studio_page = self.built_page("studio")
             if studio_page is not None:
                 studio_page.set_recognition_cancelling()
 
     def _back_to_studio_from_progress(self):
         """从主页详细进度页回到 Studio 工程（识别继续后台运行）。"""
-        studio_page = getattr(self, "studio_page", None)
+        studio_page = self.built_page("studio")
         if studio_page is None:
             return
         self._switch_page(studio_page)
@@ -9123,9 +11577,8 @@ class MainWindow(QWidget):
             previous.close()
         QApplication.beep()
         QApplication.alert(self, 0)
-        if self.isMinimized():
-            self.showNormal()
-        self.show()
+        from .window_constraints import restore_minimized_window
+        restore_minimized_window(self)
         self.raise_()
         self.activateWindow()
 
@@ -9140,195 +11593,239 @@ class MainWindow(QWidget):
         dialog.open()
 
     def _recover_recognition_output(self):
-        report_path=getattr(self,'_last_recognition_report','')
+        report_path = getattr(self, '_last_recognition_report', '')
         if not report_path or not Path(report_path).is_file():
-            report_path,_=QFileDialog.getOpenFileName(self,tr('选择已有字幕任务报告'),'','任务报告 (*.json)')
-        if not report_path:return
+            report_path, _ = QFileDialog.getOpenFileName(self, tr('选择已有字幕任务报告'), '', '任务报告 (*.json)')
+        if not report_path:
+            return
         try:
             from .recognition_recovery import recover_report
-            path=recover_report(report_path)
-            self._last_studio_project=str(path)
-            self.open_studio_project(path,mode='edit',source='recognition_recovery')
+            from .recognition_outcome import RecognitionDeliveryWitness, normalize_recognition_outcome
+            from .studio_project import load_project
+            from .studio_edit_sequence import projected_cues
+            import hashlib
+            path = recover_report(report_path)
+            project = load_project(path)
+            raw = Path(report_path).read_bytes()
+            payload = json.loads(raw.decode('utf-8-sig'))
+            witness = RecognitionDeliveryWitness(report_path=str(report_path),
+                report_sha256=hashlib.sha256(raw).hexdigest(), report_started_at=str(payload.get('started_at') or ''),
+                project_path=str(path), project_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                cue_count=len(projected_cues(project)), verified_saved_project=True)
+            tasks = getattr(self, '_completion_tasks', [])
+            index = self.result_task_selector.currentIndex()
+            if 0 <= index < len(tasks) and str(tasks[index][0].report_json_path) == str(report_path):
+                item = replace(tasks[index][0], project_path=str(path))
+                tasks[index] = (item, project)
+                evidence = self._completion_task_evidence[self._completion_task_key(item)]
+                evidence.update(outcome=normalize_recognition_outcome(payload, delivery_witness=witness),
+                    delivery_witness=witness, display_payload=payload, project_error='')
+                evidence['output_paths'] = list(dict.fromkeys([str(path), *evidence.get('output_paths', ())]))
+                evidence['path_lines'] = [tr('恢复工程') + '：' + str(path), *evidence.get('path_lines', ())]
+                evidence['path_entries'] = [('恢复工程', str(path)), *evidence.get('path_entries', ())]
+                self._select_completion_task(index)
+            self._last_studio_project = str(path)
+            self.open_studio_project(path, mode='edit', source='recognition_recovery')
         except Exception as exc:
-            QMessageBox.warning(self,tr('恢复未完成'),tr('{value0}\n原工程及字幕输出保持不变。', value0=str(exc)))
+            QMessageBox.warning(self, tr('恢复未完成'), tr('{value0}\n原工程及字幕输出保持不变。', value0=str(exc)))
 
     def _handle_result(self, result):
+        from .recognition_outcome import normalize_recognition_outcome, normalize_recognition_queue
+        from .studio_project import load_project
+        from .studio_edit_sequence import projected_cues
+        job_id = str(getattr(result, 'job_id', '') or '')
+        active = getattr(self, '_active_job_id', '')
+        if active and job_id != active:
+            return
+        committed = getattr(self, '_committed_job_ids', set())
+        if job_id and job_id in committed:
+            return
+        if job_id in getattr(self, '_cancelled_job_ids', set()) and result.successes:
+            self._committed_job_ids = committed | {job_id}
+            self._handle_unexpected_error('任务已取消，迟到的识别结果未自动载入；可从识别记录检查已保存输出。')
+            return
+        if job_id:
+            self._committed_job_ids = committed | {job_id}
         self._release_run_state()
         self._progress_timer.stop()
         self.result_exit_code = result.exit_code
-        self._recognition_terminal = ('failed' if result.failures else 'cancelled' if result.cancelled
-            else 'degraded_success' if any(item.status=='degraded_success' for item in result.results) else 'success')
         self._active_stages.clear()
-        if hasattr(self, '_progress_motion'):self._progress_motion.stop()
+        if hasattr(self, '_progress_motion'):
+            self._progress_motion.stop()
         self._refresh_progress_cards()
         self.workflow.set_active(3, finished=True)
-        success_count = len(result.successes)
-        failure_count = len(result.failures)
-        cancel_count = len(result.cancelled)
-        if failure_count:
-            color, icon_name, title = CORAL, "fa5s.exclamation-circle", "部分任务失败"
-        elif cancel_count:
-            color, icon_name, title = AMBER, "fa5s.stop-circle", "任务已取消"
-        else:
-            color, icon_name, title = GREEN, "fa5s.check-circle", (
-                '完成，有需复核项' if self._recognition_terminal=='degraded_success' else '字幕生成完成')
-        self.result_icon.setPixmap(_icon(icon_name, color).pixmap(QSize(72, 72)))
-        bind_text(self.result_title, title)
-        self.result_title.setProperty("i18nText",title)
-        self.result_summary.setProperty("i18nTemplate","成功 {success} 个 · 失败 {failure} 个 · 取消 {cancel} 个 · 总耗时 {elapsed} 秒")
-        self.result_summary.setProperty("i18nArguments",dict(success=success_count,failure=failure_count,cancel=cancel_count,elapsed=f"{result.elapsed_seconds:.1f}"))
-        bind_text(self.result_summary, '成功 {success_count} 个 · 失败 {failure_count} 个 · 取消 {cancel_count} 个 · 总耗时 {value3:.1f} 秒', success_count=success_count, failure_count=failure_count, cancel_count=cancel_count, value3=result.elapsed_seconds)
-        review_total = 0
-        high_risk = 0
-        cue_total = 0
-        polish_details={}
-        retry_partial_paths=set()
-        from .main_ui_helpers import polishing_completion_details
-        for media_result in result.results:
-            report_path = getattr(media_result, "report_json_path", "")
-            if not report_path:
-                continue
-            try:
-                report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                continue
-            report_result = report.get("result", {}) if isinstance(report, dict) else {}
-            lines,retry=polishing_completion_details(report if isinstance(report,dict) else {})
-            polish_details[media_result.media_path]=lines
-            if retry:
-                retry_partial_paths.add(media_result.media_path)
-            cue_total += int(report_result.get("cue_count", 0) or 0)
-            counts = report.get("review_severity_counts", {}) if isinstance(report, dict) else {}
-            review_total += sum(int(counts.get(key, 0) or 0) for key in ("error", "warning", "review"))
-            high_risk += sum(int(counts.get(key, 0) or 0) for key in ("error", "warning"))
-        if cue_total and hasattr(self, "result_review_summary"):
-            suggested = min(cue_total, review_total)
-            confident = max(0, cue_total - suggested)
-            minutes = 0 if suggested == 0 else max(1, round(suggested * 0.15))
-            bind_text(self.result_review_summary, '共 {cue_total} 条字幕 · 高置信度 {confident} 条 · 建议检查 {suggested} 条 · 高风险 {high_risk} 条 · 预计人工审核约 {minutes} 分钟', cue_total=cue_total, confident=confident, suggested=suggested, high_risk=high_risk, minutes=minutes)
-            self.result_review_summary.setProperty("i18nTemplate","共 {total} 条字幕 · 建议检查 {review} 条 · 高风险 {risk} 条")
-            self.result_review_summary.setProperty("i18nArguments",dict(total=cue_total,review=suggested,risk=high_risk))
-        elif hasattr(self, "result_review_summary"):
-            self.result_review_summary.setProperty("i18nTemplate",None)
-            self.result_review_summary.setText("")
-        if retry_partial_paths and not failure_count and not cancel_count:
-            bind_text(self.result_title, '字幕已生成，部分校对待完成')
-            self.result_title.setProperty("i18nText",'字幕已生成，部分校对待完成')
-            self.result_icon.setPixmap(_icon('fa5s.exclamation-circle',AMBER).pixmap(QSize(72,72)))
-        rows = []
-        self._last_studio_project = ""
-        self._last_recognition_report = next((item.report_json_path for item in result.results if item.report_json_path),'')
-        completion_theme = _active_theme_definition()
+        self._completion_tasks = []
+        self._completion_task_evidence = {}
+        self._completion_output_paths = []
+        self._last_studio_project = ''
+        self._last_recognition_report = ''
+        self._last_srt_dir = ''
+        self._last_failed_items = []
+        outcomes = []
+        self.result_task_selector.blockSignals(True)
+        self.result_task_selector.clear()
         for item in result.results:
-            status_spec = {
-                "success": ("完成", completion_theme.success, completion_theme.accent_soft),
-                "degraded_success": ("完成，有需复核项", completion_theme.warning, completion_theme.warning_soft),
-                "failed": ("失败", completion_theme.danger, completion_theme.danger_soft),
-                "cancelled": ("取消", completion_theme.warning, completion_theme.warning_soft),
-                "skipped": ("跳过", completion_theme.focus, completion_theme.selected),
-            }.get(item.status, (item.status, completion_theme.text_muted, completion_theme.panel))
-            status_text, status_color, background = status_spec
-            details = []
-            details.extend(html.escape(line) for line in polish_details.get(item.media_path,[]))
-            if item.srt_path:
-                details.append(f"字幕：{html.escape(item.srt_path)}")
-                self._last_srt_dir = str(Path(item.srt_path).parent)
-            if getattr(item, "project_path", "") and Path(item.project_path).is_file():
-                self._last_studio_project = item.project_path
-                details.append(f'工程（可重新载入）：{html.escape(item.project_path)}')
-            if item.report_text_path:
-                details.append(f"报告：{html.escape(item.report_text_path)}")
-            if item.error:
-                details.append(f"原因：{html.escape(item.error)}")
-            detail_html = "<br>".join(details) or "没有额外输出信息"
-            rows.append(
-                f'<div style="background:{background}; border-left:4px solid {status_color}; '
-                f'margin:4px 0 10px 0; padding:9px 11px; border-radius:7px;">'
-                f'<span style="color:{status_color}; font-weight:800;">{html.escape(status_text)}</span>'
-                f'<span style="font-weight:700; color:{completion_theme.text};">&nbsp;&nbsp;{html.escape(Path(item.media_path).name)}</span>'
-                f'<div style="color:{completion_theme.text_muted}; margin-top:5px; line-height:1.55;">{detail_html}</div>'
-                "</div>"
-            )
-        self.result_files.setHtml("".join(rows))
-        if hasattr(self, "result_task_selector"):
-            from .studio_project import load_project
-            self._completion_tasks = []
-            self.result_task_selector.blockSignals(True)
-            self.result_task_selector.clear()
-            for item in result.results:
-                project = None
-                if item.project_path and Path(item.project_path).is_file():
-                    try:
+            report = {}
+            if item.report_json_path:
+                try:
+                    report = json.loads(Path(item.report_json_path).read_text(encoding='utf-8-sig'))
+                except (OSError, ValueError, TypeError):
+                    pass
+            report = dict(report) if isinstance(report, dict) else {}
+            report.setdefault('status', item.status)
+            report_result = dict(report.get('result') or {})
+            project = None
+            project_error = ''
+            if item.project_path:
+                try:
+                    if job_id:
+                        from .recognition_result import verify_result_reference
+                        if str(getattr(item, 'job_id', '')) != job_id:
+                            raise ValueError('素材结果不属于当前识别任务。')
+                        project = verify_result_reference(getattr(item, 'result_ref_json', ''), project_path=item.project_path)
+                    else:
                         project = load_project(item.project_path)
-                    except (OSError, ValueError, TypeError):
-                        pass
-                self._completion_tasks.append((item, project))
-                self.result_task_selector.addItem(Path(item.media_path).name)
-            self.result_task_selector.blockSignals(False)
-            self._select_completion_task(0)
-            self.open_subtitle_result_button.setVisible(False)
-        set_log_html_keep_left(self.result_console, self.console_log.toHtml())
-        apply_ui_language(self, getattr(self,"_ui_language","zh"))
-        # Completion can also be exercised by guard-level tests that build a
-        # deliberately minimal MainWindow shell without the full page stack.
-        if hasattr(self, "history_page"):
-            self.history_page.refresh()
-        studio_context = getattr(self, "_studio_recognition_context", None)
+                except (OSError, ValueError, TypeError) as exc:
+                    project_error = str(exc)
+            elif item.status in {'success', 'degraded_success'}:
+                project_error = tr('本次任务没有保存可用的工程文件')
+            if project:
+                report_result.setdefault('cue_count', len(projected_cues(project)))
+            report_result.setdefault('elapsed_seconds', item.elapsed_seconds)
+            report['result'] = report_result
+            outcome = normalize_recognition_outcome(report)
+            outcomes.append(outcome)
+            details = list(outcome.localized_detail_lines(getattr(self, '_ui_language', 'zh')))
+            details.extend(outcome.problems + outcome.review_notes)
+            details.append(translate('当前文件耗时 {elapsed} 秒', getattr(self, '_ui_language', 'zh')).format(elapsed=f'{item.elapsed_seconds or outcome.elapsed_seconds:.3f}'))
+            output_paths = []
+            for label, target in (('工程', item.project_path), ('字幕', item.srt_path),
+                                  ('JSON 报告', item.report_json_path), ('报告', item.report_text_path)):
+                if target:
+                    output_paths.append(target)
+                    details.append(f'{label}：{target}')
+            if item.error:
+                details.append(str(item.error))
+            content = '<b>' + html.escape(outcome.status_label) + '</b><br>' + '<br>'.join(html.escape(line) for line in details)
+            self._completion_task_evidence[self._completion_task_key(item)] = dict(outcome=outcome,
+                project_error=project_error, review_count=outcome.review_issue_count, output_paths=output_paths, details_html=content, display_payload=report, path_entries=[(label, target) for label, target in (('工程', item.project_path), ('字幕', item.srt_path), ('JSON 报告', item.report_json_path), ('报告', item.report_text_path)) if target], path_lines=[f'{label}：{target}' for label, target in (('工程', item.project_path), ('字幕', item.srt_path), ('JSON 报告', item.report_json_path), ('报告', item.report_text_path)) if target])
+            self._completion_tasks.append((item, project))
+            self.result_task_selector.addItem(Path(item.media_path).name)
+            self.result_task_selector.setItemData(self.result_task_selector.count()-1, Path(item.media_path).name, Qt.ItemDataRole.ToolTipRole)
+            if outcome.polish_retryable or outcome.search_retryable or outcome.core_status == 'failed':
+                self._last_failed_items.append(item)
+        self.result_task_selector.blockSignals(False)
+        queue_outcome = normalize_recognition_queue(outcomes)
+        success_count = queue_outcome.completed_count + queue_outcome.partial_count
+        failure_count = queue_outcome.failed_count
+        cancel_count = queue_outcome.cancelled_count
+        review_total = queue_outcome.review_issue_count
+        self._recognition_terminal = ('failed' if queue_outcome.core_status == 'failed' else
+            'cancelled' if queue_outcome.core_status == 'cancelled' else
+            'unknown' if queue_outcome.core_status == 'unknown' else
+            'degraded_success' if queue_outcome.core_status == 'partial' or queue_outcome.review_task_count else 'success')
+        # 100% means saved: every delivered media has a verified project.
+        self._delivery_verified = bool(self._completion_tasks) and all(
+            project is not None for item, project in self._completion_tasks
+            if item.status in {'success', 'degraded_success'})
+        if hasattr(self, 'phase_cards'):
+            self._finish_progress_presentation()
+            self._refresh_progress_cards()
+        self._completion_batch_counts = dict(success=queue_outcome.completed_count, partial=queue_outcome.partial_count,
+            failure=queue_outcome.failed_count, cancel=queue_outcome.cancelled_count, skipped=queue_outcome.skipped_count,
+            unknown=queue_outcome.unknown_count, elapsed=f'{result.elapsed_seconds:.1f}')
+        self.result_files_toggle.setChecked(False)
+        self._select_completion_task(0)
+        if not outcomes:
+            bind_text(self.result_title, '任务状态待确认')
+            bind_text(self.result_summary, '')
+            self.result_exception_summary.hide()
+            self.result_review_summary.clear()
+        studio_context = getattr(self, '_studio_recognition_context', None)
+        self._prepare_completion_log()
+        apply_ui_language(self, getattr(self, '_ui_language', 'zh'))
+        history = self.built_page("history")
+        if history is not None:
+            history.refresh()
         if not studio_context:
             self._switch_page(2)
-        if hasattr(self, "result_details_toggle"):
-            self.result_details_toggle.setChecked(bool(failure_count or cancel_count or polish_details))
-        self._last_failed_items = [
-            item for item in result.results if item.status == "failed" or item.media_path in retry_partial_paths
-        ]
-        (bind_text(self.retry_failed_button, '重试未完成校对') if retry_partial_paths else bind_text(self.retry_failed_button, '重试失败项'))
-        self.retry_failed_button.setVisible(bool(self._last_failed_items))
         if hasattr(self, "open_studio_result_button"):
-            self.open_studio_result_button.setVisible(bool(self._last_studio_project))
+            self.open_studio_result_button.setVisible(True)
         if hasattr(self, "open_priority_review_button"):
-            self.open_priority_review_button.setVisible(bool(self._last_studio_project and review_total))
+            if not hasattr(self, 'result_task_selector'):
+                self.open_priority_review_button.setVisible(bool(self._last_studio_project and review_total))
         if not studio_context:
-            self._show_task_notification(*_completion_notification_spec(result))
+            self._show_task_notification(*_completion_notification_spec(result, outcomes))
         elif failure_count or cancel_count:
             self.studio_page.fail_recognition_runtime(
                 "任务已取消" if cancel_count and not failure_count else "识别失败，请检查模型与运行日志"
             )
             # 四十二轮：识别转后台后用户可能已离开 Studio 页——失败/取消也要
             # 任务通知，否则只剩藏在字幕列表里的芯片，用户无感知。
-            self._show_task_notification(*_completion_notification_spec(result))
+            self._show_task_notification(*_completion_notification_spec(result, outcomes))
         if studio_context and result.successes:
-            target = str(next((item.project_path for item in result.successes
-                if os.path.normcase(os.path.abspath(item.media_path)) == os.path.normcase(os.path.abspath(studio_context.get('media_path','')))),''))
+            delivered = next((item for item, loaded in self._completion_tasks if loaded is not None
+                and os.path.normcase(os.path.abspath(item.media_path)) == os.path.normcase(os.path.abspath(studio_context.get('media_path','')))), None)
+            target = str(delivered.project_path) if delivered else ''
             if target and any(
                 os.path.normcase(os.path.abspath(item.media_path))
                 == os.path.normcase(os.path.abspath(studio_context.get("media_path", "")))
                 for item in result.successes
             ):
-                QTimer.singleShot(0, lambda path=target: self._finish_studio_recognition(path))
+                reference = getattr(delivered, 'result_ref_json', '')
+                QTimer.singleShot(0, lambda path=target, ref=reference, owner=job_id:
+                    self._dispatch_recognition_job(owner, self._finish_studio_recognition, path, ref, allow_committed=True)
+                    if owner else self._finish_studio_recognition(path, ref))
             elif not target:
                 self.studio_page.fail_recognition_runtime('字幕输出已保存，工程交付未完成；请在结果页点击“恢复已有识别结果”')
                 self._switch_page(2)
 
     def _handle_unexpected_error(self, message: str):
+        active_job = getattr(self, '_active_job_id', '')
+        if active_job:
+            self._committed_job_ids = getattr(self, '_committed_job_ids', set()) | {active_job}
         self._release_run_state()
         self._progress_timer.stop()
+        if hasattr(self, 'phase_cards'):
+            if not getattr(self, '_recognition_terminal', ''):
+                self._recognition_terminal = 'failed'
+            self._finish_progress_presentation()
+            self._refresh_progress_cards()
         self.result_icon.setPixmap(_icon("fa5s.exclamation-circle", CORAL).pixmap(QSize(72, 72)))
         bind_text(self.result_title, '任务未能启动')
         self.result_title.setProperty("i18nText","任务未能启动")
         self.result_summary.setProperty("i18nTemplate",None)
         self.result_summary.setText(message)
+        if hasattr(self, 'result_stats'):
+            self.result_stats.hide()
+            self.result_summary_meta.hide()
+            self.result_summary.show()
         error_theme = _active_theme_definition()
         self.result_files.setHtml(
             f'<div style="background:{error_theme.danger_soft}; border-left:4px solid {error_theme.danger}; '
             f'padding:10px; border-radius:7px;"><b>启动失败</b><br>{html.escape(message)}</div>'
         )
-        set_log_html_keep_left(self.result_console, self.console_log.toHtml())
+        self._prepare_completion_log()
+        if hasattr(self, 'result_task_selector'):
+            self._completion_tasks = []
+            self.result_task_selector.clear()
+            self._select_completion_task(-1)
+            self.repolish_current_glossary_button.setEnabled(False)
+            self.open_priority_review_button.show()
+            self.open_priority_review_button.setEnabled(False)
+            self.retry_failed_button.hide()
+            self.result_exception_summary.setText(message)
+            self.result_exception_summary.show()
+            self.result_review_summary.setProperty('i18nTemplate', None)
+            self.result_review_summary.setProperty('i18nArguments', {})
+            bind_text(self.result_review_summary, '')
+            self._completion_output_paths = []
         if getattr(self, "_studio_recognition_context", None):
             self.studio_page.fail_recognition_runtime(message)
             return
         self._switch_page(2)
         if hasattr(self, "result_details_toggle"):
-            self.result_details_toggle.setChecked(True)
+            self.result_details_toggle.setChecked(False)
         apply_ui_language(self, getattr(self, "_ui_language", "zh"))
         self._show_task_notification(
             "字幕任务异常中止",
@@ -9394,6 +11891,9 @@ class MainWindow(QWidget):
         ):
             event.ignore()
             return
+        if not getattr(self, "_studio_close_finalizing", False) and not self._prepare_glossary_for_task():
+            event.ignore()
+            return
         worker_running = bool(self.worker and self.worker.isRunning())
         if worker_running:
             answer = QMessageBox.question(
@@ -9415,7 +11915,7 @@ class MainWindow(QWidget):
             QTimer.singleShot(5_000, self, self._force_close_worker)
         else:
             self._worker_close_cleanup_done = True
-        studio = getattr(self, "studio_page", None)
+        studio = self.built_page("studio")
         if studio is not None and not getattr(self, "_studio_close_finalizing", False):
             guard = getattr(getattr(studio, "project_controller", None), "dirty_guard", None)
             if guard is not None and not guard.confirm("退出应用"):
@@ -9464,12 +11964,13 @@ class MainWindow(QWidget):
         if getattr(self, "_persist_geometry", False):
             try:
                 settings = QSettings("2ByteASR", "2ByteASR")
-                geometry = self.geometry()
+                geometry = self.normalGeometry() if (self.isMaximized() or self.isFullScreen() or self.isMinimized()) else self.geometry()
                 if geometry.width() >= 200 and geometry.height() >= 200:
                     settings.setValue(
                         "mainWindow/geometry",
                         [geometry.x(), geometry.y(), geometry.width(), geometry.height()],
                     )
+                    settings.setValue("mainWindow/maximized", bool(self.isMaximized() or self.isFullScreen()))
                     settings.sync()
             except Exception as exc:
                 print(f"[ui] geometry persistence failed: {exc}")
@@ -9588,6 +12089,9 @@ class GlossaryPickerDialog(QWidget):
 
     def _available_entries(self) -> list[tuple[str, str]]:
         """(display_name, identity) 可用词库：profiles + learned + history。"""
+        catalog = getattr(self.legacy, "glossary_catalog", None)
+        if callable(catalog):
+            return [(str(row["name"]), str(row["id"])) for row in catalog()]
         entries: dict[str, str] = {}
         profiles = getattr(self.legacy, "load_game_profiles", lambda: {})() or {}
         for name in profiles:
@@ -9659,7 +12163,9 @@ QLabel#termSyncStatus {{
 def build_term_library_page_qss(theme=None) -> str:
     from twobyteasr.qss_retheme import retheme_qss
 
-    return retheme_qss(TERM_LIBRARY_PAGE_QSS, theme or _active_theme_definition())
+    from twobyteasr.design.semantic_qss import build_semantic_qss
+    active = theme or _active_theme_definition()
+    return retheme_qss(TERM_LIBRARY_PAGE_QSS, active) + build_semantic_qss(active)
 
 
 class TermLibraryPage(QWidget):
@@ -9692,6 +12198,7 @@ class TermLibraryPage(QWidget):
         side.setSpacing(6)
         heading = QLabel("工作台")
         heading.setObjectName("termWorkspaceLabel")
+        style_workspace_sidebar_heading(heading)
         side.addWidget(heading)
         self.workspace_navigation = WorkspaceNavigation("terms")
         self.workspace_navigation.recognition_requested.connect(self.recognition_requested)
@@ -9775,7 +12282,8 @@ def run_desktop_app(
     from .application_settings import read_studio_preferences
     from .ui_motion import system_reduced_motion
 
-    motion_preference = read_studio_preferences().get("reduce_motion")
+    preferences = read_studio_preferences()
+    motion_preference = preferences.get("reduce_motion")
     app.setProperty(
         "reduceMotion",
         system_reduced_motion() if motion_preference is None else bool(motion_preference),
@@ -9804,35 +12312,29 @@ def run_desktop_app(
     app._instance_guard = instance_guard
     app.aboutToQuit.connect(instance_guard.release)
     media_paths = []
-    # 四十八轮（agy EXE 评审发现）：argv 里的 .2byteproj 工程此前被
-    # _supported_paths（只认媒体后缀）丢弃 → 传工程启动回退识别首页。
-    # 工程参数直接进 Studio 编辑态（与"最近工程卡片"同一条 open_studio_project 链）。
-    startup_project_path = ""
-    for raw_path in initial_paths or ():
-        candidate = Path(str(raw_path)).expanduser()
-        if candidate.is_file() and candidate.suffix.lower() in {".2byteasrproj", ".2byteproj"}:
-            startup_project_path = str(candidate.resolve())
-            break
-    if select_media and not initial_paths and not startup_project_path:
+    from .external_open import startup_destination
+    startup_page = startup_destination(initial_paths, preferences,
+        explicit_operation=bool(select_media))
+    if select_media and not initial_paths:
         media_paths = _select_media_paths()
         if not media_paths:
             instance_guard.release()
             return 0
     _startup_mark("SETTINGS_LOADED")
-    window = MainWindow([], legacy, pipeline, startup_self_test)
+    window = MainWindow([], legacy, pipeline, startup_self_test, startup_page=startup_page)
     from .desktop_intake import DesktopIntake
     window._desktop_intake = DesktopIntake(window)
     instance_guard.paths_received.connect(window._desktop_intake.receive_external)
-    QTimer.singleShot(0, instance_guard.enable_receiver)
-    if media_paths or (initial_paths and not startup_project_path):
-        QTimer.singleShot(0, lambda: window.import_media(media_paths or initial_paths))
-    if startup_project_path:
-        # 首帧后再开工程：窗口刚 show 时 splitter 尺寸未定，立即打开会把
-        # 时间线宿主压扁（EXE 实测 39px）。等布局稳定后走同一条编辑链。
-        QTimer.singleShot(
-            800,
-            lambda: window.open_studio_project(startup_project_path, mode="edit", source="argv"),
-        )
+    def accept_startup_requests():
+        # One queue owns cold arguments and messages received during startup.
+        # The first layout has settled before either starts loading a project.
+        if media_paths or initial_paths:
+            window._desktop_intake.submit(media_paths or initial_paths)
+        instance_guard.enable_receiver()
+    QTimer.singleShot(0, accept_startup_requests)
+    # Ctrl+wheel / Ctrl+= / Ctrl+- / Ctrl+0 interface zoom (remembered).
+    from .ui_zoom import install as _install_ui_zoom
+    window._ui_zoom = _install_ui_zoom(app, window)
     _startup_mark("MAIN_WINDOW_CREATED")
 
     class _FirstPaintProbe(QObject):
@@ -9840,6 +12342,7 @@ def run_desktop_app(
             if watched is window and event.type() == QEvent.Type.Paint:
                 _startup_mark("FIRST_PAINT")
                 QTimer.singleShot(0, lambda: _startup_mark("INTERACTIVE"))
+                QTimer.singleShot(0, window._after_startup_interactive)
                 if os.environ.get("TWOBYTEASR_STARTUP_EXIT_AFTER_INTERACTIVE") == "1":
                     QTimer.singleShot(2500, app.quit)
                 window.removeEventFilter(self)
@@ -9850,7 +12353,8 @@ def run_desktop_app(
     window.installEventFilter(paint_probe)
     window.show()
     _startup_mark("FIRST_SHOW")
-    _run_first_run_wizard(window)
+    if startup_page == "recognition":
+        _run_first_run_wizard(window)
     if os.environ.get("TWOBYTEASR_STARTUP_OPEN_STUDIO") == "1" or os.environ.get("TWOBYTEASR_STARTUP_RAISE") == "1":
         # Instrumented startup route: navigate to the Studio Project Library as
         # if the user clicked the workbench entry, keeping the audit on the
@@ -9900,6 +12404,7 @@ def run_desktop_app(
         QTimer.singleShot(1500, lambda: start_acceptance(window))
     try:
         app.exec()
+        window.launch_pending_update()
         return int(window.result_exit_code)
     finally:
         instance_guard.release()
@@ -10010,7 +12515,6 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
         window._append_console_line("   [缓存命中] polished_batch，复用已完成批次。")
         window._refresh_progress_cards()
         window._progress_motion.setCurrentTime(window._progress_motion.duration())
-        window.phase_cards[1]._paint_active(QColor("#ffe7b9"))
         window._update_progress_clock()
     elif state == "result":
         window.pages.setCurrentIndex(2)
@@ -10040,7 +12544,7 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
         window._open_model_workshop()
         if state == "workshop-api":
             window.workshop_page._set_role("api")
-            window.workshop_page._view_model("qwen_api")
+            window.workshop_page._view_model("qwen31_filetrans")
         elif state == "workshop-timeline":
             window.workshop_page._set_role("timeline")
             window.workshop_page._view_model("firered")

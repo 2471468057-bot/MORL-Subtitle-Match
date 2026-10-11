@@ -81,6 +81,15 @@ class ApplicationSettingsDialog(SpringDialog):
             control=QCheckBox();control.setChecked(bool(checked));return control
 
         project=page('工程与保存','设置新工程的位置，以及工作中自动保存和恢复的方式。')
+        startup=section(project)
+        self.startup_page=field_width(StudioComboBox(),'preferred')
+        for label,value in [('字幕识别主页','recognition'),('工程库','project_library')]:
+            self.startup_page.addItem(label,value)
+        self.startup_page.setCurrentIndex(max(0,self.startup_page.findData(str(preferences.get('startup_page','recognition')))))
+        row(startup,'启动后显示',self.startup_page,'双击工程文件时直接打开该工程')
+        repair=button_role(QPushButton('关联／修复工程文件关联'),'secondary')
+        repair.clicked.connect(self._repair_project_association)
+        row(startup,'工程文件关联',repair,'为 .2byteproj 注册当前程序；默认应用由 Windows 管理')
         storage=section(project)
         label=QLabel('默认工程位置');label.setObjectName('settingsRowTitle');storage.addWidget(label)
         rootrow=QHBoxLayout();rootrow.setSpacing(8)
@@ -130,6 +139,27 @@ class ApplicationSettingsDialog(SpringDialog):
             row(maintenance,'Studio 布局',reset_workspace,'恢复默认的面板位置与尺寸')
         studio.addStretch()
 
+        self.navigation.insertItem(2, '存储与缓存')
+        cache_page = page('存储与缓存', '查看应用管理的占用，清理有明确归属的缓存。工程与模型分别保护。')
+        from .runtime_paths import get_runtime_paths
+        models = section(cache_page)
+        model_title = bind_text(QLabel(), '模型下载目录')
+        model_title.setObjectName('settingsRowTitle'); models.addWidget(model_title)
+        model_row = QHBoxLayout()
+        self.model_root_edit = QLineEdit(str(get_runtime_paths().model_root))
+        self.model_root_edit.setObjectName('modelDownloadRoot')
+        bind_text(self.model_root_edit, '模型下载目录', property='accessibleName')
+        model_row.addWidget(self.model_root_edit, 1)
+        self.model_root_browse = button_role(bind_text(QPushButton(), '浏览…'), 'secondary')
+        self.model_root_browse.clicked.connect(lambda: browse(self, self.model_root_edit))
+        model_row.addWidget(self.model_root_browse); models.addLayout(model_row)
+        note = bind_text(QLabel(), '新下载的模型和下载临时文件保存在此目录。可选择其他磁盘；现有模型保留原位置，继续可用。')
+        note.setObjectName('settingsDescription'); note.setWordWrap(True); models.addWidget(note)
+        from .storage_ui import StoragePanel
+        self.storage_panel = StoragePanel(self, owner=parent.window() if parent else None)
+        cache_page.addWidget(self.storage_panel)
+        cache_page.addStretch()
+
         appearance=page('外观','选择适合你的工作环境的主题与动态反馈。')
         appearance_rows=section(appearance)
         self.theme_combo=field_width(StudioComboBox(),'preferred')
@@ -142,7 +172,7 @@ class ApplicationSettingsDialog(SpringDialog):
 
         self.advanced_controls = {}
         if advanced_owner is not None:
-            self.navigation.insertItem(3, '高级设置')
+            self.navigation.insertItem(4, '高级设置')
             advanced = page('高级设置', '调整本批识别、输出和缓存策略。保存后生效。')
             groups = (
                 ('识别范围', (('dialogue_coverage', '对白覆盖', '控制角色与主播对白的保留范围'),
@@ -182,8 +212,10 @@ class ApplicationSettingsDialog(SpringDialog):
         from PySide6.QtWidgets import QApplication
         copy.clicked.connect(lambda:QApplication.clipboard().setText(about_build_text()))
         about.addWidget(copy,0,Qt.AlignmentFlag.AlignLeft)
-        legal=bind_text(QLabel(), '自有代码：GPL-3.0-only；允许商用和收费分发。第三方条件另见声明。')
+        legal=bind_text(QLabel(), '项目自有代码采用 GPL-3.0-only，允许依照该许可商用与收费分发。历史生效分界保持为 0.2.6-test.3。')
         legal.setObjectName('projectLicenseLabel');legal.setWordWrap(True);about.addWidget(legal)
+        third_party=bind_text(QLabel(),'第三方代码、工具和模型权重分别适用各自许可。历史版本的第三方许可记录继续保留；已移除的模型不随当前程序提供。')
+        third_party.setObjectName('thirdPartyModelLicenseLabel');third_party.setWordWrap(True);about.addWidget(third_party)
         from .license_documents import show_document
         for label, filename, name in (
             ('GPL 许可全文', 'LICENSE', 'openProjectLicense'),
@@ -212,6 +244,25 @@ class ApplicationSettingsDialog(SpringDialog):
         return (tuple((w.objectName(), w.text()) for w in self.findChildren(QLineEdit)),
                 tuple(w.currentIndex() for w in self.findChildren(QComboBox)),
                 tuple(w.isChecked() for w in self.findChildren(QAbstractButton) if w.isCheckable()))
+
+    def accept(self):
+        from .model_root_settings import save_model_download_root
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            save_model_download_root(self.model_root_edit.text(), owner=self.parentWidget().window() if self.parentWidget() else None)
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, tr('模型下载目录'), str(exc))
+            return
+        super().accept()
+
+    def _repair_project_association(self):
+        from PySide6.QtWidgets import QMessageBox
+        from .project_file_association import repair_project_association
+        try:
+            result = repair_project_association()
+            QMessageBox.information(self, tr('工程文件关联'), tr('已注册工程打开入口：\n{path}', path=str(result)))
+        except Exception as exc:
+            QMessageBox.warning(self, tr('工程文件关联'), str(exc))
 
     def reject(self):
         if hasattr(self, '_saved_values') and self._values() != self._saved_values:

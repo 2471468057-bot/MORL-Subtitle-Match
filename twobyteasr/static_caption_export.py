@@ -9,6 +9,26 @@ import time
 from .export_validation import record_completion, publish_output, notify_after_publication
 
 
+def _run_static_command(command, folder, runner, **kwargs):
+    """Keep filter text and repeated temporary paths out of CreateProcess argv.
+
+    Called after the preview transport appends its output branch. All external
+    file inputs remain absolute when the child's working directory changes.
+    """
+    folder = Path(folder).resolve()
+    command = [str(value) for value in command]
+    command[0] = str(Path(command[0]).resolve())
+    for index, option in enumerate(command[:-1]):
+        if option == '-i':
+            path = Path(command[index + 1]).resolve()
+            command[index + 1] = path.name if path.parent == folder else str(path)
+    graph_at = command.index('-filter_complex')
+    graph = folder / 'captions.ffgraph'
+    graph.write_text(command[graph_at + 1], encoding='utf-8')
+    command[graph_at:graph_at + 2] = ['-/filter_complex', graph.name]
+    return runner(command, cwd=folder, **kwargs)
+
+
 def static_graph_project(project):
     from .advanced_renderer import split_renderer_cues
     from .static_caption_contract import shared_static_cue
@@ -80,7 +100,7 @@ def render_static_graph(project, ffmpeg, job, *, progress=None, cancelled=None, 
             filters.append(f"{base}[{i+1}:v]overlay=x={box[0]}:y={box[1]}:eof_action=repeat:format=auto:enable='gte(t,{layer['start']:.9f})*lt(t,{layer['end']:.9f})'[s{i}]")
             base=f'[s{i}]'
         encoder=select_encoder(ffmpeg,job.settings)
-        command=[str(ffmpeg),'-hide_banner','-loglevel','warning','-y','-benchmark','-filter_complex_threads','2']
+        command=[str(ffmpeg),'-hide_banner','-loglevel','info','-y','-benchmark','-filter_complex_threads','2']
         if job.direct_video_graph:
             from .export_filtergraph import compile_video_filtergraph
             command+=compile_video_filtergraph(ffmpeg,job,'null',caption_overlays=layers,caption_filter=native_filter)
@@ -99,6 +119,10 @@ def render_static_graph(project, ffmpeg, job, *, progress=None, cancelled=None, 
             command+=['-c:a','libopus' if job.settings.audio_codec=='opus' else 'aac','-b:a',f'{job.settings.audio_bitrate_kbps}k']
             if job.settings.audio_sample_rate:command+=['-ar',str(job.settings.audio_sample_rate)]
             if job.settings.audio_channels:command+=['-ac',str(job.settings.audio_channels)]
+        if job.composition_resolved:
+            from .video_export import composed_video_frame_count
+            frames=composed_video_frame_count(job)
+            if frames is not None:command+=['-frames:v',str(frames)]
         if job.settings.container in {'mp4','mov'}:command+=['-movflags','+faststart']
         command+=['-progress','pipe:1','-nostats',str(partial)]
         if trace:trace('static_caption_command',command)
@@ -108,7 +132,9 @@ def render_static_graph(project, ffmpeg, job, *, progress=None, cancelled=None, 
                 progress(export_progress(STAGE_ENCODE,message='连续合成字幕与视频并编码…',out_time_us=value.split('=',1)[1],duration_seconds=duration))
         from .export_preview import run_streaming_with_preview
         encode_start=time.perf_counter()
-        code,log=run_streaming_with_preview(command,job,_run_streaming_process,on_line=line,cancelled=cancelled)
+        def run_static(command, **kwargs):
+            return _run_static_command(command, temp, _run_streaming_process, **kwargs)
+        code,log=run_streaming_with_preview(command,job,run_static,on_line=line,cancelled=cancelled)
         timings['encode']=time.perf_counter()-encode_start
         if code:raise RuntimeError('静态字幕编码失败：'+log[-3000:])
         if progress:progress(export_progress(STAGE_MUX,message='完整解码校验后发布成片…'))

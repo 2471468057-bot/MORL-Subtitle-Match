@@ -130,6 +130,42 @@ def test_disabled_returns_empty():
     assert layout.offsets == {}
 
 
+def test_long_handoff_chain_alternates_two_rows_instead_of_climbing():
+    rows = [cue(str(i), i * 1000, i * 1000 + 1100) for i in range(100)]
+    def resolved(row):
+        value = FakeResolved(size=30 + (int(row.id) % 7))
+        value._recipe.layout['lineHeightPx'] = 38 + int(row.id) % 11
+        return value
+    first = compute_stack_layout(rows, resolve_one=resolved, play_res_y=1080)
+    second = compute_stack_layout(list(reversed(rows)), resolve_one=resolved, play_res_y=1080)
+    # Mixed sizes: a taller caption may not fit a shorter one's row, but the
+    # chain never climbs toward the top of the frame.
+    assert max(first.offsets.values()) < 200 and not first.warnings
+    assert first.offsets == second.offsets
+    same = compute_stack_layout(rows, resolve_one=lambda _: FakeResolved(), play_res_y=1080)
+    assert all(same.offset_for(str(i)) == 0 for i in range(0, 100, 2))
+    assert len({same.offset_for(str(i)) for i in range(1, 100, 2)}) == 1
+
+
+def test_later_turn_takes_the_bottom_row_once_it_is_free():
+    """2026-10-10 (user): A -> A+B -> B+C puts C back in A's row, not above B."""
+    rows=[cue('a',0,1100),cue('b',1000,2100),cue('c',2000,3000)]
+    layout=compute_stack_layout(rows,resolve_one=lambda _:FakeResolved(),play_res_y=1080)
+    assert layout.offset_for('a') == layout.offset_for('c') == 0
+    assert layout.offset_for('b') > 0
+
+
+def test_measured_html_bounds_keep_the_temporal_allocator_available():
+    rows = [cue('a', 0, 1100), cue('b', 1000, 2100)]
+    def resolved(row):
+        value = FakeResolved()
+        value._recipe.web_theme = {'enabled': True}
+        return value
+    layout = compute_stack_layout(rows, resolve_one=resolved, play_res_y=1080,
+        bounds_for=lambda c, r: (500, 940, 900, 60))
+    assert not layout.warnings and layout.offset_for('b') >= 64
+
+
 def test_ass_compiler_lifts_overlapping_cues(tmp_path):
     """End to end: overlapping cues produce different \\pos y in compiled ASS."""
     from twobyteasr.studio_project import StudioCue, StudioMedia, SubtitleProject, SubtitleStyle
@@ -142,6 +178,8 @@ def test_ass_compiler_lifts_overlapping_cues(tmp_path):
         StudioCue(id="A", start_ms=10_000, end_ms=12_000, text="第一条字幕", speaker_id="S01"),
         StudioCue(id="B", start_ms=11_000, end_ms=13_000, text="第二条抢话", speaker_id="S02"),
     ]
+    from twobyteasr.subtitle_stacking import initialize_project_layout
+    initialize_project_layout(project)
     text = compile_ass(project)
     pos_lines = [line for line in text.splitlines() if "\\pos(" in line]
     assert len(pos_lines) >= 2, text[-800:]
@@ -151,3 +189,15 @@ def test_ass_compiler_lifts_overlapping_cues(tmp_path):
         ys.append(float(part.split(",")[1]))
     assert len(set(ys)) == 2, f"overlapping cues must sit at different y, got {ys}"
     assert ys[0] < ys[1] or ys[0] > ys[1]  # distinct anchors
+
+
+def test_a_fraction_of_a_pixel_taller_caption_still_reuses_the_free_row():
+    """Real project 2026-10-10: 61.6 vs 62.7 px ink heights cost a whole row."""
+    rows = [cue('a', 0, 1100), cue('b', 1000, 2100), cue('c', 2000, 3000)]
+    sizes = {'a': 46.0, 'b': 46.0, 'c': 46.4}
+    def resolved(row):
+        value = FakeResolved()
+        value._recipe.layout['lineHeightPx'] = sizes[row.id]
+        return value
+    layout = compute_stack_layout(rows, resolve_one=resolved, play_res_y=1080)
+    assert layout.offset_for('c') == 0 and layout.offset_for('b') > 0

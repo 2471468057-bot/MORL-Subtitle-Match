@@ -20,6 +20,10 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
     from .asr_provider_snapshot import classify_request_error
 
     diag = request_diagnostics if request_diagnostics is not None else {}
+    from .llm_adapter import _DIAGNOSTIC_LOCAL
+    from .public_api_response import observe, message_evidence, summary
+    _DIAGNOSTIC_LOCAL.value = diag
+    diag.update(provider=provider, model=model, endpoint=url, stream=False)
     started = time.monotonic()
     activity_started = time.perf_counter()
     deadline = _total_deadline or started + (max(timeout) if isinstance(timeout, tuple) else timeout)
@@ -61,6 +65,9 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
         # Preserve supported caller options without allowing an extra-body
         # object to replace the immutable model or target text.
         body.update({k:v for k,v in extra_body.items() if k not in body})
+    diag.update(thinking_sent=body.get('thinking'),
+        thinking_mode=(body.get('thinking') or {}).get('type', 'provider_default'),
+        enable_thinking_sent=body.get('enable_thinking'))
 
     done = threading.Event()
     stop = threading.Event()
@@ -71,6 +78,7 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
         try:
             if stop.is_set():
                 return
+            observe(diag, 'request_started', {})
             response = requests.post(url, headers={**auth_headers(api_key), "Content-Type": "application/json"},
                                      json=body, timeout=timeout, stream=True)
             state["response"] = response
@@ -95,6 +103,7 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
                 if chunk.strip() and diag.get("first_body_byte_ms") is None:
                     diag["first_body_byte_ms"] = now
                 diag["last_activity_ms"] = now
+                observe(diag, 'transport', {'bytes':len(chunk)})
                 chunks.append(chunk)
                 length += len(chunk)
                 if length > 4*1024*1024:
@@ -164,6 +173,9 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
     if isinstance(payload.get('model'), str):
         diag['response_model'] = payload['model'][:160]
     if isinstance(payload.get('usage'),dict):
+        for key in ('prompt_tokens','completion_tokens','total_tokens'):diag[key]=payload['usage'].get(key)
+        details=payload['usage'].get('completion_tokens_details') or {}
+        if isinstance(details,dict):diag['reasoning_tokens']=details.get('reasoning_tokens')
         diag['reported_usage']=[{k:v for k,v in payload['usage'].items()
             if isinstance(v,(int,float)) and not isinstance(v,bool)}]
     if dashscope_search:
@@ -190,6 +202,8 @@ def complete(messages, *, model, api_key, url, max_tokens, temperature=0,
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMRequestError("HTTP响应缺少正文结构。", category="format_mismatch") from exc
     diag["raw_response_length"]=len(content)
+    if protocol!='responses':message_evidence(payload,diag,api_key=api_key)
+    else:diag.update(summary(diag))
     diag["timing_observation"] = "first_activity_is_http_body_byte; connect_and_model_ttft_unavailable_nonstreaming"
     if not content.strip():
         raise LLMRequestError("HTTP正文为空。", category="empty_response")

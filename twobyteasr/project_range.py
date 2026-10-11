@@ -2,6 +2,19 @@
 from .studio_edit_sequence import sequence_of, timeline_duration_ms
 
 
+# Pressing I / O again within this distance clears that point (M16).
+RANGE_TOGGLE_MS = 20
+
+
+def range_summary(project):
+    """(text, has_range) naming the in/out range for menus."""
+    start, end = range_points(project)
+    if start is None and end is None:
+        return '', False
+    first, last = effective_range(project)
+    return f'{clock_text(first)} – {clock_text(last)} · {clock_text(max(0, last - first))}', True
+
+
 def range_points(project):
     sequence = sequence_of(project)
     return sequence.in_point_ms, sequence.out_point_ms

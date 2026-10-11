@@ -22,13 +22,12 @@ def start(window,out):
             def tab(role):
                 button=next(b for b in page.tab_group.buttons() if b.property('role')==role)
                 QTest.mouseClick(button,Qt.LeftButton);QApplication.processEvents()
-            tab('speaker')
-            check('Nemotron appears only in speaker tab',not page._cards['nemotron'].isHidden() and page._cards['moss'].isHidden())
-            window.grab().save(str(out/'workshop-speaker.png'))
+            check('independent speaker tab removed',all(b.property('role')!='speaker' for b in page.tab_group.buttons()))
+            check('Nemotron registry entry removed','nemotron' not in page._cards)
             tab('api')
-            check('three native API cards visible',all(not page._cards[k].isHidden() for k in ('spark_asr_v2','qwen31_flash','qwen31_filetrans')))
+            check('current native API cards visible',all(not page._cards[k].isHidden() for k in ('spark_asr_v2','qwen31_filetrans')))
             window.grab().save(str(out/'workshop-api.png'))
-            for preset in ('spark_asr_v2','qwen31_flash','qwen31_filetrans'):
+            for preset in ('spark_asr_v2','qwen31_filetrans'):
                 from .ui import ASR_API_PRESETS
                 window.qwen_asr_api_provider.setCurrentIndex(window.qwen_asr_api_provider.findData(preset))
                 window._apply_asr_preset_fields(preset)
@@ -57,36 +56,14 @@ def start(window,out):
             QApplication.processEvents()
             check('zero verified never claims coverage',any('有效核对 0' in l.text() for l in dlg.findChildren(QLabel)))
             dlg.grab().save(str(out/'glossary-blocked.png'));dlg.close()
-            # Actual owned worker + HTTP parser + offsets, backed by an explicit
-            # local fixture server. This is not a paid provider validation.
-            from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-            posts=[]
-            class Handler(BaseHTTPRequestHandler):
-                def do_POST(self):
-                    body=json.loads(self.rfile.read(int(self.headers['Content-Length'])));posts.append(body)
-                    payload=dict(output=dict(text='你好。',sentence=dict(sentence_id=1,channel_id=0,sentence_end=True,
-                        begin_time=0,end_time=900,text='你好。',words=[dict(text='你好',punctuation='。',begin_time=0,end_time=900,fixed=True,speaker_id=2)])))
-                    self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
-                    self.wfile.write(json.dumps(payload,ensure_ascii=False).encode())
-                def log_message(self,*a):pass
-            server=ThreadingHTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
-            results=[];errors=[]
-            def owned():
-                try:
-                    import numpy as np
-                    from .asr_api_process import transcribe
-                    from .runtime import RuntimeContext,activate_runtime_context
-                    context=RuntimeContext(speaker_source='native',asr_endpoint_snapshot=dict(provider='qwen31_flash',model='qwen-audio-3.1-asr-flash',
-                        protocol='dashscope_asr_flash',url=f'http://127.0.0.1:{server.server_port}/api/v1/services/audio/asr/transcription',api_key='local-fixture'))
-                    with activate_runtime_context(context):
-                        results.extend(transcribe(str(out/'fixture.mp4'),[dict(start=0,end=1,audio=(np.zeros(16000,dtype=np.float32),16000))],publish_primary=True))
-                except Exception:errors.append(traceback.format_exc())
-            worker=threading.Thread(target=owned,daemon=True);worker.start();deadline=time.monotonic()+120
-            while worker.is_alive() and time.monotonic()<deadline:QTest.qWait(50)
-            server.shutdown();require(not worker.is_alive(),'owned worker terminates');require(not errors,'\n'.join(errors))
-            check('owned process dispatches exactly one native Flash HTTP request',len(posts)==1 and posts[0]['model']=='qwen-audio-3.1-asr-flash')
-            check('owned process preserves speaker and seconds',bool(results) and results[0]['speaker']=='API_S02' and results[0]['end']==.9)
-            result['local_http_contract']=dict(request_count=len(posts),results=results,actual_provider=False)
+            # The former short-audio fixture is retired along with its entry.
+            # Paid Filetrans evidence comes from the separate production run.
+            from .llm_config import validate_qwen_asr_endpoint
+            refused=False
+            try:
+                validate_qwen_asr_endpoint(dict(model='qwen-audio-3.1-asr-flash',protocol='dashscope_asr_flash'))
+            except RuntimeError:refused=True
+            check('removed short-audio cannot dispatch a new task',refused)
             if os.environ.get('TWOBYTEASR_PUBLIC_CATALOG')=='1':
                 from .glossary_task_manager import GlossaryUpdateManager
                 from .llm_config import activate_ai_service

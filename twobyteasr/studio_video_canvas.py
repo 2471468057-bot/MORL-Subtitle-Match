@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import sys
 import queue
@@ -116,7 +117,7 @@ class MpvCanvas(QFrame):
         # 首帧 begin 重开，迟到帧一律拒发。
         self._web_live_overlay_active = False
         self._web_overlay_thread: threading.Thread | None = None
-        self._overlay_file_lock = threading.Lock()
+        self._overlay_file_lock = threading.RLock()
         self._subtitle_raster_publisher = None
         self._native_subtitle_visible = True
         self._native_subtitle_visibility_controller = None
@@ -140,6 +141,12 @@ class MpvCanvas(QFrame):
         self._playback_source_dead = False
         self._last_hwdec_snapshot: dict[str, object] = {}
         self._compositor_overlay_dir = studio_data_root() / "mpv-overlays" / uuid.uuid4().hex
+        from .overlay_session import ensure_overlay_session
+        ensure_overlay_session(self._compositor_overlay_dir)
+        self._sync_overlay_busy = set()
+        self._sync_overlay_identity = {}
+        self._sync_overlay_generation = {}
+        self._media_cache_leases = {}
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(16)
@@ -267,6 +274,7 @@ class MpvCanvas(QFrame):
         二十七轮终版：worker 只发原始 PNG 字节，解码（~15ms）也下沉到这里
         ——在 worker 发射路径上同步解码曾把周期拖到 47ms≈22fps。
         """
+        last_frames = {}
         while True:
             item = self._web_fast_queue.get()
             if item is None:
@@ -282,6 +290,10 @@ class MpvCanvas(QFrame):
                 continue
             try:
                 started=perf_counter()
+                frame_identity = (epoch, self._sync_overlay_generation.get(overlay_id, 0), hashlib.sha256(payload).digest(), full_rect.getRect(),
+                    tuple(context.get(k) for k in ('cue_id','web_worker_id','web_content_key','web_generation','web_clock_generation')))
+                if last_frames.get(overlay_id) == frame_identity:
+                    continue
                 decoded = _decode_frame(payload)
                 if decoded is None:
                     continue
@@ -353,9 +365,10 @@ class MpvCanvas(QFrame):
                         self._compositor_overlay_contexts[overlay_id] = context
                 # The publisher, never Qt, waits for mpv's acknowledgement.
                 # Reusing a ring file before mpv reads it can show mixed frames.
-                while (posted and not acknowledged.wait(.005) and controller.running
-                       and controller is self.controller):
+                while posted and not acknowledged.wait(.005) and controller.running:
                     pass  # invalid epochs still retain their pixels until ACK
+                if applied_state.get('ok') and epoch == self._web_live_epoch:
+                    last_frames[overlay_id] = frame_identity
                 self.web_publication_metrics.append({**context,'wall':perf_counter(),'epoch':epoch,
                     'applied_at':applied_state.get('at'),
                     'queue_ms':(started-float(context.get('received_perf',started)))*1000,
@@ -399,6 +412,7 @@ class MpvCanvas(QFrame):
         self._compositor_overlay_dir.mkdir(parents=True, exist_ok=True)
         from .overlay_buffer import OverlayBuffer
         buffers = {}
+        last_frames = {}
         while True:
             item = self._video_fast_queue.get()
             if item is None:
@@ -413,6 +427,9 @@ class MpvCanvas(QFrame):
                 continue
             try:
                 started = perf_counter()
+                frame_identity = (epoch, self._sync_overlay_generation.get(overlay_id, 0), image.cacheKey(), display_rect.getRect())
+                if last_frames.get(overlay_id) == frame_identity:
+                    continue
                 acknowledged = threading.Event()
                 outcome = {}
                 def applied(ok, state=outcome, done=acknowledged):
@@ -443,8 +460,7 @@ class MpvCanvas(QFrame):
                 # Do not rotate back onto a file still being read by mpv.
                 # Waiting belongs to this publisher, never the GUI. The input
                 # queue remains bounded/latest-wins while an actor is busy.
-                while (posted and not acknowledged.wait(.005) and controller.running
-                       and controller is self.controller):
+                while posted and not acknowledged.wait(.005) and controller.running:
                     pass
                 self._video_upload_samples.append(dict(**context, overlay_id=overlay_id,
                     epoch=epoch, started=started, write_ms=(written-started)*1000,
@@ -453,6 +469,7 @@ class MpvCanvas(QFrame):
                     ipc_ack_ms=(outcome['at']-outcome['command_started'])*1000 if 'command_started' in outcome and 'at' in outcome else None,
                     total_ms=(perf_counter()-started)*1000, queue_frames=self._video_fast_queue.qsize()))
                 if posted and outcome.get('ok') and epoch == self._video_overlay_epoch:
+                    last_frames[overlay_id] = frame_identity
                     self._compositor_overlay_slots[overlay_id] = slot
                     self._active_compositor_overlays.add(overlay_id)
                     self._compositor_overlay_contexts[overlay_id] = context
@@ -588,7 +605,8 @@ class MpvCanvas(QFrame):
             if metrics is None:metrics=self._prepared_caption_publications=[]
             def applied(ok,keep=prepared_pixels):
                 metrics.append(dict(cue_id=cue_id,prepared_at=keep.finished,posted_at=posted_at,applied_at=perf_counter(),
-                    applied=bool(ok),alpha_nonzero=keep.raw_geometry['alpha_nonzero']))
+                    applied=bool(ok),alpha_nonzero=keep.raw_geometry['alpha_nonzero'],
+                    scene_token=(context or {}).get('scene_token')))
                 del metrics[:-128]
             posted=self.controller.post_raw_overlay(int(overlay_id),prepared_pixels.raw_path,
                 cue_id=cue_id,
@@ -725,38 +743,74 @@ class MpvCanvas(QFrame):
             self._compositor_overlay_dir.mkdir(parents=True, exist_ok=True)
             self._compositor_directory_ready = True
         with self._overlay_file_lock:
-            slot = 1 - self._compositor_overlay_slots.get(int(overlay_id), 1)
+            geometry = {
+                "x": display_rect.x(), "y": display_rect.y(),
+                "width": cropped.width(), "height": cropped.height(),
+                "stride": cropped.bytesPerLine(),
+                "display_width": display_rect.width(), "display_height": display_rect.height(),
+            }
+            generation = self._sync_overlay_generation.get(int(overlay_id), 0)
+            identity = (generation, hashlib.sha256(cropped.constBits()).digest(), tuple(geometry.values()),
+                        (context or {}).get('cue_id'), self._web_live_epoch, self._video_overlay_epoch)
+            if self._sync_overlay_identity.get(int(overlay_id)) == identity:
+                return True
+            slots = [slot for slot in (0, 1) if (int(overlay_id), slot) not in self._sync_overlay_busy]
+            if not slots:
+                # Two immutable submissions are already waiting for reads.
+                # Do not overwrite either; the next visual tick retries.
+                return False
+            slot = slots[0]
             # The video publisher retains mmap-backed overlay-N-S files.
             # A gap/offline synchronous frame must not truncate those files:
             # Windows rejects it with EINVAL while the mapping is alive.
             path = self._compositor_overlay_dir / f"overlay-{int(overlay_id)}-sync-{slot}.rgba"
             path.write_bytes(cropped.constBits())
+            from .overlay_session import lease_overlay
+            lease = lease_overlay(path, 'mpv_sync_overlay')
+            self._sync_overlay_busy.add((int(overlay_id), slot))
+            released = threading.Event()
+            def consumed(ok, oid=int(overlay_id), buffer_slot=slot, target=path, held=lease, frame_identity=identity, gen=generation):
+                with self._overlay_file_lock:
+                    if released.is_set():
+                        return
+                    released.set()
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    self._sync_overlay_busy.discard((oid, buffer_slot))
+                    if ok and gen == self._sync_overlay_generation.get(oid, 0):
+                        self._sync_overlay_identity[oid] = frame_identity
+                try:
+                    held.__exit__(None, None, None)
+                except Exception:
+                    pass
             try:
-                geometry = {
-                    "x": display_rect.x(),
-                    "y": display_rect.y(),
-                    "width": cropped.width(),
-                    "height": cropped.height(),
-                    "stride": cropped.bytesPerLine(),
-                    "display_width": display_rect.width(),
-                    "display_height": display_rect.height(),
-                }
                 post = getattr(self.controller, "post_raw_overlay", None)
                 web_context = dict(context or {}) if (context or {}).get('web_worker_id') is not None else None
-                extra = {}
+                extra = {'on_applied': consumed}
                 if (context or {}).get('cue_id'):extra['cue_id']=context['cue_id']
                 if web_context is not None:
                     epoch = self._web_live_epoch
                     def web_applied(ok, immutable_context=web_context, web_epoch=epoch):
+                        consumed(ok)
                         self.web_initial_publication_metrics.append({**immutable_context,
                             'epoch':web_epoch,'applied':bool(ok),'applied_at':perf_counter(),
                             'channel':'initial_native_overlay'})
                     extra.update(on_applied=web_applied,valid_when=lambda epoch=epoch:epoch==self._web_live_epoch)
                 if not callable(post) or not post(int(overlay_id), path, **geometry, **extra):
+                    # An asynchronous rejection has already completed its
+                    # callback and released the file; never send it again.
+                    if callable(post):
+                        consumed(False)
+                        return False
                     self.controller.set_raw_overlay(int(overlay_id), path, **geometry)
                     if web_context is not None:
                         web_applied(True)
+                    else:
+                        consumed(True)
             except (OSError, RuntimeError):
+                consumed(False)
                 return False
         overlay_id = int(overlay_id)
         action = "UPDATE" if overlay_id in self._active_compositor_overlays else "CREATE"
@@ -790,6 +844,8 @@ class MpvCanvas(QFrame):
                 != details.get('cue_id')):
             # A late hide for the old cue cannot retire a newer overlay owner.
             return False
+        self._sync_overlay_identity.pop(overlay_id, None)
+        self._sync_overlay_generation[overlay_id] = self._sync_overlay_generation.get(overlay_id, 0) + 1
         if self._subtitle_raster_publisher is not None:
             self._subtitle_raster_publisher.revoke(overlay_id)
         if overlay_id not in self._active_compositor_overlays and not force:
@@ -877,6 +933,7 @@ class MpvCanvas(QFrame):
         self.set_native_subtitle_visible(True)
 
     def load(self, media_path: str, ass_path: str = "", *, start_seconds: float | None = None) -> None:
+        self._hold_media_cache(media_path)
         self._clock_only = False
         self._active_seek_trace = None
         self._media_path = media_path
@@ -941,6 +998,7 @@ class MpvCanvas(QFrame):
 
         self._clock_only = False
         source = str(Path(media_path).absolute())
+        self._hold_media_cache(source)
         self._media_path = source
         self._ass_path = str(ass_path or "")
         self._video_display_size = (0, 0)
@@ -980,6 +1038,7 @@ class MpvCanvas(QFrame):
         if controller is None or not controller.running or not callable(post):
             return False
         source = str(Path(media_path).absolute())
+        self._hold_media_cache(source)
         target = max(0.0, float(source_seconds))
         display_seconds = max(0, int(project_ms)) / 1000.0
         trace = self._active_seek_trace
@@ -1022,7 +1081,7 @@ class MpvCanvas(QFrame):
         self._sync_timer.start()
         return True
 
-    def suspend_media_async(self) -> bool:
+    def suspend_media_async(self, *, reanchor: bool = True) -> bool:
         """Clear a gap/offline frame through the actor without blocking Qt."""
 
         controller = self.controller
@@ -1037,7 +1096,8 @@ class MpvCanvas(QFrame):
         self._eof_reached = False
         self._timer.stop()
         self._sync_timer.stop()
-        self._set_interpolation_base(self.visual_position(), paused=True)
+        if reanchor:
+            self._set_interpolation_base(self.visual_position(), paused=True)
         self.video_display_size_changed.emit(0, 0)
         return True
 
@@ -1045,17 +1105,25 @@ class MpvCanvas(QFrame):
         """Keep the project clock and caption surface alive without a source."""
         if self._clock_only:
             return
-        paused = self._paused
+        paused = self._paused and not self._buffered_play_pending
         self.clear_caption_boundaries()
-        self.suspend_media_async()
+        # Retire source observations before any Qt signal can reenter the page.
+        # suspend_media_async used to publish the old 3092s source position after
+        # the page had switched to project time, clamping a 458s edit to its tail.
         self._clock_only = True
+        snapshot = self._playback_clock.begin_unattached_position(project_ms, paused=paused)
+        self._buffered_play_pending = False
+        self._buffered_play_timer.stop()
+        self._duration = max(0, duration_ms) / 1000.0
+        self._duration_override = self._duration
+        self._adopt_playback_snapshot(snapshot, emit=False)
+        self.suspend_media_async(reanchor=False)
+        self._media_attached = False
         self._media_path = ''
         self._startup_state = 'READY'
         self._playback_source_dead = False
-        self._duration = max(0, duration_ms) / 1000.0
-        self._duration_override = self._duration
-        snapshot = self._playback_clock.begin_unattached_position(project_ms, paused=paused)
-        self._adopt_playback_snapshot(snapshot)
+        self._eof_reached = False
+        self.position_changed.emit(max(0, project_ms) / 1000.0)
         self._timer.start()
 
     def enter_empty_playback_state(self) -> None:
@@ -1119,6 +1187,39 @@ class MpvCanvas(QFrame):
         self._external_clock_sequence = -1
         self._external_clock_source_generation = -1
         self.position_changed.emit(0.0)
+        self._release_media_caches_after_idle()
+
+    def _hold_media_cache(self, path):
+        """Keep every decoded project source protected through asynchronous switches."""
+        key = str(Path(path).absolute())
+        leases = getattr(self, '_media_cache_leases', None)
+        if leases is None:
+            leases = self._media_cache_leases = {}
+        if key not in leases:
+            from .storage_service import cache_lease
+            lease = cache_lease(key); lease.__enter__()
+            leases[key] = lease
+
+    def _release_media_caches_after_idle(self):
+        leases, self._media_cache_leases = getattr(self, '_media_cache_leases', {}), {}
+        controller = self.controller
+        def release():
+            # A stop is asynchronous. Its ACK (or process termination) is the
+            # point at which it is safe to remove the old file's lease.
+            deadline = time.monotonic() + 5
+            while controller is not None and controller.running:
+                observe = getattr(controller, 'observed_properties', None)
+                state = observe() if callable(observe) else {}
+                if state.get('idle-active'):
+                    break
+                if time.monotonic() >= deadline:
+                    # Keep unconfirmed leases; process death makes them stale.
+                    self._media_cache_leases.update(leases)
+                    return
+                time.sleep(.02)
+            for lease in leases.values():
+                lease.__exit__(None, None, None)
+        threading.Thread(target=release, name='media-cache-lease-release', daemon=True).start()
 
     def restore_after_empty(self, media_path: str, ass_path: str = "") -> None:
         """Reattach media to the existing mpv child; never starts a process."""
@@ -1252,6 +1353,9 @@ class MpvCanvas(QFrame):
 
     def _observe_external_clock(self) -> bool:
         """Adopt the latest AudioEngine sample into the sole PlaybackClock."""
+        page = self._studio_page()
+        if getattr(page, '_audio_tail_waiting', lambda:False)():
+            return False  # old paused telemetry cannot undo a new play intent
         provider = self._external_clock_provider
         if not self._external_clock_enabled:
             return False
@@ -1281,9 +1385,14 @@ class MpvCanvas(QFrame):
         except (TypeError, ValueError):
             return False
         if sequence <= self._external_clock_sequence:
+            self._complete_external_clock_startup(payload)
             return False
         self._external_clock_sequence = sequence
         source_generation = int(payload.get("source_generation") or 0)
+        # The two physical actors have independent sequence counters. Fence
+        # audio telemetry above, then publish it in the shared clock's actor
+        # sequence domain; a video EOF must not reject a lower audio counter.
+        shared_sequence = max(sequence, self._playback_clock.snapshot().actor_sequence + 1)
         observed_at = float(payload.get("clock_monotonic_ts") or time.monotonic())
         paused = bool(payload.get("paused", self._paused))
         rate = float(payload.get("effective_rate") or self._playback_rate or 1.0)
@@ -1295,7 +1404,7 @@ class MpvCanvas(QFrame):
         snapshot, accepted, _reason = self._playback_clock.observe(
             self._source_position_to_project_ms(observed_ms / 1000.0, content_domain=True),
             source_generation=int(transport[0]),
-            actor_sequence=sequence,
+            actor_sequence=shared_sequence,
             observed_monotonic_ts=observed_at,
             playback_rate=rate,
             paused=paused,
@@ -1306,15 +1415,28 @@ class MpvCanvas(QFrame):
         )
         if accepted:
             self._adopt_playback_snapshot(snapshot)
-            if (self._startup_state != 'READY' and not self._media_has_video
-                    and int(payload.get('decoded_bytes') or 0)>0):
-                # Audio-only readiness is owned by the real audio endpoint.
-                # _reconcile_position deliberately skips mpv in this mode,
-                # so waiting for its video/frame gate can never complete.
-                play_requested = self._startup_play_requested
-                self._set_startup_state('READY', media_clock_seconds=observed_ms/1000.)
-                if play_requested:QTimer.singleShot(0, lambda:self.set_paused(False))
+            self._complete_external_clock_startup(payload)
         return accepted
+
+    def _complete_external_clock_startup(self, payload):
+        if self._startup_state == 'READY' or self._playback_clock.exact_seek_pending:
+            return
+        page = self._studio_page()
+        tail = getattr(page, '_owned_audio_tail', None)
+        from .owned_audio_tail import held_video_frame_ready
+        tail_frame_ready = held_video_frame_ready(tail,
+            generation=self._playback_clock.generation, attached=self._media_attached,
+            running=bool(self.controller is not None and self.controller.running),
+            frame=getattr(self.controller, 'observed_position', lambda:{})(),
+            properties=getattr(self.controller, 'observed_properties', lambda:{})())
+        if (self._media_has_video and (not tail_frame_ready
+                or not page._audio_tail_startup_caption_ready())):
+            return
+        if int(payload.get('decoded_bytes') or 0) <= 0:
+            return
+        play_requested = self._startup_play_requested
+        self._set_startup_state('READY', media_clock_seconds=float(payload['estimated_source_ms'])/1000.)
+        if play_requested:QTimer.singleShot(0, lambda:self.set_paused(False))
 
     def _emit_initial_video_size(self) -> None:
         """Push real video display size (dw/dh) to listeners as soon as it is known.
@@ -1410,7 +1532,8 @@ class MpvCanvas(QFrame):
         self._trace_position_mutation(previous_ms, next_base * 1000.0, snapshot)
         page = self._studio_page()
         if page is not None:
-            owner = "AUDIO" if self._external_clock_active() else "MPV"
+            owner = ("AUDIO_WAIT" if getattr(page, '_audio_tail_waiting', lambda:False)()
+                     else "AUDIO" if self._external_clock_active() else "MPV")
             # 2026-09-18 D2 心跳降采样：heartbeat 快照仅 1Hz 落盘；暂停/倍速/时钟
             # 属主/媒体源变化立即落盘。此前每 150ms 无条件两行长行——暂停态挂机
             # 数小时即数百 MB 日志，后台渲染线程持续磁盘写 + GIL 竞争。非心跳
@@ -1779,6 +1902,10 @@ class MpvCanvas(QFrame):
         return bool(callback()) if callable(callback) else False
 
     def _visual_tick(self) -> None:
+        page = self._studio_page()
+        refresh = getattr(page, '_refresh_audio_tail_clock', None)
+        if callable(refresh):
+            refresh()
         now_ns = self._tick_clock.nsecsElapsed()
         if self._last_visual_tick_ns:
             interval = (now_ns - self._last_visual_tick_ns) / 1_000_000
@@ -1808,7 +1935,9 @@ class MpvCanvas(QFrame):
         Waiting for the 150 ms lifecycle reconcile left the interpolation
         behind media frames even after their observations were in memory.
         """
-        if self._clock_only or self._paused or self._external_clock_active() or not self.controller:return
+        page = self._studio_page()
+        waiting_tail = getattr(page, '_audio_tail_waiting', lambda:False)()
+        if waiting_tail or self._clock_only or self._paused or self._external_clock_active() or not self.controller:return
         get_observation=getattr(self.controller,'observed_position',None)
         if not callable(get_observation):return
         observation=get_observation()
@@ -1833,6 +1962,12 @@ class MpvCanvas(QFrame):
             self._adopt_playback_snapshot(snapshot,emit=False)
 
     def _reconcile_position(self) -> None:
+        page = self._studio_page()
+        refresh = getattr(page, '_refresh_audio_tail_clock', None)
+        if callable(refresh):
+            refresh()
+        if getattr(page, '_audio_tail_waiting', lambda:False)():
+            return
         if self._eof_reached and self._paused:
             # Keep the terminal project anchor until an explicit seek/play.
             # A delayed decoder pause sample may still point at its last
@@ -2358,6 +2493,10 @@ class MpvCanvas(QFrame):
                 self._active_seek_trace['requested_project_ms'] = int(project_ms)
                 self._tag_seek_project_domain(project_ms, target)
         snapshot = self._playback_clock.begin_seek(clock_ms)
+        page = self._studio_page()
+        prepare_tail = getattr(page, '_prepare_audio_tail_seek', None)
+        if callable(prepare_tail):
+            prepare_tail(content_seconds, project_ms if project_ms is not None else round(clock_ms))
         self._sync_timer.start(16)
         self._eof_reached = False
         self._adopt_playback_snapshot(snapshot)
@@ -2383,6 +2522,8 @@ class MpvCanvas(QFrame):
         self.mark_seek_stage("T3_seek_command_posted", accurate=bool(accurate))
 
     def set_paused(self, paused: bool) -> None:
+        page = self._studio_page()
+        invalidate_tail = getattr(page, '_invalidate_audio_tail', None)
         if self._clock_only:
             self._eof_reached = False
             snapshot = self._playback_clock.set_local_state(
@@ -2428,6 +2569,11 @@ class MpvCanvas(QFrame):
         if self._project_time_mapping_enabled:
             target = (self._project_source_in_ms +
                       (current*1000-self._project_timeline_in_ms)*self._project_playback_rate)/1000
+        prepare_tail = getattr(page, '_prepare_audio_tail_seek', None)
+        if bool(paused) != bool(self._paused) and callable(prepare_tail):
+            prepare_tail(target, round(current*1000), transition=True)
+        elif paused and callable(invalidate_tail):
+            invalidate_tail()
         try:
             posted = callable(post) and post(paused, position_seconds=target if paused else None)
         except TypeError:
@@ -2448,6 +2594,10 @@ class MpvCanvas(QFrame):
             return
         resume = not self._paused or self._buffered_play_pending
         changing = abs(float(value)-self._playback_rate) > .001
+        if changing:
+            invalidate = getattr(self._studio_page(), '_invalidate_audio_tail', None)
+            if callable(invalidate):
+                invalidate()
         if changing and resume:
             # Freeze the common presentation anchor until the new atempo
             # generation has real PCM. Long FLV seeks can take seconds; letting
@@ -2497,7 +2647,9 @@ class MpvCanvas(QFrame):
         self._sync_timer.stop()
         for overlay_id in tuple(self._active_compositor_overlays):
             self.remove_compositor_overlay(overlay_id, force=True)
+        subtitle_thread = None
         if self._subtitle_raster_publisher is not None:
+            subtitle_thread = self._subtitle_raster_publisher.thread
             self._subtitle_raster_publisher.close()
             self._subtitle_raster_publisher=None
         # 二十七轮：停掉 web-live 发布线程（毒丸；线程 daemon，进程退出也无碍）。
@@ -2510,4 +2662,19 @@ class MpvCanvas(QFrame):
             pass
         detached = self.controller
         self.controller = None
+        leases, self._media_cache_leases = getattr(self, '_media_cache_leases', {}), {}
+        def release_after_close():
+            deadline = time.monotonic() + 5
+            while detached is not None and detached.running:
+                if time.monotonic() >= deadline:
+                    self._media_cache_leases.update(leases)
+                    return
+                time.sleep(.02)
+            for lease in leases.values():
+                lease.__exit__(None, None, None)
+        threading.Thread(target=release_after_close, name='media-cache-close-release', daemon=True).start()
+        from .overlay_session import retire_overlay_session
+        retire_overlay_session(self._compositor_overlay_dir,
+            workers=(self._web_overlay_thread, self._video_overlay_thread, subtitle_thread),
+            controller=detached)
         return detached

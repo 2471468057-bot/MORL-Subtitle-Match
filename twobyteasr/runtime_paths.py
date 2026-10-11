@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
@@ -135,7 +137,46 @@ def model_files_present(folder: Path, required: Iterable[str]) -> bool:
         return False
 
 
+_SCAN_SCOPE = threading.local()
+
+
+@contextmanager
+def single_scan():
+    """Within one model scan, resolve each path and read each record once.
+
+    A registry scan looked up ~15 models x several roots and re-resolved the
+    same paths and re-read the same files ~200 times (~107 ms per scan, about
+    nine scans while the main window opens). Nothing outlives the scan, so an
+    install, removal or detach is seen by the next scan as before.
+    """
+    outer = getattr(_SCAN_SCOPE, "memo", None)
+    if outer is None:
+        _SCAN_SCOPE.memo = {}
+    try:
+        yield
+    finally:
+        if outer is None:
+            _SCAN_SCOPE.memo = None
+
+
+def scan_memo(key, compute):
+    """``compute()`` once per key inside :func:`single_scan`, else every call."""
+    memo = getattr(_SCAN_SCOPE, "memo", None)
+    if memo is None:
+        return compute()
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
+
+
 def discover_legacy_model_roots(install_root: Path, data_root: Path) -> list[Path]:
+    return list(scan_memo(
+        ("legacy_model_roots", str(install_root), str(data_root), os.environ.get(MODEL_ROOT_ENV, ""),
+         os.environ.get("TWOBYTEASR_TEST_ROOT", "")),
+        lambda: _discover_legacy_model_roots(install_root, data_root)))
+
+
+def _discover_legacy_model_roots(install_root: Path, data_root: Path) -> list[Path]:
     """Candidate directories that already hold downloaded models.
 
     Order is preference, not search exclusivity. Callers pick the best
@@ -155,6 +196,16 @@ def discover_legacy_model_roots(install_root: Path, data_root: Path) -> list[Pat
     env = os.environ.get(MODEL_ROOT_ENV, "").strip()
     if env:
         add(Path(env))
+    # Keep explicitly registered earlier destinations discoverable after the
+    # user changes the download root. We never move their weights.
+    try:
+        saved = json.loads(_config_path(data_root).read_text(encoding='utf-8-sig'))
+    except FileNotFoundError:
+        saved = {}
+    if isinstance(saved, dict):
+        for value in [saved.get('model_root'), *saved.get('discovered_model_roots', ())]:
+            if value:
+                add(Path(str(value)))
     if os.environ.get('TWOBYTEASR_TEST_ROOT'):
         if not candidates:
             add(data_root / 'Models')
@@ -358,7 +409,15 @@ def iter_model_dir_candidates(
     seen: set[str] = set()
     paths = get_runtime_paths()
     if os.environ.get("TWOBYTEASR_TEST_ROOT"):
-        yield (paths.model_root / name).resolve()
+        from .model_associations import is_model_detached
+        candidate = (paths.model_root / name).resolve()
+        for parent in (paths.model_root, *(Path(p) for p in paths.discovered_model_roots)):
+            path = parent / name
+            candidate = scan_memo(("resolve", str(path)), path.resolve)
+            key = os.path.normcase(str(candidate))
+            if key not in seen and not is_model_detached(candidate):
+                seen.add(key)
+                yield candidate
         return
     install = Path(install_root) if install_root is not None else paths.install_root
     ordered = [
@@ -370,10 +429,13 @@ def iter_model_dir_candidates(
         ordered.append(extra / name)
     for candidate in ordered:
         try:
-            resolved = candidate.resolve()
+            resolved = scan_memo(("resolve", str(candidate)), candidate.resolve)
         except OSError:
             continue
         key = os.path.normcase(str(resolved))
+        from .model_associations import is_model_detached
+        if is_model_detached(resolved):
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -390,7 +452,7 @@ def resolve_model_dir(folder_name: str, *, install_root: Path | None = None) -> 
     for candidate in candidates:
         if model_files_present(candidate, required):
             return candidate
-    return next((p for p in candidates if p.is_dir()), candidates[0] if candidates else get_runtime_paths().model_root / _leaf_model_name(folder_name))
+    return next((p for p in candidates if p.is_dir()), candidates[0] if candidates else user_data_root() / 'Models' / _leaf_model_name(folder_name))
 
 
 def source_and_packaged_roots() -> dict[str, str]:

@@ -16,6 +16,17 @@ from .visual_snapshot import build_visual_cue_snapshot
 from .visual_runtime import VisualOwner
 
 
+# Every cached frame is a full preview-size raster (1280x720 is ~3.7 MB). A
+# 96-entry count limit could pin ~350 MB of neighbours nobody drags; bound the
+# warm cache by bytes instead. The warm set is at most eight nearby cues.
+_CACHE_BUDGET_BYTES = 64 * 1024 * 1024
+
+
+def _entry_bytes(entry):
+    pixmap = entry[0]
+    return max(1, pixmap.width() * pixmap.height() * 4)
+
+
 class CueTimingPreview(QObject):
     ready = Signal(int, str, object, object)
 
@@ -29,6 +40,7 @@ class CueTimingPreview(QObject):
         self.bound_cue = ""
         self.ready.connect(self._ready)
         self._cache = {}
+        self._cache_bytes = 0
         self._warm_generation = 0
         self._warm_timer = QTimer(self)
         self._warm_timer.setSingleShot(True)
@@ -89,7 +101,8 @@ class CueTimingPreview(QObject):
             try:
                 scene=compiled_scene_for_snapshot(snapshot)
                 image=render_live_snapshot(snapshot,width=width,height=height,device_pixel_ratio=1.)
-                if scene is not None and not self.active:
+                # A project closed meanwhile (release()) must not refill the shared cache.
+                if scene is not None and not self.active and generation==self._warm_generation:
                     key=live_layer_cache_key(snapshot,width=width,height=height,device_pixel_ratio=1.)
                     if GLOBAL_LIVE_LAYER_CACHE.materialize(key,snapshot=snapshot) is None:
                         GLOBAL_LIVE_LAYER_CACHE.store(key,render_live_layers(snapshot,width=width,height=height,device_pixel_ratio=1.))
@@ -97,6 +110,17 @@ class CueTimingPreview(QObject):
             except Exception:
                 self.ready.emit(generation,snapshot.cue_id,None,snapshot)
         threading.Thread(target=prepare,daemon=True,name="timeline-live-warm").start()
+
+    def release(self):
+        """Drop the closed project's prepared rasters; late warm results are fenced."""
+        self._warm_timer.stop()
+        self._warm_generation += 1
+        self._warm_ids = []
+        self.frames = {}
+        self.values = {}
+        self.bound_cue = ""
+        self._cache.clear()
+        self._cache_bytes = 0
 
     def start(self, values):
         page = self.page
@@ -116,9 +140,16 @@ class CueTimingPreview(QObject):
         cue_ids = set(values)
         cue_ids.update(c.id for c in page.project.cues
                        if c.start_ms <= page.timeline.playhead_ms < c.end_ms)
-        snapshots = [build_visual_cue_snapshot(page.project, key, width=width,
-                                              height=height, fps=30.) for key in cue_ids]
         canvas = page.advanced_cue_overlay
+        # Only cues with a prepared raster can get a frame here; building a
+        # style snapshot for every other dragged cue cost ~1.5 ms each per
+        # press (hundreds in a large selection) and never produced a frame.
+        prepared = {entry[1].cue_id for entry in self._cache.values()}
+        if canvas._snapshot is not None:
+            prepared.add(canvas._snapshot.cue_id)
+        snapshots = [snapshot for key in cue_ids & prepared
+                     if (snapshot := build_visual_cue_snapshot(page.project, key, width=width,
+                                                               height=height, fps=30.)) is not None]
         for snapshot in snapshots:
             if (canvas._snapshot is not None
                     and canvas._snapshot.stable_hash() == snapshot.stable_hash()
@@ -126,8 +157,11 @@ class CueTimingPreview(QObject):
                 self.frames[snapshot.cue_id] = (QPixmap(canvas._source), snapshot, canvas._compiled_scene)
 
         for snapshot in snapshots:
-            cached=self._cache.get(snapshot.stable_hash())
-            if cached is not None:self.frames[snapshot.cue_id]=cached
+            key=snapshot.stable_hash()
+            cached=self._cache.pop(key,None)
+            if cached is not None:
+                self._cache[key]=cached  # most recently used survives the budget
+                self.frames[snapshot.cue_id]=cached
         self.present()
 
     def _ready(self, generation, cue_id, image, snapshot):
@@ -136,8 +170,13 @@ class CueTimingPreview(QObject):
         if generation != self._warm_generation or image is None:return
         raster,scene=image
         entry=(QPixmap.fromImage(raster),snapshot,scene)
-        self._cache[snapshot.stable_hash()]=entry
-        if len(self._cache)>96:self._cache.pop(next(iter(self._cache)))
+        key=snapshot.stable_hash()
+        previous=self._cache.pop(key,None)
+        if previous is not None:self._cache_bytes-=_entry_bytes(previous)
+        self._cache[key]=entry
+        self._cache_bytes+=_entry_bytes(entry)
+        while self._cache_bytes>_CACHE_BUDGET_BYTES and len(self._cache)>1:
+            self._cache_bytes-=_entry_bytes(self._cache.pop(next(iter(self._cache))))
         if self.active:
             width,height=self.page._advanced_preview_size()
             current=build_visual_cue_snapshot(self.page.project,cue_id,width=width,height=height,fps=30.)

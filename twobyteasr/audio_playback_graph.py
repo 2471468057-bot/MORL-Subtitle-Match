@@ -170,14 +170,14 @@ def solo_track_ids(project: Any) -> frozenset[str]:
         for track in (*getattr(project, "video_tracks", ()), *getattr(project, "audio_tracks", ()))
         if bool(getattr(track, "soloed", False))
     )
-    aliases = {g.audio_track_id:g.video_track_id for g in getattr(project,'av_track_groups',()) if g.video_track_id}
+    aliases = {g.audio_track_id:g.video_track_id for g in getattr(project,'av_track_groups',()) if g.linked and g.video_track_id}
     return frozenset(aliases.get(key,key) for key in ids)
 
 
 def set_audio_track_solo(project: Any, track_id: str, enabled: bool) -> None:
     current = set(solo_track_ids(project))
     track_id = str(track_id or "")
-    track_id = next((g.video_track_id for g in getattr(project,'av_track_groups',()) if g.audio_track_id==track_id and g.video_track_id),track_id)
+    track_id = next((g.video_track_id for g in getattr(project,'av_track_groups',()) if g.linked and g.audio_track_id==track_id and g.video_track_id),track_id)
     if enabled:
         current.add(track_id)
     else:

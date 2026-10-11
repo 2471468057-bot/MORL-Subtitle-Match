@@ -35,13 +35,30 @@ def user_text(widget):
     return widget
 
 
+_REVERSE_TRANSLATIONS = None
+
+
+def _reverse_translations():
+    """Translated text -> Chinese source, rebuilt only if a table changes.
+
+    apply() runs for every shown window; rebuilding this map each time cost
+    ~0.4 ms per call and hundreds of calls at startup.
+    """
+    global _REVERSE_TRANSLATIONS
+    from .i18n import _KNOWN_KEYS, _TRANSLATIONS
+    key = (id(_KNOWN_KEYS), tuple((language, id(table), len(table)) for language, table in _TRANSLATIONS.items()))
+    if _REVERSE_TRANSLATIONS is None or _REVERSE_TRANSLATIONS[0] != key:
+        _REVERSE_TRANSLATIONS = (key, {value: source for table in _TRANSLATIONS.values() for source,value in table.items()})
+    return _REVERSE_TRANSLATIONS[1]
+
+
 def apply(root, language):
     from PySide6.QtCore import QSignalBlocker, Qt
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import (QAbstractButton, QComboBox, QGroupBox, QLabel,
         QLineEdit, QPlainTextEdit, QTextEdit, QTabBar, QTableWidget, QListWidget, QPushButton, QWidget)
-    from .i18n import _KNOWN_KEYS, _TRANSLATIONS, translate, render_arguments
-    reverse = {value: source for table in _TRANSLATIONS.values() for source,value in table.items()}
+    from .i18n import _KNOWN_KEYS, translate, render_arguments
+    reverse = _reverse_translations()
 
     def property_text(obj, prop, text, setter):
         if prop == "text" and obj.property("i18nUserText"):
@@ -98,7 +115,10 @@ def apply(root, language):
         seen.add(id(obj))
         if isinstance(obj, (QLabel, QAbstractButton, QAction)):
             property_text(obj, "text", obj.text(), obj.setText)
-        if isinstance(obj, QPushButton) and obj.text() and obj.minimumWidth() != obj.maximumWidth():
+        # flexibleWidth: the owner reflows the button itself (it must not pin a
+        # parent's minimum width); every other button keeps its full text.
+        if (isinstance(obj, QPushButton) and obj.text() and obj.minimumWidth() != obj.maximumWidth()
+                and not obj.property('flexibleWidth')):
             if not hasattr(obj, '_i18n_base_minimum'):
                 obj._i18n_base_minimum = obj.minimumWidth()
             content = obj.fontMetrics().horizontalAdvance(obj.text()) + 28 + (obj.iconSize().width()+6 if not obj.icon().isNull() else 0)

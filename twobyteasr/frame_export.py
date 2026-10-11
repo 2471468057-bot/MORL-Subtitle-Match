@@ -59,6 +59,12 @@ def save_project_frame(project, graph, milliseconds, directory, name, *, subtitl
     if not directory.is_dir():raise OSError('保存帧目录不存在，请重新选择目录。')
     ms=Fraction(str(milliseconds));duration=timeline_duration_ms(project)
     if ms<0 or ms>=duration:raise ValueError('播放头须位于工程内的有效视频帧，片尾出点不包含。')
+    # Clip coordinates use the preview/export content clock. Addressing the
+    # original FLV timestamps here selects an earlier picture after a gap.
+    # Only visible video at this instant belongs to a still: unrelated audio
+    # and later/offline clips must not start a whole-recording preparation.
+    from .timeline_media import resolve_frame_graph
+    graph=resolve_frame_graph(graph,ms,ffmpeg)
     width=int(graph['width'] or 1920);height=int(graph['height'] or 1080)
     image=QImage(width,height,QImage.Format_ARGB32_Premultiplied);image.fill(Qt.black)
     assets={a['asset_id']:a for a in graph['media_pool']};receipts=[]
@@ -127,4 +133,5 @@ def save_project_frame(project, graph, milliseconds, directory, name, *, subtitl
         except BaseException:
             output.unlink(missing_ok=True);raise
     return dict(path=str(output),project_id=project.project_id,milliseconds=float(ms),width=width,height=height,
-                subtitles=subtitles,decode=receipts,elapsed_seconds=time.perf_counter()-started)
+                subtitles=subtitles,decode=receipts,media_timebases=graph.get('media_timebases',{}),
+                elapsed_seconds=time.perf_counter()-started)

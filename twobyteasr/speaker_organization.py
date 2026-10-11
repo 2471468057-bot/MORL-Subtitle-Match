@@ -7,7 +7,7 @@ BACKGROUND = 'GAME_BACKGROUND'
 
 
 def normalized_speaker_mode(mode):
-    return str(mode) if mode in {'moss','ecapa','filetrans','native','nemotron'} else 'single'
+    return str(mode) if mode in {'moss','ecapa','filetrans','native','nemotron','diarizen'} else 'single'
 
 
 def utterance_counts(rows):
@@ -75,16 +75,21 @@ def apply_new_project_policy(project):
     for label in {cue.speaker_id for cue in project.cues}:
         cache[label]=[asdict(cue) for cue in project.cues if cue.speaker_id==label]
     mode = normalized_speaker_mode(evidence.get('processing',{}).get('mode'))
+    # This policy only constructs NEW projects. Recognition-stage 'single'
+    # bookmarks are retired; explicit editorial merges still use organize().
+    if mode == 'single':
+        mode = 'native'
+
     state = project.generation_metadata.setdefault('speaker_organization',{})
     state.update(mode=mode,threshold=int(state.get('threshold',10)),
         counting_unit='unique original ASR utterance before caption segmentation',
         utterance_counts=utterance_counts(evidence.get('raw_segments',[])))
-    if mode in {'moss','nemotron','native','filetrans'}:
+    if mode in {'moss','nemotron','native','filetrans','diarizen'}:
         # Explicit diarization labels have no automatic editorial host identity.
         # Keep every lane until an explicit, undoable editorial decision.
-        state['needs_manual_host_selection']=True
+        state['needs_manual_host_selection']=len(project.speakers) > 1
         evidence['roles']={label:'unconfirmed' for label in evidence.get('roles',{})}
-        evidence['needs_confirmation']=True
+        evidence['needs_confirmation']=len(project.speakers) > 1
         for speaker in project.speakers:speaker.is_host=False
         return
     if mode == 'single':

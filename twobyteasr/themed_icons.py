@@ -21,7 +21,7 @@ import qtawesome as qta
 from .ui_theme import ThemeDefinition, theme_definition
 
 ICON_ROLES = (
-    "primary", "secondary", "muted", "disabled", "on_accent", "accent",
+    "primary", "secondary", "muted", "disabled", "on_accent", "accent", "warning",
     "window_control", "toolbar_primary", "toolbar_secondary", "toolbar_disabled",
 )
 
@@ -39,14 +39,22 @@ def _prime_platform_font_fallback() -> None:
     app = QApplication.instance()
     if app is None:
         return
+    import time
+    started = time.perf_counter()
     if sys.platform == "win32":
         families = {str(item).casefold() for item in QFontDatabase.families()}
         if "microsoft yahei ui" not in families:
             fallback = Path("C:/Windows/Fonts/msyh.ttc")
             if fallback.is_file():
                 QFontDatabase.addApplicationFont(str(fallback))
+    # The first font with a fallback list makes Qt's DirectWrite database
+    # open every installed font family; normally ~0.1 s, but seconds when a
+    # sign-in session holds thousands of registered font copies. Timed so
+    # startup traces show this machine-state cost separately.
     QFontMetricsF(app.font()).horizontalAdvance("字幕")
     _FONT_FALLBACK_PRIMED = True
+    from .startup_trace import mark
+    mark("FONT_FALLBACK_READY", duration_ms=round((time.perf_counter() - started) * 1000, 1))
 
 
 def _active_theme(theme: ThemeDefinition | None) -> ThemeDefinition:
@@ -66,7 +74,8 @@ def icon_role_color(role: str, theme: ThemeDefinition | None = None) -> str:
         "muted": active.text_muted,
         "disabled": active.disabled,
         "on_accent": active.text_on_accent,
-        "accent": active.accent,
+        "accent": active.accent_text,
+        "warning": active.warning,
         "window_control": active.text,
         "toolbar_primary": active.text,
         "toolbar_secondary": active.text_secondary,

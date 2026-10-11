@@ -7,6 +7,43 @@ from __future__ import annotations
 import math
 import re
 import statistics
+from copy import copy
+
+
+def project_word_boundaries(project, cue):
+    """Read measured cue boundaries in the current display clock.
+
+    A saved complete alignment can still prove an unchanged first/last token
+    after a spelling edit in the middle. A lone raw word or estimated spacing
+    cannot. This never writes back to the immutable recognition evidence.
+    """
+    if not all(hasattr(project, key) for key in ('cues', 'render_settings', 'studio_state')):
+        return None, None
+    from .cue_word_alignment import cue_words, content_positions
+    from .word_timing_provenance import estimated_word_timing
+    view = copy(project)
+    view.asr_evidence = {ref: row for ref, row in project.asr_evidence.items()
+                        if not row.get('speaker_id') or row['speaker_id'] == cue.speaker_id}
+    words, reason = cue_words(view, cue)
+    if words and reason in ('exact_token_text', 'derived_term_source_span'):
+        return min(w.start_ms for w in words), max(w.end_ms for w in words)
+    receipt = project.studio_state.get('caption_timeline', {}).get('instances', {}).get(cue.id, {})
+    rows = receipt.get('words') or []
+    if not rows or receipt.get('word_alignment') not in ('exact_token_text', 'derived_term_source_span'):
+        return None, None
+    if not receipt.get('acoustic_word_observation') and any(
+            estimated_word_timing(view.asr_evidence.get(ref, {})) and not
+            (view.asr_evidence.get(ref, {}).get('caption_arbitration') or {}).get('acoustic_words')
+            for ref in cue.evidence_refs):
+        return None, None
+    normalize = lambda text: ''.join(c for _, c in content_positions(text))
+    source = normalize(receipt.get('text', ''))
+    if not source or ''.join(normalize(w['text']) for w in rows) != source:
+        return None, None
+    text = normalize(cue.text)
+    first, last = normalize(rows[0]['text']), normalize(rows[-1]['text'])
+    return (rows[0]['start_ms'] if first and text.startswith(first) else None,
+            rows[-1]['end_ms'] if last and text.endswith(last) else None)
 
 
 def project_frame_ms(project):
@@ -19,6 +56,8 @@ def _evidence_points(project,cue,keys):
     points=[]
     for ref in cue.evidence_refs:
         row=project.asr_evidence.get(ref,{})
+        if row.get('speaker_id') and row['speaker_id'] != cue.speaker_id:
+            continue
         for key in keys:
             for item in row.get(key,[]) if isinstance(row.get(key),list) else []:
                 if not isinstance(item,dict):continue
@@ -48,7 +87,11 @@ def independent_overlap_verified(project,left,right):
 def project_display_tail_plan(project):
     rows=[dict(id=c.id,start_ms=c.start_ms,end_ms=c.end_ms,speaker=c.speaker_id) for c in project.cues]
     acoustic={c.id:project_acoustics(project,c) for c in project.cues}
-    changes,audit=protect_intervals(rows,acoustic)
+    boundaries = {c.id: project_word_boundaries(project, c) for c in project.cues}
+    verified = {(a.id, b.id) for i, a in enumerate(project.cues) for b in project.cues[i+1:]
+                if min(a.end_ms,b.end_ms) > max(a.start_ms,b.start_ms)
+                and independent_overlap_verified(project,a,b)}
+    changes,audit=protect_intervals(rows,acoustic,word_boundaries=boundaries,verified_pairs=verified)
     by_id={c.id:c for c in project.cues}
     frame=project_frame_ms(project)
     for pair in audit:
@@ -57,39 +100,14 @@ def project_display_tail_plan(project):
                     display_labels=[next((s.name or s.id for s in project.speakers if s.id==c.speaker_id),c.speaker_id) for c in (left,right)],
                     cue_before=[[left.start_ms,left.end_ms],[right.start_ms,right.end_ms]],frame_ms=frame,
                     independently_verified=independent_overlap_verified(project,left,right))
-        if pair['classification']!='acoustic' or pair['independently_verified']:
-            continue
-        words_left=_evidence_points(project,left,('word_timestamps','words','tokens','alignment'))
-        words_right=_evidence_points(project,right,('word_timestamps','words','tokens','alignment'))
-        token_durations=[b-a for a,b in words_left+words_right]
-        if not token_durations:
-            token_durations=[(c.end_ms-c.start_ms)/max(1,len(re.sub(r'\W','',c.text))) for c in (left,right)]
-        # Boundary uncertainty scales with frame cadence and local token/turn
-        # duration, not a universal 200ms cutoff or a voiceprint threshold.
-        uncertainty=max(2*frame,min(statistics.median(token_durations),
-                        .15*min(left.end_ms-left.start_ms,right.end_ms-right.start_ms)))
-        pair['handoff_uncertainty_ms']=round(uncertainty,3)
-        if pair['overlap_ms']>uncertainty:
-            pair['classification']='unverified_long_overlap'
-            pair['review_required']=True
-            continue
-        vad=_evidence_points(project,left,('speech_regions','vad','regions'))+_evidence_points(project,right,('speech_regions','vad','regions'))
-        vad += [(round(x['start']*1000),round(x['end']*1000)) for x in project.generation_metadata.get('speaker_recovery',{}).get('vad_intervals',[])
-                if isinstance(x,dict) and 'start' in x and 'end' in x]
-        window_start=max(left.start_ms+50,right.start_ms-uncertainty)
-        candidates=[(end,'word_end') for _start,end in words_left if window_start<=end<=right.start_ms]
-        candidates += [(start,'word_start') for start,_end in words_right if window_start<=start<=right.start_ms]
-        candidates += [(point,'vad_boundary') for span in vad for point in span if window_start<=point<=right.start_ms]
-        boundary,reason=min(candidates,key=lambda x:abs(x[0]-right.start_ms)) if candidates else (right.start_ms,'incoming_cue_frame_boundary')
-        snapped=min(boundary,round(math.floor((boundary+.5)/frame)*frame))
-        if snapped-left.start_ms<50:continue
-        changes[left.id]=min(changes.get(left.id,left.end_ms),snapped)
-        pair.update(classification='handoff_boundary_error',boundary_ms=snapped,boundary_source=reason,
-                    nearby_word_intervals=words_left+words_right,nearby_vad_boundaries=[p for span in vad for p in span if abs(p-right.start_ms)<1000])
-    report=dict(policy_version=2,status='applied',pairs_before=audit,changed_ends=changes,
+        if pair['classification'] == 'acoustic' and not pair['independently_verified']:
+            pair.update(classification='source_overlap_unverified', review_required=True)
+        if left.id in changes:
+            pair.update(boundary_ms=changes[left.id], boundary_source='incoming_cue_or_measured_speech_end')
+    report=dict(policy_version=4,status='applied',pairs_before=audit,changed_ends=changes,
                 counts={name:sum(p['classification']==name for p in audit) for name in
-                        ('display_compensation','acoustic','uncertain','handoff_boundary_error','unverified_long_overlap')},
-                source='source intervals + independent overlap evidence + frame/token/VAD handoff boundary')
+                        ('display_compensation','acoustic','uncertain','source_overlap_unverified')},
+                source='measured cue words before coarse source intervals; unknown overlap retained')
     return changes,report
 
 
@@ -105,7 +123,7 @@ def classify_overlap(left_spans, right_spans):
     return "uncertain"
 
 
-def protect_intervals(rows, acoustic):
+def protect_intervals(rows, acoustic, *, word_boundaries=None, verified_pairs=()):
     """Return end-only changes and a pre-change cross-speaker overlap audit."""
     ends = {row["id"]: row["end_ms"] for row in rows}
     audit = []
@@ -116,25 +134,59 @@ def protect_intervals(rows, acoustic):
                 break
             a, b = acoustic.get(left["id"], []), acoustic.get(right["id"], [])
             kind = classify_overlap(a, b)
+            left_word_end = (word_boundaries or {}).get(left['id'], (None, None))[1]
+            right_word_start = (word_boundaries or {}).get(right['id'], (None, None))[0]
+            measured = left_word_end is not None and right_word_start is not None
+            if measured:
+                kind = 'display_compensation' if left_word_end <= right_word_start else 'acoustic'
+            verified = ((left['id'],right['id']) in verified_pairs or
+                        (right['id'],left['id']) in verified_pairs)
+            if verified:
+                kind = 'acoustic'
             if left["speaker"] != right["speaker"]:
                 audit.append({"left": left["id"], "right": right["id"], "classification": kind,
                               "left_acoustic": a, "right_acoustic": b,
+                              "word_boundaries_ms": [left_word_end, right_word_start],
+                              "evidence_kind": 'measured_cue_words' if measured else 'source_intervals',
                               "overlap_ms": min(left["end_ms"], right["end_ms"]) - right["start_ms"]})
-            if kind == "display_compensation" and a and b and max(end for _, end in a) <= min(start for start, _ in b):
+            ordered_speech = measured or (a and b and max(end for _, end in a) <= min(start for start, _ in b))
+            if kind == "display_compensation" and ordered_speech:
                 if right["start_ms"] > left["start_ms"]:
-                    ends[left["id"]] = min(ends[left["id"]], right["start_ms"])
+                    # An incoming display can start before its actual speech.
+                    # Remove reading tails without cutting the outgoing word.
+                    boundary = max(right['start_ms'], left_word_end) if measured else right['start_ms']
+                    ends[left["id"]] = min(ends[left["id"]], boundary)
+            elif not verified and left_word_end is not None and left_word_end > left['start_ms']:
+                # Even when voices really overlap, the outgoing caption need
+                # not linger after its last measured word. The speech overlap
+                # itself remains intact; only the added display tail is cut.
+                boundary = max(right['start_ms'], left_word_end)
+                ends[left['id']] = min(ends[left['id']], boundary)
     return {row["id"]: ends[row["id"]] for row in rows if ends[row["id"]] != row["end_ms"]}, audit
 
 
 def project_acoustics(project, cue):
+    start, end = project_word_boundaries(project, cue)
+    if start is not None and end is not None and end > start:
+        return [(start, end)]
     spans = []
     for ref in cue.evidence_refs:
         row = project.asr_evidence.get(ref, {})
+        # Evidence refs include temporally nearby turns from other speakers.
+        # Those turns cannot become the selected cue's acoustic interval.
+        if row.get('speaker_id') and row['speaker_id'] != cue.speaker_id:
+            continue
+        if row.get('speaker_independent') is True:
+            independent = _evidence_points(project, cue, ('independent_speech_intervals',))
+            if independent:
+                spans.extend(independent)
+                continue
         if "acoustic_start_ms" in row and "acoustic_end_ms" in row:
             a, b = row["acoustic_start_ms"], row["acoustic_end_ms"]
         elif (row.get("firered_end", 0) > row.get("firered_start", 0)
               and row.get("firered_alignment_confidence", 0) >= 0.65
-              and "degraded" not in str(row.get("final_timing_owner", "")).lower()):
+              and "degraded" not in str(row.get("final_timing_owner", "")).lower()
+              and not bounded_search_window(row)):
             a, b = round(row["firered_start"]*1000), round(row["firered_end"]*1000)
         elif row.get("moss_end", 0) > row.get("moss_start", 0):
             a, b = round(row["moss_start"]*1000), round(row["moss_end"]*1000)
@@ -142,7 +194,37 @@ def project_acoustics(project, cue):
             continue
         if b > a:
             spans.append((a, b))
+    receipt = getattr(project, 'studio_state', {}).get('caption_timeline', {}).get('instances', {}).get(getattr(cue, 'id', ''), {})
+    if getattr(project, 'render_settings', {}).get('_cue_domain') == 'timeline' and receipt:
+        source_spans = receipt.get('source_spans') or []
+        base = receipt.get('word_base_interval')
+        if len(source_spans) != 1 or not base:
+            return []  # Never compare task-clock evidence to edited timeline time.
+        source = source_spans[0]
+        a, b = source.get('source_start_ms'), source.get('source_end_ms')
+        if a is None or b is None:
+            return []
+        offset = base[0] - a + int(receipt.get('word_clock_offset_ms', 0))
+        spans = [(max(a,x)+offset,min(b,y)+offset) for x,y in spans if min(b,y)>max(a,x)]
     return sorted(set(spans))
+
+
+def bounded_search_window(row):
+    """A neighbourhood-clipped window is not independent word evidence.
+
+    Older results did not name this provenance. Their exact ±80ms clipping
+    signature can identify it without assuming every FireRed result is padded.
+    """
+    get = row.get if isinstance(row, dict) else lambda key, default=0: getattr(row, key, default)
+    metadata = get('caption_arbitration', {}) or {}
+    if metadata.get('timing_evidence', {}).get('kind') == 'bounded_search_window':
+        return True
+    try:
+        a, b = float(get('moss_start', 0)), float(get('moss_end', 0))
+        fa, fb = float(get('firered_start', 0)), float(get('firered_end', 0))
+        return b > a and abs(fa - max(0, a - .08)) < .001 and abs(fb - b - .08) < .001
+    except (TypeError, ValueError):
+        return False
 
 
 def protect_project_display_tails(project):
@@ -160,6 +242,24 @@ def protect_runtime_display_tails(cues, segments):
     rows = [dict(id=str(cue.cue_id), start_ms=round(cue.start*1000), end_ms=round(cue.end*1000), speaker=cue.speaker)
             for cue in cues]
     acoustic = {}
+    from types import SimpleNamespace
+    evidence = {}
+    for index, segment in enumerate(segments):
+        row = {key: getattr(segment, key, None) for key in
+               ('primary_source', 'final_timing_owner', 'caption_arbitration')}
+        row['speaker_id'] = segment.speaker
+        row['words'] = [dict(word) if isinstance(word, dict) else dict(
+            text=getattr(word, 'text', getattr(word, 'word', '')),
+            start=getattr(word, 'start', 0), end=getattr(word, 'end', 0))
+            for word in getattr(segment, 'words', ()) or ()]
+        evidence[str(index)] = row
+    view = SimpleNamespace(asr_evidence=evidence, render_settings={}, studio_state={}, cues=[])
+    for cue in cues:
+        view.cues.append(SimpleNamespace(id=str(cue.cue_id), text=cue.text,
+            start_ms=round(cue.start*1000), end_ms=round(cue.end*1000), speaker_id=cue.speaker,
+            evidence_refs=[str(i) for i,s in enumerate(segments) if s.speaker==cue.speaker
+                           and s.end>cue.start and s.start<cue.end]))
+    boundaries = {c.id: project_word_boundaries(view,c) for c in view.cues}
     for cue in cues:
         spans = []
         for segment in segments:
@@ -167,14 +267,66 @@ def protect_runtime_display_tails(cues, segments):
                 continue
             firered = (getattr(segment, "firered_alignment_confidence", 0) >= .65
                        and "degraded" not in str(getattr(segment, "final_timing_owner", "")).lower()
-                       and getattr(segment, "firered_end", 0) > getattr(segment, "firered_start", 0))
+                       and getattr(segment, "firered_end", 0) > getattr(segment, "firered_start", 0)
+                       and not bounded_search_window(segment))
             a = getattr(segment, "firered_start", 0) if firered else getattr(segment, "moss_start", 0)
             b = getattr(segment, "firered_end", 0) if firered else getattr(segment, "moss_end", 0)
             if b > a:
                 spans.append((round(a*1000), round(b*1000)))
         acoustic[str(cue.cue_id)] = spans
-    changes, audit = protect_intervals(rows, acoustic)
+    changes, audit = protect_intervals(rows, acoustic, word_boundaries=boundaries)
+    for pair in audit:
+        # Mono source boundaries alone do not prove simultaneous speakers.
+        if pair['classification'] == 'acoustic':
+            pair.update(classification='source_overlap_unverified', review_required=True)
+        if pair['evidence_kind'] != 'measured_cue_words':
+            pair['evidence_kind'] = 'source_intervals_without_editorial_or_search_padding'
     for cue in cues:
         if str(cue.cue_id) in changes:
             cue.end = changes[str(cue.cue_id)] / 1000
     return audit
+
+
+SHORT_GAP_BRIDGE_MS = 500
+
+
+def short_gap_bridges(rows, threshold, *, full_track=True, same_speaker=True, max_duration=None):
+    """New end values that close short blank gaps; the next start never moves.
+
+    2026-10-10 (user): a gap of 0.5 s or less between captions makes them
+    flicker, so the earlier caption runs on until the next one appears.
+    ``rows`` are ``(key, speaker, start, end)`` in any one unit.
+
+    * full_track: a moment where no caption is on screen at all.
+    * same_speaker: one speaker's caption disappears and comes back while
+      someone else's caption stays up. Skipped when another speaker starts
+      talking inside the gap, which would create a new overlap.
+    """
+    rows = sorted(rows, key=lambda row: (row[2], row[3], str(row[1]), str(row[0])))
+    original = {key: end for key, _speaker, _start, end in rows}
+    ends = dict(original)
+
+    def fits(start, target):
+        return max_duration is None or target - start <= max_duration
+
+    if full_track and rows:
+        owner_key, _speaker, owner_start, cover = rows[0]
+        for key, _speaker, start, _end in rows[1:]:
+            if cover < start <= cover + threshold and fits(owner_start, start):
+                ends[owner_key] = cover = start
+            if ends[key] > cover:
+                owner_key, owner_start, cover = key, start, ends[key]
+    if same_speaker:
+        starts = [(start, speaker) for _key, speaker, start, _end in rows]
+        lanes = {}
+        for row in rows:
+            lanes.setdefault(row[1], []).append(row)
+        for speaker, lane in lanes.items():
+            for (key, _s, start, _e), (_k, _s2, next_start, _e2) in zip(lane, lane[1:]):
+                end = ends[key]
+                if not (end < next_start <= end + threshold) or not fits(start, next_start):
+                    continue
+                if any(end < other < next_start and who != speaker for other, who in starts):
+                    continue
+                ends[key] = next_start
+    return {key: end for key, end in ends.items() if end != original[key]}

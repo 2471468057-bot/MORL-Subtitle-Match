@@ -184,19 +184,6 @@ def run(role, expected, *, project_root=None, firered_source_dir=None):
             result["errors"].append("moss_transcribe_diarize: import failed")
 
         _strict_cuda_probe(result, "moss")
-    elif role == 'nemotron':
-        result['imports']['nemotron']=all(_import_attr_ok('transformers',name) for name in (
-            'AutoProcessor','AutoModelForAudioFrameClassification',
-            'Nemotron3DiarizationProcessor','Nemotron3DiarizationForAudioFrameClassification'))
-        if not result['imports']['nemotron']:result['errors'].append('Nemotron Transformers classes unavailable')
-        try:
-            from importlib.metadata import distribution
-            direct=json.loads(distribution('transformers').read_text('direct_url.json') or '{}')
-            if direct.get('url')!=expected.get('package_sources',{}).get('transformers'):
-                result['errors'].append('Transformers source revision does not match Nemotron deployment lock')
-        except Exception:
-            result['errors'].append('Transformers fixed-source provenance unavailable')
-        if not _import_ok('librosa'):result['errors'].append('librosa import failed')
     elif role == "firered_llm":
         if firered_source_dir and firered_source_dir not in sys.path:
             sys.path.insert(0, firered_source_dir)

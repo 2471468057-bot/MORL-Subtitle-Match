@@ -112,7 +112,7 @@ def test_switching_game_keeps_task_visible_and_button_semantic(dialog, monkeypat
     # 切到其它游戏：老 bug 是按钮无条件重亮且无任务可见——现在按钮仍可发起（排队语义）
     dialog.state["game"] = "原神"
     dialog._refresh_ai_update_buttons()
-    assert dialog.ai_full_button.text() == "完整建库…"
+    assert dialog.ai_full_button.text() == "AI 完整建库"
     assert dialog.ai_full_button.isEnabled()
     assert dialog.ai_update_button.isEnabled()
     # 任务栏不因切游戏消失
@@ -134,10 +134,63 @@ def test_pending_other_mode_button_semantic(dialog, monkeypatch):
     assert _spin(app, lambda: manager.get(task_id).status == "running")
     dialog._refresh_ai_update_buttons()
     # full 在跑：增量按钮保持原语义可点
-    assert dialog.ai_update_button.text() == "联网更新当前词库"
+    assert dialog.ai_update_button.text() == "日常增量更新"
     assert dialog.ai_update_button.isEnabled()
     gate.set()
     assert _spin(app, lambda: manager.get(task_id).status == "finished")
+
+
+def test_direct_complete_button_without_native_search_freezes_full_mode_and_target(dialog, monkeypatch):
+    from PySide6.QtTest import QTest
+    import threading
+    gate = threading.Event()
+    _stub_engine(monkeypatch, gate=gate)
+    monkeypatch.setattr('twobyteasr.glossary_skill.detect_search_capability', lambda _: dict(
+        provider_search=False, service='deepseek', model='deepseek-v4-pro', reason='无原生搜索'))
+    dialog.state['game'] = '瓦罗兰特'
+    dialog._refresh_ai_update_buttons()
+    assert dialog.ai_full_button.menu() is None
+    assert dialog.ai_full_button.text() == 'AI 完整建库'
+    QTest.mouseClick(dialog.ai_full_button, Qt.MouseButton.LeftButton)
+    manager = dialog._ensure_task_manager()
+    tasks = list(manager._tasks.values())
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.mode == 'full'
+    assert manager._settings_by_task[task.task_id]['models']['glossary_execution_mode'] == 'full'
+    target = task.library_id
+    dialog.state['game'] = '原神'
+    assert task.library_id == target
+    gate.set()
+    assert _spin(_app(), lambda: task.status == 'finished')
+
+
+def test_review_zero_selection_disables_apply_even_with_unverified_candidates(dialog):
+    from twobyteasr.glossary_skill_ui import GlossaryUpdateReviewDialog
+    result = dict(mode='full', outcome=dict(status='partial', message='未核实建议需逐条确认'),
+        diffs=[TermDiff(change_type='unverifiable', term=SearchedTerm(term='未核实名称'), checked_by_default=False)])
+    review = GlossaryUpdateReviewDialog(dialog.owner, '瓦罗兰特', result)
+    assert not review.apply_button.isEnabled()
+    review.model.check_filtered(True)
+    assert review.apply_button.isEnabled()
+    review.model.check_none()
+    assert not review.apply_button.isEnabled()
+    review.deleteLater()
+
+
+def test_review_existing_names_are_not_presented_as_applicable_candidates(dialog):
+    from twobyteasr.glossary_skill_ui import GlossaryUpdateReviewDialog
+    result = dict(mode='full', candidate_count=0, collected_count=38, diffs=[],
+        outcome=dict(status='partial', message='已整理的名称均已存在；来源不足，未确认覆盖。'),
+        build_stats=dict(unique_candidates=38, duplicate_candidates=38))
+    review = GlossaryUpdateReviewDialog(dialog.owner, '瓦罗兰特', result)
+    assert review.model.rowCount() == 0
+    assert not review.apply_button.isEnabled()
+    assert review.apply_button.property('zeroApplicable') is True
+    assert '待审阅变化 0' in review.summary_label.text()
+    assert '已整理名称 38（已有重复 38）' in review.summary_label.text()
+    assert '候选 38' not in review.summary_label.text()
+    review.deleteLater()
 
 
 def test_finish_attribution_when_on_other_game(dialog, monkeypatch):

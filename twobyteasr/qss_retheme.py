@@ -8,8 +8,8 @@ renders correctly under all four themes.  The warm theme maps back to values
 that are visually equivalent to the original literals.
 
 ``#ffffff`` is deliberately left untouched (it is the on-accent text color)
-except for explicit ``background: #ffffff`` declarations, which become the
-elevated surface color.
+except for explicit ``background: #ffffff`` / ``background-color: #ffffff``
+declarations, which become the elevated surface color.
 """
 
 from __future__ import annotations
@@ -20,6 +20,9 @@ from .ui_theme import ThemeDefinition, theme_definition
 
 # warm palette constants + every literal used by APP_QSS / STUDIO_QSS /
 # SECONDARY_SURFACE_QSS, classified to one semantic token each.
+# 2026-10-07: the warm "active border" greens (formerly -> focus) are
+# decorative hover/selected outlines and map to border_strong; the keyboard
+# focus ring is owned by design.control_qss.
 _HEX_TOKENS: dict[str, str] = {
     # --- warm palette constants (baked by f-strings at import time) ---
     "#faf7f1": "app_background",
@@ -29,7 +32,7 @@ _HEX_TOKENS: dict[str, str] = {
     "#ffffff": "surface_elevated",  # only reached via background: rule below
     "#e1d7c8": "border",
     "#d2c3ae": "border_strong",
-    "#9fbd9f": "focus",
+    "#9fbd9f": "border_strong",
     "#292a27": "text",
     "#494943": "text_secondary",
     "#65645d": "text_muted",
@@ -182,23 +185,23 @@ _HEX_TOKENS: dict[str, str] = {
     "#d5e0cb": "selected",
     "#dcead2": "selected",
     # --- focus borders ---
-    "#b9c8b9": "focus",
-    "#b9cfbb": "focus",
-    "#a9c0ac": "focus",
-    "#9eb8a2": "focus",
-    "#aabdab": "focus",
-    "#76a080": "focus",
-    "#6f9a7d": "focus",
-    "#6e9b73": "focus",
-    "#709a78": "focus",
-    "#71987a": "focus",
-    "#9bbd9e": "focus",
-    "#c8d2c6": "focus",
-    "#9db092": "focus",
-    "#9eaa98": "focus",
-    "#9fb994": "focus",
-    "#bfd2bd": "focus",
-    "#c4d3ba": "focus",
+    "#b9c8b9": "border_strong",
+    "#b9cfbb": "border_strong",
+    "#a9c0ac": "border_strong",
+    "#9eb8a2": "border_strong",
+    "#aabdab": "border_strong",
+    "#76a080": "border_strong",
+    "#6f9a7d": "border_strong",
+    "#6e9b73": "border_strong",
+    "#709a78": "border_strong",
+    "#71987a": "border_strong",
+    "#9bbd9e": "border_strong",
+    "#c8d2c6": "border_strong",
+    "#9db092": "border_strong",
+    "#9eaa98": "border_strong",
+    "#9fb994": "border_strong",
+    "#bfd2bd": "border_strong",
+    "#c4d3ba": "border_strong",
     # --- accent greens (text + fills) ---
     "#4f8a61": "accent",
     "#3e714f": "accent_pressed",
@@ -296,7 +299,10 @@ _HEX_TOKENS: dict[str, str] = {
     "#745246": "danger",
 }
 
-_BACKGROUND_WHITE = re.compile(r"background:\s*(?:#ffffff|white)\b", re.IGNORECASE)
+# 2026-10-10: the combo box hover/focus/open/popup-item rules use
+# ``background-color``; leaving those white made the home content-name box
+# turn white under dark themes.
+_BACKGROUND_WHITE = re.compile(r"(background(?:-color)?):\s*(?:#ffffff|white)\b", re.IGNORECASE)
 _KEEP_WHITE = {"#fff2ed": "#ffffff"}
 
 
@@ -304,7 +310,7 @@ def retheme_qss(qss: str, theme: ThemeDefinition | None = None) -> str:
     """Rewrite warm/plum color literals in ``qss`` into ``theme`` tokens."""
     active = theme or theme_definition()
     table = {hexvalue: getattr(active, token) for hexvalue, token in _HEX_TOKENS.items()}
-    result = _BACKGROUND_WHITE.sub(lambda m: "background: " + active.surface_elevated, qss)
+    result = _BACKGROUND_WHITE.sub(lambda m: m.group(1) + ": " + active.surface_elevated, qss)
     for hexvalue, replacement in _KEEP_WHITE.items():
         result = result.replace(hexvalue, replacement)
     for hexvalue, color in table.items():

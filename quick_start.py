@@ -134,6 +134,9 @@ def _write_setup_marker() -> None:
     otherwise keep showing the first-run dialog. The marker is written next
     to this script; the path is normalized and confined to the script dir.
     """
+    if os.environ.get('TWOBYTEASR_TEST_ROOT'):
+        # A source acceptance run owns its profile, not the operator's install.
+        return
     try:
         import datetime
         import pathlib
@@ -168,6 +171,9 @@ def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == '--asr-provider-self-test':
         from twobyteasr.stage9_acceptance_audit import main as asr_self_test_main
         return asr_self_test_main(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == '--moss-full-context-audit':
+        from twobyteasr.moss_full_context_audit import main as moss_audit
+        return moss_audit(sys.argv[2])
     if len(sys.argv) > 2 and sys.argv[1] == '--glossary-update-self-test':
         # 真实联网词库更新自检（源码与冻结 EXE 同入口；不写词库，只落结果 JSON）
         from twobyteasr.glossary_update_selftest import main as glossary_self_test
@@ -206,8 +212,9 @@ def main() -> int:
     app = QApplication.instance() or QApplication([sys.argv[0]])
     _startup_mark("EARLY_QT_READY")
     instance_guard = SingleInstanceGuard(SingleInstanceGuard.application_name(application_root()))
+    _startup_mark("EARLY_INSTANCE_GUARD_CREATED")
     if not instance_guard.acquire():
-        if instance_guard.forward(media_arguments):
+        if instance_guard.forward(media_arguments, timeout_ms=30000):
             return 0
         # A crashed owner releases the OS mutex. A hung live owner is not safe to steal.
         if not instance_guard.acquire():
@@ -324,13 +331,25 @@ def main() -> int:
             sys.stderr.flush()
         except Exception:
             pass
+        # 2026-10-10: the untyped call truncated the pseudo handle of
+        # GetCurrentProcess() to 32 bits, so TerminateProcess failed with
+        # ERROR_INVALID_HANDLE and every exit fell through to the full
+        # interpreter/Qt teardown — after long sessions that teardown aborted
+        # and the process ended 0xC0000409 instead of rc. Typed, on a private
+        # WinDLL so no other caller's ctypes declarations change.
         try:
-            handle = ctypes.windll.kernel32.GetCurrentProcess()
-            ctypes.windll.kernel32.TerminateProcess(handle, int(rc) & 0xFFFFFFFF)
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
             _append_startup_log(f"terminate issued rc={rc}")
+            kernel32.TerminateProcess(kernel32.GetCurrentProcess(), int(rc) & 0xFFFFFFFF)
+            # Only reached when the call failed.
+            _append_startup_log(f"terminate failed: error {ctypes.get_last_error()}; os._exit")
         except Exception as exc:
             _append_startup_log(f"terminate failed: {exc}; os._exit")
-            os._exit(int(rc))
+        os._exit(int(rc))
     return rc
 
 

@@ -340,13 +340,20 @@ class EditableHistoryCombo(FramelessPopupCombo):
         self.setMaxVisibleItems(9)
         self.setMinimumHeight(42)
         self.lineEdit().setClearButtonEnabled(True)
+        # Theme-driven chevron (refresh_themed_icons re-rasterizes line-edit
+        # actions on theme change); a fixed dark gray vanished on dark themes.
+        from .themed_icons import themed_icon, install_themed_icon
         self._history_action = self.lineEdit().addAction(
-            _icon("fa5s.chevron-down", "#5f625c"),
+            themed_icon("fa5s.chevron-down", "secondary"),
             QLineEdit.ActionPosition.TrailingPosition,
         )
+        install_themed_icon(self._history_action, "fa5s.chevron-down", "secondary")
         bind_text(self._history_action, '展开历史记录与内置游戏', property='toolTip')
         self._history_action.triggered.connect(self.showPopup)
-        self.setStyleSheet("QComboBox::drop-down { width: 0px; border: 0; }")
+        # The line-edit action above is the only arrow: the application sheet
+        # would otherwise still draw its 12px down-arrow half outside the box.
+        self.setStyleSheet("QComboBox::drop-down { width: 0px; border: 0; }"
+                           " QComboBox::down-arrow { image: none; width: 0px; height: 0px; }")
 
     def setPlaceholderText(self, text: str):
         self.lineEdit().setPlaceholderText(text)

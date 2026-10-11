@@ -116,6 +116,8 @@ def chat_body(chunks, diagnostics, emit=lambda *_: None, cancel_check=None):
         delta = choice.get('delta') or {}
         if not isinstance(delta, dict):
             raise StreamProtocolError('SSE delta必须为对象')
+        if delta.get('refusal'):
+            raise StreamProtocolError('Provider拒绝生成业务正文', 'provider_refusal')
         if delta.get('tool_calls'):
             raise StreamProtocolError('主题请求返回工具调用，缺少最终正文', 'provider_tool_request')
         for field in ('content', 'reasoning_content', 'reasoning'):
@@ -142,7 +144,9 @@ def chat_body(chunks, diagnostics, emit=lambda *_: None, cancel_check=None):
             finish = choice['finish_reason']
             diagnostics['finish_reason'] = finish
             if finish != 'stop':
-                category = 'structured_output_truncated' if finish in {'length', 'max_tokens'} else 'provider_terminal_error'
+                category = ('structured_output_truncated' if finish in {'length', 'max_tokens'} else
+                    'provider_refusal' if finish in {'refusal', 'content_filter', 'safety'} else
+                    'provider_tool_request' if finish in {'tool_calls', 'function_call'} else 'provider_terminal_error')
                 raise StreamProtocolError(f'Provider未完整生成正文（finish_reason={finish}，正文{diagnostics["content_chars"]}字符）', category)
     if cancel_check and cancel_check():
         raise StreamProtocolError('流式请求已取消', 'cancelled')
@@ -183,7 +187,7 @@ def responses_final(packet, diagnostics):
             raise StreamProtocolError('主题请求返回工具调用，缺少独立最终正文', 'provider_tool_request')
         for block in item.get('content') or []:
             if block.get('type') == 'refusal':
-                raise StreamProtocolError('Provider拒绝生成', 'provider_terminal_error')
+                raise StreamProtocolError('Provider拒绝生成', 'provider_refusal')
             if block.get('type') == 'output_text':
                 if not isinstance(block.get('text'), str):
                     raise StreamProtocolError('Responses正文必须为字符串')
@@ -229,6 +233,8 @@ def responses_body(chunks, diagnostics, emit=lambda *_: None, cancel_check=None)
                 raise StreamProtocolError('公开推理摘要必须为字符串')
             emit('reasoning_summary', summary)
             summary_received=True
+        elif kind in {'response.refusal.delta', 'response.refusal.done'}:
+            raise StreamProtocolError('Provider拒绝生成业务正文', 'provider_refusal')
         elif kind in {'response.completed', 'response.incomplete', 'response.failed'}:
             if not summary_received:
                 emit_public_summaries(response,emit)
@@ -303,6 +309,7 @@ def request_chat(url, headers, body, timeout, diagnostics, emit, cancel_check=No
         response = None
         try:
             if input_budget is not None:input_budget['dispatched']=True
+            send('request_started', {'model':body.get('model'), 'endpoint':url, 'stream':True})
             response = network_policy.post(url, headers=headers, json=body, stream=True, timeout=network_timeout)
             holder['response'] = response
             diagnostics['http_status'] = response.status_code
@@ -370,6 +377,16 @@ def request_chat(url, headers, body, timeout, diagnostics, emit, cancel_check=No
                         choice = choices[0]
                         content = choice['message']['content']
                         reason = choice['finish_reason']
+                        reasoning = choice['message'].get('reasoning_content') or choice['message'].get('reasoning')
+                        if isinstance(reasoning,str) and reasoning:send('thinking',reasoning)
+                        public_summary = choice['message'].get('reasoning_summary')
+                        if isinstance(public_summary,str) and public_summary:send('reasoning_summary',public_summary)
+                        if isinstance(packet.get('model'),str):diagnostics['response_model']=packet['model']
+                        usage=packet.get('usage') or {}
+                        if isinstance(usage,dict):
+                            for key in ('prompt_tokens','completion_tokens','total_tokens'):diagnostics[key]=usage.get(key)
+                            details=usage.get('completion_tokens_details') or {}
+                            if isinstance(details,dict):diagnostics['reasoning_tokens']=details.get('reasoning_tokens')
                 except (UnicodeError, ValueError, KeyError, TypeError) as exc:
                     if isinstance(exc, StreamProtocolError):
                         raise

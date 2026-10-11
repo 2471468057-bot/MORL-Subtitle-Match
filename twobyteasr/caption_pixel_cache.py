@@ -21,6 +21,7 @@ class PreparedPixels:
     finished: float
     raw_path: object = None
     raw_geometry: object = None
+    raw_lease: object = None
 
     def __del__(self):
         # The actor callback retains this object until the immutable file has
@@ -28,11 +29,14 @@ class PreparedPixels:
         if self.raw_path is not None:
             try:self.raw_path.unlink(missing_ok=True)
             except OSError:pass
+        if self.raw_lease is not None:
+            try:self.raw_lease.__exit__(None, None, None)
+            except Exception:pass
 
 
 def prepared_pixels(image, png, started, raw_folder=None):
     """Pack immutable pixels on a worker before a GUI/actor handoff."""
-    raw_path = geometry = None
+    raw_path = geometry = lease = None
     if raw_folder is not None:
         import numpy as np
         from PySide6.QtCore import QRect
@@ -45,10 +49,12 @@ def prepared_pixels(image, png, started, raw_folder=None):
         Path(raw_folder).mkdir(parents=True, exist_ok=True)
         raw_path = Path(raw_folder)/(uuid.uuid4().hex+'.rgba')
         raw_path.write_bytes(cropped.constBits())
+        from .overlay_session import lease_overlay
+        lease = lease_overlay(raw_path, 'caption_pixel_cache')
         geometry = dict(bounds=bounds.getRect(), source_width=packed.width(), source_height=packed.height(),
             width=cropped.width(), height=cropped.height(), stride=cropped.bytesPerLine(),
             bytes=cropped.sizeInBytes(), alpha_nonzero=int(np.count_nonzero(alpha)))
-    return PreparedPixels(image, png, started, time.perf_counter(), raw_path, geometry)
+    return PreparedPixels(image, png, started, time.perf_counter(), raw_path, geometry, lease)
 
 
 class CaptionPixelCache(QObject):
@@ -83,6 +89,9 @@ class CaptionPixelCache(QObject):
             self._wake.set()
             if self._thread is None:
                 self._thread=threading.Thread(target=self._run,name='caption-pixels',daemon=True)
+                if self.raw_folder is not None:
+                    from .overlay_session import register_overlay_worker
+                    register_overlay_worker(self.raw_folder.parent, self._thread)
                 self._thread.start()
 
     def _run(self):
@@ -111,7 +120,7 @@ class CaptionPixelCache(QObject):
                         png=service.live_frame(cue_ms=0,stage_ms=snapshot.start_ms)
                         image=QImage.fromData(png)
                     if image.isNull():raise ValueError('Empty prepared caption raster')
-                    raw_path=None;geometry=None
+                    raw_path=None;geometry=None;lease=None
                     if self.raw_folder is not None:
                         import numpy as np
                         from PySide6.QtCore import QRect
@@ -123,10 +132,12 @@ class CaptionPixelCache(QObject):
                         self.raw_folder.mkdir(parents=True,exist_ok=True)
                         raw_path=self.raw_folder/(uuid.uuid4().hex+'.rgba')
                         raw_path.write_bytes(cropped.constBits())
+                        from .overlay_session import lease_overlay
+                        lease=lease_overlay(raw_path, 'caption_pixel_cache')
                         geometry=dict(bounds=bounds.getRect(),source_width=packed.width(),source_height=packed.height(),
                             width=cropped.width(),height=cropped.height(),stride=cropped.bytesPerLine(),bytes=cropped.sizeInBytes(),
                             alpha_nonzero=int(np.count_nonzero(alpha)))
-                    value=PreparedPixels(image,png,started,time.perf_counter(),raw_path,geometry)
+                    value=PreparedPixels(image,png,started,time.perf_counter(),raw_path,geometry,lease)
                     with self._lock:
                         if self._closed:return
                         self._images[key]=value
@@ -137,10 +148,13 @@ class CaptionPixelCache(QObject):
                     self.metrics.append(dict(cue_id=snapshot.cue_id,started=started,finished=value.finished,
                                              route='html' if web else 'static',bytes=image.sizeInBytes(),raw_geometry=geometry))
                     self.metrics=self.metrics[-128:]
-                    self.ready.emit(key)
+                    # A closed cache is deleted with its project session.
+                    try:self.ready.emit(key)
+                    except RuntimeError:return
                 except Exception as exc:
                     loaded=None
-                    self.failed.emit(key,f'{type(exc).__name__}: {exc}')
+                    try:self.failed.emit(key,f'{type(exc).__name__}: {exc}')
+                    except RuntimeError:return
                 finally:
                     with self._lock:self._inflight=None
         finally:

@@ -14,15 +14,16 @@ def fixture():
     return p
 
 
-def test_single_keeps_overlaps_text_styles_and_original_labels():
+def test_legacy_single_keeps_native_labels_overlaps_text_and_styles():
     p=fixture();p.cues[1].start_ms=0
     before=[(c.id,c.text,c.start_ms,c.end_ms,c.style_id) for c in p.cues]
     p.generation_metadata['speaker_recovery']['processing']['mode']='auto'
     apply_new_project_policy(p)
-    assert {c.speaker_id for c in p.cues}=={UNIFIED}
+    assert {c.speaker_id for c in p.cues}=={'A','B'}
     assert [(c.id,c.text,c.start_ms,c.end_ms,c.style_id) for c in p.cues]==before
     assert not p.speakers[0].is_host
-    assert p.generation_metadata['speaker_organization']['cue_origins']['14']=='B'
+    assert p.generation_metadata['speaker_recovery']['cue_cache']['B'][-1]['id']=='14'
+    assert p.generation_metadata['speaker_organization']['mode']=='native'
     assert all(normalized_speaker_mode(m)=='single' for m in ('auto','provider',None,''))
 
 

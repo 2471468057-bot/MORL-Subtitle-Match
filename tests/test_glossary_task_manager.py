@@ -29,6 +29,32 @@ def test_alias_identity_deduplicates_full_and_incremental(manager,monkeypatch):
     assert manager.pending_for_game('洛克王国:世界').task_id==first
 
 
+def test_target_and_nested_ai_config_are_frozen_at_submit(manager, monkeypatch):
+    monkeypatch.setattr(manager, '_pump', lambda: None)
+    manager.legacy.resolve_glossary_identity = lambda name: 'library:stable'
+    manager.legacy.glossary_display_name = lambda name: '原显示名'
+    settings = {'models': {'polish_ai_service': 'grok_account', 'polish_model': 'grok-test'}}
+    task_id, _ = manager.submit('原显示名', 'full', settings)
+    settings['models']['polish_model'] = 'different-draft'
+    assert manager.get(task_id).library_id == 'library:stable'
+    assert manager._settings_by_task[task_id]['models']['polish_model'] == 'grok-test'
+
+
+def test_upgrade_required_task_is_terminal_once(manager, app, monkeypatch):
+    calls = []
+    def denied(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError('{"type":"error","message":"Internal error: API error (status 426 Upgrade Required): Your Grok CLI version (1.0.5) is outdated. Please update to version 1.0.13 or later"}')
+    monkeypatch.setattr(gbuild, 'run_full_library_update', denied)
+    task_id, _ = manager.submit('测试', 'full', {})
+    assert _spin(app, lambda: manager.get(task_id).status == 'failed')
+    task = manager.get(task_id)
+    assert task.error_code == 'upgrade_required'
+    assert '1.0.5' in task.error and '1.0.13' in task.error
+    assert task.waiting_note == ''
+    assert calls == [1]
+
+
 def test_resume_shares_choices_only_with_same_task_family(manager,monkeypatch):
     monkeypatch.setattr(manager,'_pump',lambda:None)
     first,_=manager.submit('测试','full',{})

@@ -47,11 +47,13 @@ def main():
     stage = out / 'source'; stage.mkdir(parents=True)
     evidence = out / 'evidence'; evidence.mkdir()
     sys.path.insert(0, str(ROOT))
-    from twobyteasr.build_identity import create_build_metadata, source_snapshot_files, source_snapshot_sha256
+    from twobyteasr.build_identity import create_build_metadata, source_snapshot_files, source_snapshot_sha256, is_current_delivery_file
     identity = create_build_metadata(ROOT, channel=args.channel)
     source_files = source_snapshot_files(ROOT)
     selected = {p.relative_to(ROOT) for p in source_files}
     for name in ROOT_FILES: selected.add(Path(name))
+    selected.update(p.relative_to(ROOT) for p in ROOT.glob('requirements-*.in'))
+    selected.update(p.relative_to(ROOT) for p in ROOT.glob('requirements-*.lock'))
     selected.update(p.relative_to(ROOT) for p in ROOT.glob('*_worker.py'))
     for folder in ('assets', 'licenses', 'lexicons', 'renderer', 'scripts', 'twobyteasr', 'packaging', '.github/workflows',
                    'installer', 'launcher', 'third_party', 'tools/ffmpeg', 'tools/mpv', 'tools/node'):
@@ -68,6 +70,7 @@ def main():
         rel = Path('wheels')/item['file']
         if digest(ROOT/rel) != item['sha256']: raise ValueError(f'Wheel mismatch: {rel}')
         selected.add(rel)
+    selected = {rel for rel in selected if is_current_delivery_file(rel.as_posix())}
     records = []
     for rel in sorted(selected):
         source = ROOT / rel
@@ -117,6 +120,15 @@ def main():
             dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED | {'node_modules', 'product-review', 'dist'}]
             attachment_paths.extend(Path(current) / n for n in names
                                     if Path(n).suffix.lower() not in {'.pyc', '.pyo', '.log'})
+    # Freeze the current state, relevant architecture and rights records with
+    # the candidate; never substitute a live document after a lengthy build.
+    for folder in ('docs/architecture', 'docs/adr', 'docs/legal'):
+        attachment_paths.extend(p for p in (ROOT / folder).rglob('*')
+                                if p.is_file() and '__pycache__' not in p.parts)
+    for name in ('docs/PROJECT_STATE.md', 'docs/KNOWN_ISSUES.md', 'docs/VERIFICATION.md',
+                 'docs/exec-plans/active/2026-10-07-unified-candidate-release-blockers.md',
+                 'docs/exec-plans/active/2026-10-07-model-workshop-daily-entry.md'):
+        if (ROOT / name).is_file(): attachment_paths.append(ROOT / name)
     attachment_paths.extend(ROOT.glob('docs/product-*.md'))
     attachment_paths.append(ROOT/'docs/windows-qa-preparation.zh-CN.md')
     extra_records = []
@@ -129,6 +141,16 @@ def main():
         if digest(source) != digest(target): raise ValueError(f'Attachment input changed: {rel}')
         extra_records.append(dict(path=rel.as_posix(), bytes=target.stat().st_size, sha256=digest(target)))
     (evidence / 'attachment-inputs.json').write_text(json.dumps(extra_records, ensure_ascii=False, indent=2), 'utf8')
+    # Generated environment license inventory and attachments are final inputs
+    # too. Record the actual completed snapshot, not hashes from before they
+    # were generated/copied. The build may create only its factory-default tmp.
+    records = [dict(path=p.relative_to(stage).as_posix(), bytes=p.stat().st_size, sha256=digest(p))
+               for p in sorted(stage.rglob('*'))
+               if p.is_file() and '.git' not in p.relative_to(stage).parts]
+    (evidence/'snapshot-manifest.json').write_text(
+        json.dumps(dict(identity=identity,files=records),ensure_ascii=False,indent=2),'utf8')
+    (evidence/'snapshot.json').write_text(json.dumps(dict(root=str(stage),source_files=len(source_files),
+        files=len(records),bytes=sum(x['bytes'] for x in records)),indent=2),'utf8')
     print(json.dumps(dict(stage=str(stage),identity=identity,files=len(records)),ensure_ascii=False),flush=True)
     if args.stage_only:return
     env=os.environ.copy();env['TWOBYTEASR_BUILD_METADATA']=str(metadata)

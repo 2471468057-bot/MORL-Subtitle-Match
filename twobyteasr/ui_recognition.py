@@ -126,6 +126,7 @@ class RecognitionRoleCard(QFrame):
         layout.addWidget(self.role_label)
 
         self.model_label = QLabel("—")
+        self.model_label.setProperty("uiZoomOwnSize", True)  # height measured from its own text
         self.model_label.setObjectName("recognitionModelName")
         self.model_label.setWordWrap(True)
         self.model_label.setAlignment(
@@ -167,6 +168,11 @@ class RecognitionRoleCard(QFrame):
         self.recovery.setObjectName("recognitionRecovery")
         self.recovery.setCursor(Qt.CursorShape.PointingHandCursor)
         self.recovery.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        # Beside the chips the button must not pin the card's minimum width:
+        # otherwise a card widened once (maximized window) can never narrow
+        # again, so it never wraps the button below and the page overflows.
+        self.recovery.setProperty("flexibleWidth", True)
+        self.recovery.setMinimumWidth(1)
         self.recovery.hide()
         self.recovery.clicked.connect(
             lambda: self.recovery_requested.emit(self.role, self._recovery_action)
@@ -220,7 +226,8 @@ class RecognitionRoleCard(QFrame):
 
     def _icon_color(self):
         theme = theme_definition(theme_key())
-        return theme.app_background if self.role == "timeline" and theme.key == "grape" else theme.text_on_accent
+        # The chip is painted with the role's identity hue (theme.role_colors).
+        return theme.on_vivid
 
     # ------------------------------------------------------------ 事件
 
@@ -289,6 +296,11 @@ class RecognitionRoleCard(QFrame):
         else:
             self._status_layout.addWidget(self.recovery,0,3)
 
+    def apply_ui_zoom(self, _factor):
+        """Interface zoom changed: re-apply the current profile (glyph size)."""
+        profile, self._responsive_profile = self._responsive_profile, None
+        self.apply_responsive_profile(profile or "normal")
+
     def apply_responsive_profile(self, profile: str):
         """Apply one of three bounded density profiles.
 
@@ -314,8 +326,9 @@ class RecognitionRoleCard(QFrame):
         self._responsive_apply_count += 1
         self.setProperty("density", profile)
         layout = self.layout()
-        layout.setContentsMargins(*config["margins"])
-        layout.setSpacing(config["spacing"])
+        from . import ui_zoom
+        # Logical px: the interface zoom scales them (ui_zoom).
+        ui_zoom.set_layout(layout, config["margins"], config["spacing"])
         self._upper_gap.changeSize(
             0,
             config["gap"],
@@ -323,15 +336,15 @@ class RecognitionRoleCard(QFrame):
             QSizePolicy.Policy.Fixed,
         )
         self._apply_identity_balance(profile != "compact")
-        self.icon_label.setFixedSize(config["icon"], config["icon"])
+        ui_zoom.set_size(self.icon_label, fixed_w=config["icon"], fixed_h=config["icon"])
         self.description_label.setVisible(profile != "compact")
         import qtawesome as qta
         self.icon_label.setPixmap(
             qta.icon(self._icon_name, color=self._icon_color()).pixmap(
-                config["glyph"], config["glyph"]
+                ui_zoom.px(config["glyph"]), ui_zoom.px(config["glyph"])
             )
         )
-        self.setMinimumHeight(config["minimum"])
+        ui_zoom.set_size(self, min_h=config["minimum"])
         self.style().unpolish(self)
         self.style().polish(self)
         # Qt does not always invalidate child rules that depend on a dynamic
@@ -442,6 +455,10 @@ class RecognitionPlanWidget(QWidget):
         card_heights = [card.height() for card in self.cards.values() if card.height() > 0]
         available_height = min(card_heights) if card_heights else self.height()
         available_height = min(available_height, self.height())
+        # Thresholds are in 100% pixels: at a larger interface zoom the cards
+        # take the profile of a correspondingly smaller window.
+        from .ui_zoom import logical
+        available_width, available_height = logical(available_width), logical(available_height)
 
         if available_height < 300 or available_width < 175:
             profile = "compact"

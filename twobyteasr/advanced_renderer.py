@@ -963,9 +963,10 @@ class AdvancedRendererBackend:
                         "只渲染字幕出现的区间，请勿关闭应用"
                     ),
                 ))
+            from contextvars import copy_context
             threads = [
                 threading.Thread(
-                    target=segment_worker, args=(a, b, path),
+                    target=copy_context().run, args=(segment_worker, a, b, path),
                     daemon=True, name=f"remotion-seg-{a}",
                 )
                 for a, b, path in missing
@@ -1014,6 +1015,10 @@ class AdvancedRendererBackend:
     ) -> Path:
         from .static_caption_export import static_graph_project, render_static_graph
         from .export_filtergraph import simple_video_clips
+        if job.video_graph:
+            from dataclasses import replace
+            from .timeline_media import resolve_video_graph
+            job = replace(job, video_graph=resolve_video_graph(job.video_graph, ffmpeg_path, cancelled=cancelled))
         if static_graph_project(project) and job.video_graph and simple_video_clips(job.video_graph) is not None:
             from dataclasses import replace
             source_fps=job.settings.fps or job.video_graph.get('fps')
@@ -1215,7 +1220,7 @@ class AdvancedRendererBackend:
             if native_project.cues:
                 native_ass.write_text(compile_ass(native_project), encoding="utf-8-sig")
             partial = Path(temp_name) / f"output.partial{output.suffix}"
-            composite = [str(Path(ffmpeg_path).resolve()), "-hide_banner", "-loglevel", "warning", "-y"]
+            composite = [str(Path(ffmpeg_path).resolve()), "-hide_banner", "-loglevel", "info", "-y"]
             slices = [(float(a), float(b)) for a, b in (getattr(job, "edit_segments", ()) or ())]
             scale_chain = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
             if native_ass.is_file():
@@ -1278,6 +1283,10 @@ class AdvancedRendererBackend:
             if job.settings.preset:
                 composite.extend(["-preset", job.settings.preset])
             if job.settings.fps>0:composite.extend(['-r',f'{job.settings.fps:.12g}'])
+            if job.composition_resolved:
+                from .video_export import composed_video_frame_count
+                frames = composed_video_frame_count(job)
+                if frames is not None:composite.extend(['-frames:v',str(frames)])
             if job.settings.profile:composite.extend(['-profile:v',job.settings.profile])
             if job.settings.level:composite.extend(['-level:v',job.settings.level])
             if job.settings.gop>0:composite.extend(['-g',str(job.settings.gop)])

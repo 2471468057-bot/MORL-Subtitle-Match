@@ -246,10 +246,26 @@ def normalize_firered_worker_result(
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         _raise_contract(producer, consumer, value, "FireRed worker results: list[dict]")
     segments: list[dict[str, Any]] = []
+
+    def window(position):
+        job = jobs[position] if 0 <= position < len(jobs) else None
+        if not job:
+            return None
+        start = float(job.get("offset", 0.0) or 0.0)
+        return start, start + float(job.get("duration", 0.0) or 0.0)
+
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping):
             _raise_contract(producer, consumer, row, "FireRed result dict")
         job = jobs[index] if index < len(jobs) else {}
+        # 2026-10-10: windows overlap (38 s every 36 s). Each overlap belongs
+        # to exactly one window, split at its midpoint by token centre — the
+        # same ownership the in-process path applies. Without it every seam
+        # kept both decodes, duplicating up to 2 s of timed words.
+        own, previous, following = window(index), window(index - 1), window(index + 1)
+        owned_start = (previous[1] + own[0]) / 2 if own and previous and previous[1] > own[0] else float("-inf")
+        owned_end = (own[1] + following[0]) / 2 if own and following and own[1] > following[0] else float("inf")
+        dropped = 0
         timestamps = row.get("timestamp") or []
         starts: list[float] = []
         ends: list[float] = []
@@ -273,12 +289,18 @@ def normalize_firered_worker_result(
             offset = float(job.get("offset", 0.0) or 0.0)
             global_start = offset + local_start
             global_end = offset + local_end
+            if not owned_start <= (global_start + global_end) / 2 < owned_end:
+                dropped += 1
+                continue
             starts.append(global_start)
             ends.append(global_end)
             token_rows.append({"text": str(token), "start": global_start, "end": global_end})
         text = str(row.get("text") or "").strip()
-        if not text and token_rows:
+        if (dropped or not text) and token_rows:
+            # The window text includes the overlap another window owns.
             text = "".join(item["text"] for item in token_rows).strip()
+        elif dropped and not token_rows:
+            continue  # Everything this window heard belongs to its neighbours.
         if not text:
             _raise_contract(
                 producer,

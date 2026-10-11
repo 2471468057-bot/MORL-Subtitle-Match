@@ -187,9 +187,19 @@ def loop_region(cue: StudioCue, *, pre_roll_ms: int = 250, post_roll_ms: int = 3
 SPLIT_MIN_CUE_DURATION_MS = 50
 
 
+ESTIMATED_SPLIT = "estimated_text_allocation"
+
+
 @dataclass(frozen=True)
 class SplitPreview:
-    """One resolved razor cut: exact split time plus both resulting cues."""
+    """One resolved razor cut: exact split time plus both resulting cues.
+
+    ``split_ms`` is the media cut (where the cue interval is cut).  With
+    measured words the text boundary sits between ``left_word_end_ms`` and
+    ``right_word_start_ms``; ``straddled`` names the word whose sound the cut
+    passes through, which stays on the left.  Without words the text boundary
+    is an explicit estimate (``timing_source == ESTIMATED_SPLIT``).
+    """
 
     split_ms: int
     left_text: str
@@ -198,48 +208,78 @@ class SplitPreview:
     left_end_ms: int
     right_start_ms: int
     right_end_ms: int
-    timing_source: str = "estimated_text_allocation"
+    timing_source: str = ESTIMATED_SPLIT
     timing_reason: str = "missing_word_timestamps"
     right_word_start_ms: int | None = None
+    left_word_end_ms: int | None = None
+    straddled: object | None = None
+    words: tuple = ()
+
+    @property
+    def measured(self) -> bool:
+        return self.timing_source != ESTIMATED_SPLIT
 
 
-def resolve_split(
+@dataclass(frozen=True)
+class SplitBlocked:
+    """A razor position that cannot produce two nonempty cues."""
+
+    split_ms: int
+    reason: str  # before_first_word | after_last_word_onset | too_short | single_character
+    timing_source: str = ESTIMATED_SPLIT
+    timing_reason: str = ""
+    words: tuple = ()
+
+
+def split_alignment(cue: StudioCue, project: SubtitleProject | None) -> tuple[tuple, str]:
+    """Measured words for razor previews and commits (see cue_words)."""
+    from .cue_word_alignment import cue_words
+    return cue_words(project, cue)
+
+
+def describe_split(
     cue: StudioCue,
     split_ms: int,
     *,
     min_duration_ms: int = SPLIT_MIN_CUE_DURATION_MS,
     project: SubtitleProject | None = None,
-) -> SplitPreview | None:
+    alignment: tuple[tuple, str] | None = None,
+) -> SplitPreview | SplitBlocked:
     """Resolve a razor cut exactly the way the split command commits it.
 
-    The timeline drag preview and the cue controller both call this, so what
-    the user sees while sliding is by construction what the split produces.
+    The timeline preview and the cue controller both call this, so what the
+    user sees is by construction what the split produces.  ``alignment`` lets
+    the timeline reuse words it already resolved for this cue revision.
     """
-    if len(cue.text) < 2:
-        return None
-    duration = max(1, cue.end_ms - cue.start_ms)
     clamped = min(
         cue.end_ms - min_duration_ms,
         max(cue.start_ms + min_duration_ms, int(split_ms)),
     )
+    words, reason = alignment if alignment is not None else split_alignment(cue, project)
+    source = reason if words else ESTIMATED_SPLIT
+    if len(cue.text) < 2:
+        return SplitBlocked(clamped, 'single_character', source, reason, tuple(words))
     if not (cue.start_ms < clamped < cue.end_ms):
-        return None
-    ratio = (clamped - cue.start_ms) / duration
-    position = min(len(cue.text) - 1, max(1, round(len(cue.text) * ratio)))
-    from .cue_word_alignment import cue_words
-    words, reason = cue_words(project, cue)
-    source = 'estimated_text_allocation'
-    right_word_start = None
-    if words:
-        # An already-started token belongs to the left. The razor remains at
-        # the user's playhead; it never silently snaps to a distant word.
-        right = [word for word in words if word.start_ms >= clamped]
-        if not right or right[0].char_start == 0:
-            return None  # no nonempty text boundary at this time
-        position = right[0].char_start
-        source = 'exact_token_text'
-        right_word_start = right[0].start_ms
-        reason = 'inside_token_kept_left' if any(w.start_ms < clamped < w.end_ms for w in words) else 'manual_time_preserved'
+        return SplitBlocked(clamped, 'too_short', source, reason, tuple(words))
+    if not words:
+        # No measured words: an explicit, labelled estimate, never presented
+        # as a word-level split.
+        duration = max(1, cue.end_ms - cue.start_ms)
+        ratio = (clamped - cue.start_ms) / duration
+        position = min(len(cue.text) - 1, max(1, round(len(cue.text) * ratio)))
+        return SplitPreview(clamped, cue.text[:position], cue.text[position:], cue.start_ms, clamped,
+                            clamped, cue.end_ms, ESTIMATED_SPLIT, reason)
+    # A word whose sound has started belongs to the left. The media cut stays
+    # where the user put it; the text boundary follows the measured onsets, so
+    # moving inside one pause never moves text.
+    right = [word for word in words if word.start_ms >= clamped]
+    left = [word for word in words if word.start_ms < clamped]
+    if not left or right and right[0].char_start == 0:
+        return SplitBlocked(clamped, 'before_first_word', source, reason, tuple(words))
+    if not right:
+        return SplitBlocked(clamped, 'after_last_word_onset', source, reason, tuple(words))
+    position = right[0].char_start
+    straddled = left[-1] if left[-1].end_ms > clamped else None
     return SplitPreview(
         split_ms=clamped,
         left_text=cue.text[:position],
@@ -249,9 +289,43 @@ def resolve_split(
         right_start_ms=clamped,
         right_end_ms=cue.end_ms,
         timing_source=source,
-        timing_reason=reason,
-        right_word_start_ms=right_word_start,
+        timing_reason='inside_token_kept_left' if straddled else 'manual_time_preserved',
+        right_word_start_ms=right[0].start_ms,
+        left_word_end_ms=left[-1].end_ms,
+        straddled=straddled,
+        words=tuple(words),
     )
+
+
+def resolve_split(
+    cue: StudioCue,
+    split_ms: int,
+    *,
+    min_duration_ms: int = SPLIT_MIN_CUE_DURATION_MS,
+    project: SubtitleProject | None = None,
+    alignment: tuple[tuple, str] | None = None,
+) -> SplitPreview | None:
+    """``describe_split`` for callers that only need a committable cut."""
+    result = describe_split(cue, split_ms, min_duration_ms=min_duration_ms,
+                            project=project, alignment=alignment)
+    return result if isinstance(result, SplitPreview) else None
+
+
+def merge_neighbor_allowed(anchor: StudioCue, cue: StudioCue) -> bool:
+    """A merge neighbour: same track, or another track not speaking at once."""
+    if cue.speaker_id == anchor.speaker_id:
+        return True
+    return min(anchor.end_ms, cue.end_ms) <= max(anchor.start_ms, cue.start_ms)
+
+
+def word_boundary_times(words) -> list[tuple[int, int]]:
+    """(time, right word index) for every measured text boundary in a cue."""
+    values = []
+    for index in range(1, len(words)):
+        values.append((int(words[index].start_ms), index))
+        if words[index - 1].end_ms < words[index].start_ms:
+            values.append((int(words[index - 1].end_ms), index))
+    return values
 
 
 def snap_candidates(project: SubtitleProject, cue: StudioCue, value_ms: int, *, edge: str = "start", playhead_ms: int | None = None, threshold_ms: int = 100) -> list[tuple[int, str]]:

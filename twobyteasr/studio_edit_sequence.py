@@ -711,6 +711,7 @@ def timeline_duration_ms(project: SubtitleProject) -> int:
     return max(
         int(sequence.timeline_duration_ms),
         media_graph_duration_ms(project),
+        max((c.end_ms for c in project.cues), default=0) if project.render_settings.get('_cue_domain') == 'timeline' else 0,
         0,
     )
 
@@ -793,6 +794,11 @@ def caption_continuous_segments(sequence: EditSequence) -> list[VideoSegment]:
         first, last = group[0], group[-1]
         union_source = last.source_out_ms - first.source_in_ms
         union_time = last.timeline_out_ms - first.timeline_in_ms
+        # A blank project keeps a zero-duration identity placeholder until
+        # media is imported. It has no affine map to verify or rejoin.
+        if union_time <= 0:
+            result.extend(copy.deepcopy(group))
+            continue
         if all(first.source_in_ms + round(Fraction(
                 (piece.timeline_in_ms-first.timeline_in_ms)*union_source, union_time))
                 == piece.source_in_ms for piece in group):
@@ -819,7 +825,7 @@ def projected_cues(
     """
     from .recognition_input import project_recognized_cues
     if project.render_settings.get('_cue_domain') == 'timeline':
-        return project.cues
+        return [] if domain == 'source' else project.cues
     recognized = project_recognized_cues(project, domain=domain)
     if recognized is not None:
         return recognized
@@ -872,6 +878,8 @@ def map_timing_to_source(
     源 cue 完整落在单个段内（未被裁边）时按段偏移平移；跨界/被裁边的
     cue 的源计时保持不变（剪辑模式下拖动边界手势对源数据不做半吊子改写）。
     """
+    if project.render_settings.get('_cue_domain') == 'timeline':
+        return int(start_ms), int(end_ms)
     sequence = caption_projection_sequence(project)
     info = project.generation_metadata.get("timeline_recognition")
     if info:

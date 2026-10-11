@@ -30,9 +30,15 @@ def main(output):
     result=dict(executable=sys.executable,frozen=bool(getattr(sys,'frozen',False)),cwd=os.getcwd(),
         roots=paths.to_dict(),settings_root=str(stable_settings_root()),studio_root=str(studio_data_root()),
         project_root=str(base),models=[r.to_dict() for r in registry.records.values()],
-        runtimes={role:resolve_runtime_python(role) for role in ('main','moss','firered_llm','nemotron')},
+        runtimes={role:resolve_runtime_python(role, register=False) for role in ('main','moss','firered_llm')},
         projects=projects,index_entries=len(index),errors=errors+warnings,
         environment={k:v for k,v in os.environ.items() if k in ('TWOBYTEASR_TEST_ROOT','2BYTEASR_USER_DATA_ROOT','2BYTEASR_MODEL_ROOT','LOCALAPPDATA')})
+    upgrade_manifest = os.environ.get('TWOBYTEASR_UPGRADE_DATA_PROBE')
+    if upgrade_manifest:
+        from .upgrade_data_probe import run as probe_upgrade_data
+        result['upgrade_fixture_probe'] = probe_upgrade_data(upgrade_manifest)
+        if not result['upgrade_fixture_probe']['passed']:
+            errors.append('isolated upgrade data probe failed')
     out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(result,ensure_ascii=False,indent=2),'utf8')
     return 0 if not errors else 1

@@ -28,6 +28,10 @@ MONO_FONT_FAMILIES = (
     "SF Mono",
     "Menlo",
     "DejaVu Sans Mono",
+    # CJK glyphs in logs/timecodes fall back to the bundled UI face instead of
+    # whatever system CJK font Windows picks (2026-10-07 visual system).
+    "Source Han Sans SC Medium",
+    "Microsoft YaHei UI",
 )
 MONO_FONT_STACK = ", ".join(f'"{name}"' for name in MONO_FONT_FAMILIES) + ", monospace"
 
@@ -35,7 +39,11 @@ TITLE_FONT_FAMILIES = SOURCE_HAN_FAMILY_ALIASES + UI_FONT_FAMILIES
 TITLE_FONT_STACK = ", ".join(f'"{name}"' for name in TITLE_FONT_FAMILIES) + ", sans-serif"
 
 # 数值在此定义，design.tokens.WEIGHT_SCALE 为 QSS 提供同源语义映射。
-# Heavy 只用于主视觉；区块标题 semibold、正文 regular。
+# 2026-10-07 字重规则：随包只有 Medium 与 Heavy 两个真实字面。
+#   400/500 → Medium 字面（正文、控件、标签、数值）
+#   600     → Medium 合成半粗，唯一的“强调”档（区块标题、主按钮、选中项）
+#   Heavy   → 只通过 TITLE_FONT_STACK 用于展示标题（页标题、结果标题、品牌）
+# 650–950 不再使用：它们与 600 渲染相同却让代码看似存在更多层级。
 REGULAR = 400
 MEDIUM = 500
 SEMIBOLD = 600

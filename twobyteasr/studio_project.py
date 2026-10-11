@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import marshal
 import os
 import re
 import shutil
@@ -389,6 +390,26 @@ class StudioCue:
     appearance_generation: int = 0
     transform: dict[str, Any] = field(default_factory=dict)
 
+    def __deepcopy__(self, memo):
+        # Undo snapshots and edit working copies deep-copy every cue several
+        # times per edit; the generic walk dominated delete/ripple/group moves
+        # on large projects. Cue values are JSON-like: exact built-in
+        # containers round-trip through marshal (~4x faster, same values and
+        # types); anything else keeps the generic deep copy.
+        clone = copy.copy(self)
+        memo[id(self)] = clone
+        for name, value in vars(self).items():
+            if value is None or type(value) in _ATOMIC_CUE_VALUES:
+                continue
+            if type(value) in (dict, list):
+                try:
+                    setattr(clone, name, marshal.loads(marshal.dumps(value)))
+                    continue
+                except ValueError:
+                    pass
+            setattr(clone, name, copy.deepcopy(value, memo))
+        return clone
+
     def validate(self) -> None:
         self.id = _clean_id(self.id, "cue.id")
         self.start_ms = int(self.start_ms)
@@ -410,6 +431,9 @@ class StudioCue:
         self.appearance_override = _mapping(self.appearance_override)
         self.appearance_generation = max(0, int(self.appearance_generation or 0))
         self.transform = _mapping(self.transform)
+
+
+_ATOMIC_CUE_VALUES = (str, int, float, bool)
 
 
 @dataclass
@@ -1914,6 +1938,7 @@ def project_from_runtime_cues(
     asr_evidence: Mapping[str, Any] | None = None,
     glossary_ids: Iterable[str] = (),
     media_identity: Mapping[str, Any] | None = None,
+    initialize_layout: bool = True,
 ) -> SubtitleProject:
     studio_cues: list[StudioCue] = []
     speaker_ids: list[str] = []
@@ -1963,6 +1988,9 @@ def project_from_runtime_cues(
     if identity:
         hydrate_media_contract(project, identity, source_path=media_path)
     project.validate()
+    if initialize_layout:
+        from .subtitle_stacking import initialize_project_layout
+        initialize_project_layout(project)
     return project
 
 
@@ -1978,20 +2006,26 @@ def create_studio_outputs(
     glossary_ids: Iterable[str] = (),
     target_project_path: str | os.PathLike[str] = "",
     recognition_snapshot: Mapping[str, Any] | None = None,
+    decoded_audio_seconds: float | None = None,
 ) -> dict[str, str]:
     """Create an archived Studio project without mutating ASR outputs."""
 
     metadata = _mapping(generation_metadata)
+    from .recognition_result import recognition_project_path
+    job_id = str(metadata.get("job_id") or "")
     analysis_transcript = bool(metadata.get("analysis_transcript"))
 
     project_path = (
         Path(target_project_path).expanduser().resolve()
         if str(target_project_path or "").strip()
-        else canonical_project_path(media_path)
+        else recognition_project_path(media_path, job_id or uuid.uuid4().hex)
     )
-    project_path.parent.mkdir(parents=True, exist_ok=True)
-    for child in ("subtitles", "reports", "source", "autosave", "cache", "preview", "backup", "renders", "exports"):
-        (project_path.parent / child).mkdir(parents=True, exist_ok=True)
+    existing_job_project = None
+    if job_id and project_path.is_file():
+        existing_job_project = load_project(project_path)
+        prior = existing_job_project.generation_metadata.get("recognition_result") or {}
+        if prior.get("job_id") != job_id:
+            raise ProjectValidationError("识别输出路径已被其它任务占用；已保留原工程。")
     evidence: dict[str, Any] = {}
     segment_rows = []
     for index, segment in enumerate(segments, 1):
@@ -2028,6 +2062,11 @@ def create_studio_outputs(
         # 单位约定：显式 start_ms/end_ms 键=毫秒；start/end=秒（WordUnit
         # 与 API 词级字段的既有约定）。additive 键，旧工程无该键自动回落。
         words_payload = []
+        arbitration=row['caption_arbitration']
+        if row['primary_source'].startswith('vibevoice_'):
+            row['native_model_probability']=None
+            row['confidence_kind']=arbitration.get('confidence_kind','unknown')
+            if row['confidence_kind']=='unknown':row['confidence']=None
         for word in getattr(segment, "words", None) or ():
             if isinstance(word, Mapping):
                 word_text = str(word.get("text") or word.get("word") or "")
@@ -2056,25 +2095,31 @@ def create_studio_outputs(
             row["words"] = words_payload
         evidence[reference] = row
         segment_rows.append((reference, row))
-    # Keep the original ASR files untouched for backwards compatibility, but
-    # place canonical internal artifacts beside the project from this point on.
-    subtitles_dir = project_path.parent / "subtitles"
-    reports_dir = project_path.parent / "reports"
-    if txt_path and Path(txt_path).is_file():
-        shutil.copy2(
-            txt_path,
-            subtitles_dir / ("analysis_transcript.txt" if analysis_transcript else "transcript.txt"),
-        )
-    if srt_path and Path(srt_path).is_file():
-        shutil.copy2(
-            srt_path,
-            subtitles_dir / ("analysis.srt" if analysis_transcript else "master.srt"),
-        )
-    if report_path and Path(report_path).is_file():
-        shutil.copy2(report_path, reports_dir / Path(report_path).name)
     original_outputs = {"txt": txt_path}
     if srt_path:
         original_outputs["srt"] = srt_path
+    source_metadata = None
+    valid_duration_ms = 0
+    if job_id and not recognition_snapshot and decoded_audio_seconds is not None:
+        from .media_service import GLOBAL_MEDIA_SERVICE
+        # A new Home result has a full content identity, including same-stat
+        # replacements. Probe once freshly, then reuse it during construction.
+        source_metadata = GLOBAL_MEDIA_SERVICE.metadata(media_path, refresh=existing_job_project is None)
+        decoded_ms = max(0, round(float(decoded_audio_seconds) * 1000))
+        video_end_ms = max(0, round(float(source_metadata.video_stream_end_ms or 0.0)))
+        # Some formats omit stream duration. Preserve their container bound
+        # conservatively rather than cutting a potentially longer video tail.
+        unknown_video_end = bool(source_metadata.has_video and video_end_ms <= 0)
+        video_bound_ms = int(source_metadata.duration_ms) if unknown_video_end else video_end_ms
+        valid_duration_ms = max(decoded_ms, video_bound_ms)
+        if valid_duration_ms <= 0:
+            raise ProjectValidationError("新识别工程缺少有效媒体时长，已停止交付。")
+        metadata["input_duration_evidence"] = {
+            "decoded_audio_ms": decoded_ms, "video_stream_end_ms": video_end_ms,
+            "container_duration_ms": int(source_metadata.duration_ms),
+            "valid_duration_ms": valid_duration_ms,
+            "policy": "unknown_video_end_container_bound_preserved" if unknown_video_end else "max_decoded_audio_and_valid_video_end",
+        }
     project = project_from_runtime_cues(
         media_path,
         cues,
@@ -2083,7 +2128,20 @@ def create_studio_outputs(
         generation_metadata=metadata,
         asr_evidence=evidence,
         glossary_ids=glossary_ids,
+        media_identity=source_metadata.to_dict() if source_metadata is not None else None,
+        initialize_layout=False,
     )
+    if valid_duration_ms:
+        project.media.duration_ms = valid_duration_ms
+        for asset in project.media_pool:
+            asset.duration_ms = valid_duration_ms
+        for track in (*project.video_tracks, *project.audio_tracks):
+            for clip in track.clips:
+                clip.source_in_ms = clip.timeline_in_ms = 0
+                clip.source_out_ms = clip.timeline_out_ms = valid_duration_ms
+        # This is the initial Home graph only. Existing trimmed projects and
+        # timeline recognition keep their supplied mapping unchanged.
+        project.edit_sequence = {}
     provisional_rows = [
         dict(item)
         for item in metadata.get("asr_provisional_cues", [])
@@ -2116,7 +2174,16 @@ def create_studio_outputs(
             for reference, row in segment_rows
             if int(row["end_ms"]) > cue.start_ms and int(row["start_ms"]) < cue.end_ms
         ]
-    if project_path.is_file():
+    if existing_job_project is not None:
+        from .recognition_result import committed_result_reference, cue_identity, digest_payload
+        reference = committed_result_reference(existing_job_project, project_path)
+        incoming_digest = digest_payload(cue_identity(project))
+        if (incoming_digest != reference["cue_digest"]
+                or dict(metadata.get("media_identity") or {}).get("fingerprint") != reference["media_fingerprint"]):
+            raise ProjectValidationError("同一识别任务返回了不同结果；已保留先前提交的工程。")
+        return {"project": str(project_path), "txt": str(txt_path),
+                "result_ref_json": json.dumps(reference, ensure_ascii=False)}
+    if project_path.is_file() and not job_id:
         existing = load_project(project_path)
         existing_media = os.path.normcase(os.path.abspath(existing.media.path))
         incoming_media = os.path.normcase(os.path.abspath(os.fspath(media_path)))
@@ -2187,9 +2254,33 @@ def create_studio_outputs(
     if recognition_snapshot:
         from .recognition_input import attach_timeline_result
         project = attach_timeline_result(project, recognition_snapshot)
+    from .subtitle_stacking import initialize_project_layout
+    initialize_project_layout(project)
+    if job_id:
+        from .recognition_result import stamp_result
+        stamp_result(project, project_path, job_id=job_id, media_identity=metadata.get("media_identity"))
+    # Validate duplicate/conflicting delivery before touching committed files.
+    project_path.parent.mkdir(parents=True, exist_ok=True)
+    for child in ("subtitles", "reports", "source", "autosave", "cache", "preview", "backup", "renders", "exports"):
+        (project_path.parent / child).mkdir(parents=True, exist_ok=True)
+    subtitles_dir = project_path.parent / "subtitles"
+    reports_dir = project_path.parent / "reports"
+    if txt_path and Path(txt_path).is_file():
+        shutil.copy2(txt_path, subtitles_dir / ("analysis_transcript.txt" if analysis_transcript else "transcript.txt"))
+    if srt_path and Path(srt_path).is_file():
+        shutil.copy2(srt_path, subtitles_dir / ("analysis.srt" if analysis_transcript else "master.srt"))
+    if report_path and Path(report_path).is_file():
+        shutil.copy2(report_path, reports_dir / Path(report_path).name)
     save_project(project, project_path)
+    reference = None
+    if job_id:
+        from .recognition_result import committed_result_reference
+        reference = committed_result_reference(load_project(project_path), project_path)
     register_recent_project(project_path, source_media=str(Path(media_path).resolve()), cue_count=len(project.cues))
-    return {"project": str(project_path), "txt": str(txt_path)}
+    outputs = {"project": str(project_path), "txt": str(txt_path)}
+    if reference is not None:
+        outputs["result_ref_json"] = json.dumps(reference, ensure_ascii=False)
+    return outputs
 
 
 def analysis_transcript_cues(project: SubtitleProject) -> list[StudioCue]:

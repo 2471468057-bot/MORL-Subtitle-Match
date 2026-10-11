@@ -138,7 +138,11 @@ def test_invalid_drop_and_escape_are_atomic(timeline, invalid):
     hold(t, ms=7000 if invalid == 'collision' else 12000)
     end = point(t, 'V1', 12000)
     if invalid == 'outside':
-        end = QPoint(600, 45); QTest.mouseMove(t, end, 10)
+        # Lanes start under the ruler (2026-10-09, M16); the spare area
+        # below the last lane is outside every media lane.
+        below = round(t._stack_bottom()) + 20
+        assert below < t._canvas_bottom()
+        end = QPoint(600, below); QTest.mouseMove(t, end, 10)
     assert t._clip_drag['invalid']
     QTest.mouseRelease(t, Qt.LeftButton, Qt.NoModifier, end)
     assert not commits and t.project.to_dict() == before

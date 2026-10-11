@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from twobyteasr.i18n import current_language, translate
-from twobyteasr.ui_navigation import NAVIGATION_QSS, WorkspaceNavigation
+from twobyteasr.ui_navigation import (NAVIGATION_QSS, WorkspaceNavigation, style_workspace_page_title,
+                                      style_workspace_sidebar_heading)
 from twobyteasr.ui_theme import (
     AMBER,
     AMBER_SOFT,
@@ -49,6 +50,9 @@ from twobyteasr.ui_theme import (
 )
 
 from .i18n import bind_text, tr
+from .recognition_outcome import (
+    OUTCOME_VERSION, RecognitionOutcome, normalize_recognition_outcome, review_severity,
+)
 
 
 _SENSITIVE_KEY_PARTS = (
@@ -176,63 +180,12 @@ _SEVERITIES = ("error", "warning", "review", "info", "debug")
 
 
 def _review_severity(item: dict[str, Any]) -> str:
-    explicit = str(item.get("severity") or "").strip().lower()
-    if explicit in _SEVERITIES:
-        return explicit
-    category = str(item.get("category") or "")
-    if category in {"校对回退", "断句回退", "主力转写提前结束", "时间轴模型失败", "Whisper失败", "漏句回退"}:
-        return "warning"
-    if category in {"Qwen骨架缺口", "时间锚覆盖低"}:
-        return "info"
-    return "review" if int(item.get("priority", 2) or 2) >= 2 else "info"
+    return review_severity(item)
 
 
 def _severity_summary(payload: dict[str, Any]) -> tuple[dict[str, int], tuple[str, ...], tuple[str, ...]]:
-    """Return severity counts, actual anomalies, and human-review notes separately."""
-    anomalies: list[str] = []
-    settings = _dict(payload.get("settings"))
-    anomalies.extend(str(item) for item in _list(settings.get("config_warnings")) if str(item).strip())
-    operational_counts = Counter()
-    operational_counts["warning"] += len(anomalies)
-    for stage_value in _list(payload.get("stages")):
-        stage = _dict(stage_value)
-        stage_status = str(stage.get("status", "")).lower()
-        if stage_status in {"failed", "cancelled", "warning"}:
-            severity = "error" if stage_status == "failed" else "warning"
-            operational_counts[severity] += 1
-            anomalies.append(str(stage.get("error") or f"{stage.get('label', '阶段')}未完成"))
-    for event in _list(payload.get("events")):
-        row = _dict(event)
-        event_name = str(row.get("event", "")).lower()
-        if any(part in event_name for part in ("warning", "failed", "error")):
-            severity = "error" if any(part in event_name for part in ("failed", "error")) else "warning"
-            operational_counts[severity] += 1
-            anomalies.append(str(row.get("error") or row.get("message") or row.get("event")))
-    result_error = str(_dict(payload.get("result")).get("error") or "").strip()
-    if result_error:
-        operational_counts["error"] += 1
-        anomalies.append(result_error)
-
-    review_items = [_dict(item) for item in _list(payload.get("review_items"))]
-    item_counts = Counter(_review_severity(item) for item in review_items)
-    stored_counts = _dict(payload.get("review_severity_counts"))
-    counts = {
-        key: max(item_counts[key], int(stored_counts.get(key, 0) or 0))
-        for key in _SEVERITIES
-    }
-    # Legacy reports may carry operational failures outside review_items.
-    for key in ("error", "warning"):
-        counts[key] = max(counts[key], operational_counts[key])
-    review_notes = tuple(dict.fromkeys(
-        str(item.get("message") or item.get("category") or "待复核项").strip()
-        for item in review_items
-        if _review_severity(item) == "review"
-    ))
-    return (
-        counts,
-        tuple(dict.fromkeys(item.strip() for item in anomalies if item.strip())),
-        review_notes,
-    )
+    outcome = normalize_recognition_outcome(payload)
+    return dict(outcome.severity_counts), outcome.problems, outcome.review_notes
 
 
 @dataclass(frozen=True)
@@ -254,6 +207,7 @@ class RecognitionRecord:
     problems: tuple[str, ...]
     severity_counts: tuple[tuple[str, int], ...]
     review_notes: tuple[str, ...]
+    outcome: RecognitionOutcome
 
     def severity_count(self, severity: str) -> int:
         return dict(self.severity_counts).get(severity, 0)
@@ -268,11 +222,11 @@ class RecognitionRecord:
 
     @property
     def has_anomaly(self) -> bool:
-        return self.anomaly_count > 0 or self.status in {"failed", "cancelled", "skipped"}
+        return self.anomaly_count > 0 or self.status in {"failed", "cancelled", "skipped", "partial", "unknown"}
 
 
 _RecognitionRecordCache = dict[
-    Path, tuple[int, int, RecognitionRecord | None, str | None]
+    Path, tuple[int, int, RecognitionRecord | None, str | None, int]
 ]
 
 
@@ -302,18 +256,11 @@ def parse_recognition_report(path: Path) -> RecognitionRecord:
     if not glossary_count and profile.get("domain_terms") and str(profile.get("game") or "").strip():
         glossary_count = 1
 
-    status = str(payload.get("status") or "unknown").lower()
-    severity_counts, problems, review_notes = _severity_summary(payload)
-    if status == "failed" or severity_counts["error"]:
-        status_label = "失败"
-    elif severity_counts["warning"] or status in {"cancelled", "skipped", "degraded_success"}:
-        status_label = "警告"
-    elif status in {"success", "completed"}:
-        status_label = "完成"
-    elif status == "running":
-        status_label = "进行中"
-    else:
-        status_label = "异常"
+    outcome = normalize_recognition_outcome(payload)
+    status = outcome.core_status
+    status_label = outcome.status_label
+    severity_counts = dict(outcome.severity_counts)
+    problems, review_notes = outcome.problems, outcome.review_notes
     finished = payload.get("finished_at") or payload.get("started_at") or path.stat().st_mtime
     if isinstance(finished, (int, float)):
         completed_sort = datetime.fromtimestamp(float(finished))
@@ -345,6 +292,7 @@ def parse_recognition_report(path: Path) -> RecognitionRecord:
         problems=problems,
         severity_counts=tuple((key, severity_counts[key]) for key in _SEVERITIES),
         review_notes=review_notes,
+        outcome=outcome,
     )
 
 
@@ -359,7 +307,8 @@ def _record_identity(record: RecognitionRecord) -> tuple[str, str, str]:
     media = record.payload.get("media") if isinstance(record.payload, dict) else {}
     media_path = str(media.get("path") or record.media_name) if isinstance(media, dict) else record.media_name
     started = str(record.payload.get("started_at") or record.completed_sort.isoformat())
-    return (record.path.stem, media_path, started)
+    task_id = str(record.payload.get("task_id") or record.payload.get("run_id") or "").strip()
+    return (task_id or record.path.stem, media_path, started)
 
 
 def load_recognition_records(
@@ -388,14 +337,14 @@ def load_recognition_records(
                 mtime_ns = stat.st_mtime_ns
                 size = stat.st_size
                 cached = cache.get(path) if cache is not None else None
-                if cached is not None and cached[:2] == (mtime_ns, size):
+                if cached is not None and cached[:2] == (mtime_ns, size) and len(cached) > 4 and cached[4] == OUTCOME_VERSION:
                     record, error = cached[2], cached[3]
                 elif size > 12 * 1024 * 1024:
                     raise ValueError("报告超过 12 MB")
                 else:
                     record = parse_recognition_report(path)
                     error = None
-                active_cache[path] = (mtime_ns, size, record, error)
+                active_cache[path] = (mtime_ns, size, record, error, OUTCOME_VERSION)
                 if record is not None:
                     identity = _record_identity(record)
                     if identity in seen_identities:
@@ -408,7 +357,7 @@ def load_recognition_records(
                 error = f"{path.name}: {exc}"
                 errors.append(error)
                 if mtime_ns is not None and size is not None:
-                    active_cache[path] = (mtime_ns, size, None, error)
+                    active_cache[path] = (mtime_ns, size, None, error, OUTCOME_VERSION)
     if cache is not None:
         cache.clear()
         cache.update(active_cache)
@@ -579,8 +528,8 @@ QLabel#historyConfigValue {{ color: {INK}; font-size: 12px; font-weight: 600; }}
 # 状态色/边框色到语义 token，让四种主题下都不残留浅色硬编码。
 _HISTORY_TOKEN_OVERRIDES = {
     # hover/边框（绿系）
-    "#b9cdb4": "focus",
-    "#d4e1cf": "focus",
+    "#b9cdb4": "border_strong",
+    "#d4e1cf": "border",
     "#8eaf8e": "accent",
     "#eef5eb": "accent_soft",
     "#e1eddd": "accent_soft",
@@ -625,7 +574,8 @@ def build_history_page_qss(theme=None) -> str:
     qss = HISTORY_QSS
     for literal, token in _HISTORY_TOKEN_OVERRIDES.items():
         qss = qss.replace(literal, getattr(active, token, literal))
-    return retheme_qss(qss, active)
+    from twobyteasr.design.semantic_qss import build_semantic_qss
+    return retheme_qss(qss, active) + build_semantic_qss(active)
 
 
 def _duration_label(seconds: float) -> str:
@@ -676,7 +626,7 @@ class HistoryCard(QFrame):
         status = QLabel(translate(record.status_label, language))
         status.setObjectName(
             "historyStatusError" if record.status_label == "失败" else
-            ("historyStatusWarn" if record.status_label in {"警告", "异常"} else "historyStatusGood")
+            ("historyStatusWarn" if record.status in {"partial", "unknown", "cancelled"} else "historyStatusGood")
         )
         top.addWidget(status, 0, Qt.AlignmentFlag.AlignVCenter)
         button = QPushButton(translate("查看详情", language))
@@ -721,7 +671,7 @@ class HistoryCard(QFrame):
         ]
         if record.review_count:
             metadata_items.append((
-                f"{record.review_count} " + ("to review" if language == "en" else "条可复核"),
+                f"{record.review_count} " + ("review items" if language == "en" else "項目" if language == "ja" else "项待检查"),
                 False,
             ))
         if record.anomaly_count:
@@ -731,7 +681,7 @@ class HistoryCard(QFrame):
             ))
         for text, warning in metadata_items:
             chip = QLabel(text)
-            is_review = text.endswith(("条可复核", "to review"))
+            is_review = text.endswith(("项待检查", "review items", "項目"))
             chip.setObjectName(
                 "historyMetaChipWarn" if warning else
                 ("historyMetaChipReview" if is_review else "historyMetaChip")
@@ -787,14 +737,16 @@ def _history_section(title: str, object_name: str = "historyInfoSection") -> tup
     box = QVBoxLayout(frame)
     box.setContentsMargins(13, 11, 13, 12)
     box.setSpacing(7)
-    heading = QLabel(title)
+    heading = QLabel()
+    bind_text(heading, title)
     heading.setObjectName("historySectionTitle")
     box.addWidget(heading)
     return frame, box
 
 
 def _history_pill(text: str, object_name: str = "historySummaryPill") -> QLabel:
-    label = QLabel(text)
+    label = QLabel()
+    bind_text(label, text)
     label.setObjectName(object_name)
     label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     return label
@@ -812,15 +764,19 @@ def _history_table_pill(text: str, object_name: str, tooltip: str = "") -> QWidg
     return host
 
 
-def _history_config_row(label: str, value: str) -> QWidget:
+def _history_config_row(label: str, value: str, *, translate_value=False) -> QWidget:
     row = QWidget()
     box = QHBoxLayout(row)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(10)
-    key = QLabel(label)
+    key = QLabel()
+    bind_text(key, label)
     key.setObjectName("historyConfigKey")
-    key.setFixedWidth(82)
+    key.setWordWrap(True)
+    key.setFixedWidth(118)
     content = QLabel(value)
+    if translate_value or hasattr(value, "source"):
+        bind_text(content, value)
     content.setObjectName("historyConfigValue")
     content.setWordWrap(True)
     content.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -844,6 +800,8 @@ def _history_model_name(role: str, record: RecognitionRecord, models: dict[str, 
 class RecognitionHistoryDetail(QWidget):
     """Product summary with the complete report isolated in a developer view."""
 
+    result_requested = Signal(object)
+
     def __init__(self, record: RecognitionRecord, parent=None):
         super().__init__(parent)
         self.record = record
@@ -861,19 +819,43 @@ class RecognitionHistoryDetail(QWidget):
         summary.setSpacing(6)
         status_object = (
             "historyStatusError" if record.status_label == "失败" else
-            ("historyStatusWarn" if record.status_label in {"警告", "异常"} else "historyStatusGood")
+            ("historyStatusWarn" if record.status in {"partial", "unknown", "cancelled"} else "historyStatusGood")
         )
         summary.addWidget(_history_pill(record.status_label, status_object))
-        summary.addWidget(_history_pill(f"总耗时 {_duration_label(record.elapsed_seconds)}"))
+        summary.addWidget(_history_pill(tr("本文件耗时 {duration}", duration=_duration_label(record.elapsed_seconds))))
         if record.media_seconds:
-            summary.addWidget(_history_pill(f"素材 {_duration_label(record.media_seconds)}"))
+            summary.addWidget(_history_pill(tr("素材时长 {duration}", duration=_duration_label(record.media_seconds))))
         cue_count = int(result.get("cue_count") or 0)
         if cue_count:
-            summary.addWidget(_history_pill(f"{cue_count} 条字幕"))
-        if record.review_count:
-            summary.addWidget(_history_pill(f"{record.review_count} 条可复核", "historyReviewPill"))
+            summary.addWidget(_history_pill(tr("{count} 条字幕", count=cue_count)))
+        if record.outcome.review_issue_count:
+            summary.addWidget(_history_pill(tr("{count} 项待检查问题", count=record.outcome.review_issue_count), "historyReviewPill"))
         summary.addStretch(1)
         layout.addLayout(summary)
+
+        outcome_section, outcome_box = _history_section("处理结果")
+        outcome_box.addWidget(_history_config_row("核心处理", record.outcome.status_label, translate_value=True))
+        outcome_box.addWidget(_history_config_row("文字校对", record.outcome.polish_label, translate_value=True))
+        outcome_box.addWidget(_history_config_row("联网核验", record.outcome.search_label, translate_value=True))
+        if record.outcome.search_reason:
+            reason = QLabel()
+            bind_text(reason, record.outcome.search_reason)
+            reason.setObjectName("historyMuted")
+            reason.setWordWrap(True)
+            outcome_box.addWidget(reason)
+        if record.outcome.processed_records:
+            outcome_box.addWidget(_history_config_row("处理记录", tr("{count} 条处理记录", count=record.outcome.processed_records)))
+        outcome_box.addWidget(_history_config_row("实际接受修改", tr("{count} 处文字修改", count=record.outcome.accepted_edits)))
+        if record.outcome.review_issue_count:
+            outcome_box.addWidget(_history_config_row("待检查问题", tr("{count} 项检查问题", count=record.outcome.review_issue_count)))
+        if record.outcome.result_usable and _dict(result.get("outputs")).get("project"):
+            self.open_result_button = QPushButton()
+            bind_text(self.open_result_button, "打开识别结果")
+            self.open_result_button.setObjectName("historyPrimary")
+            self.open_result_button.setToolTip(str(result["outputs"]["project"]))
+            self.open_result_button.clicked.connect(lambda: self.result_requested.emit(record))
+            outcome_box.addWidget(self.open_result_button, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(outcome_section)
 
         stages = _list(record.payload.get("stages"))
         self.stage_table = _ProportionalStageTable(len(stages), 4)
@@ -970,9 +952,9 @@ class RecognitionHistoryDetail(QWidget):
             if _review_severity(_dict(item)) == "review"
         ]
         if review_items:
-            review, review_box = _history_section(f"可复核信息 {len(review_items)}", "historyReviewSection")
+            review, review_box = _history_section(tr("可复核信息 {count} 项", count=len(review_items)), "historyReviewSection")
             for category, count in Counter(str(item.get("category") or "待复核项") for item in review_items).most_common():
-                review_box.addWidget(_history_config_row(category, f"{count} 条"))
+                review_box.addWidget(_history_config_row(category, tr("{count} 项问题", count=count)))
             segment_items = [item for item in review_items if any(item.get(key) not in (None, "") for key in ("cue_id", "segment_id", "timestamp", "text"))]
             if segment_items:
                 self.review_detail_button = QPushButton("展开分段详情")
@@ -1034,6 +1016,7 @@ class RecognitionHistoryPage(QWidget):
     recognition_requested = Signal()
     workshop_requested = Signal()
     terms_requested = Signal()
+    result_requested = Signal(object)
 
     def __init__(self, report_root: Path, parent=None, *, extra_roots: tuple[Path, ...] | list[Path] = ()):
         super().__init__(parent)
@@ -1069,7 +1052,7 @@ class RecognitionHistoryPage(QWidget):
         sidebar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(12, 12, 12, 12)
-        side.addWidget(QLabel(translate("工作台", language)))
+        side.addWidget(style_workspace_sidebar_heading(QLabel(translate("工作台", language))))
         nav = WorkspaceNavigation("history")
         nav.recognition_requested.connect(self.recognition_requested)
         nav.workshop_requested.connect(self.workshop_requested)
@@ -1092,6 +1075,7 @@ class RecognitionHistoryPage(QWidget):
         title_box = QVBoxLayout()
         title = QLabel(translate("识别记录", language))
         title.setObjectName("historyTitle")
+        style_workspace_page_title(title)
         title_box.addWidget(title)
         note = QLabel(translate("从现有字幕任务 JSON 报告汇总；详情按需展开，密钥不会显示。", language))
         note.setObjectName("historyMuted")
@@ -1305,6 +1289,7 @@ class RecognitionHistoryPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         detail = RecognitionHistoryDetail(record)
+        detail.result_requested.connect(lambda selected: (dialog.accept(), self.result_requested.emit(selected)))
         scroll.setWidget(detail)
         layout.addWidget(scroll, 1)
         close = QPushButton(translate("关闭", language))

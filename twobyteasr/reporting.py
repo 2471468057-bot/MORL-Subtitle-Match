@@ -8,6 +8,8 @@ import threading
 from collections import Counter
 from pathlib import Path
 
+from .recognition_outcome import normalize_recognition_outcome
+
 
 _active_report = None
 _REPORT_LOCK = threading.RLock()
@@ -39,6 +41,7 @@ _SEVERITY_BY_CATEGORY = {
     "校对回退": "warning",
     "断句回退": "warning",
     "主力转写提前结束": "warning",
+    "主力转写不完整": "warning",
     "时间轴模型失败": "warning",
     "Whisper失败": "warning",
     "漏句回退": "warning",
@@ -112,9 +115,18 @@ def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def report_paths_for_media(media_path):
+def report_paths_for_media(media_path, job_id=None, media_index=None):
     path = Path(media_path)
     base_name = path.stem
+    if job_id is None:
+        from .runtime import get_runtime_context
+        context = get_runtime_context()
+        if context.identity_task_active and context.media_path and Path(context.media_path).resolve() == path.resolve():
+            job_id = context.job_id
+            media_index = context.media_index
+    if job_id:
+        from .recognition_result import validate_job_id
+        base_name += "__" + validate_job_id(job_id) + "_" + str(int(media_index or 1))
     return (
         str(REPORT_ROOT / f"{base_name}_字幕任务报告.json"),
         str(REPORT_ROOT / f"{base_name}_字幕任务报告.txt"),
@@ -160,14 +172,19 @@ def begin_media_report(media_path, cache_context, settings):
     global _active_report
     path = Path(media_path).resolve()
     stat = path.stat()
+    from .runtime import get_runtime_context
+    context = get_runtime_context()
     _active_report = {
         "schema_version": 1,
+        "job_id": context.job_id if context.identity_task_active else "",
+        "media_index": context.media_index if context.identity_task_active else 0,
         "status": "running",
         "started_at": _now(),
         "media": {
             "name": path.name,
             "path": str(path),
             "size_bytes": int(stat.st_size),
+            "identity": dict(cache_context.get("identity") or {}),
         },
         "cache": {"directory": str(cache_context.get("cache_dir", "")), "hits": [], "writes": [], "accepted": [], "rejected": []},
         "settings": settings,
@@ -181,8 +198,45 @@ def record_media_event(event, **payload):
     with _REPORT_LOCK:
         if _active_report is None:
             return
+        if (_active_report.get('job_id') and payload.get('job_id')
+                and payload['job_id'] != _active_report['job_id']):
+            return
         row = {"time": _now(), "event": str(event), **payload}
         _active_report["events"].append(row)
+        if event == 'moss_full_context_preparing':
+            _active_report['moss_execution'] = {**payload, 'application_chunk_count': 0,
+                'worker_count': 0, 'generation_attempts': 0, 'complete': False}
+        elif event in {"moss_full_context_execution", "moss_full_context_result"}:
+            _active_report.setdefault("moss_execution", {}).update(payload)
+        elif event == 'asr_worker_started' and payload.get('backend') == 'moss':
+            execution = _active_report.setdefault('moss_execution', {})
+            pids = execution.setdefault('worker_pids', [])
+            if payload['pid'] not in pids: pids.append(payload['pid'])
+            execution['worker_count'] = len(pids)
+        elif event == 'asr_worker_progress' and payload.get('backend') == 'moss':
+            execution = _active_report.setdefault('moss_execution', {})
+            for key in ('phase', 'elapsed_seconds', 'last_activity_elapsed_seconds',
+                        'generated_tokens', 'input_tokens', 'max_new_tokens',
+                        'application_chunk_count', 'sample_count', 'sample_rate',
+                        'task_audio_fingerprint', 'attention_backend', 'dtype'):
+                if key in payload: execution[key] = payload[key]
+            if 'generation_attempt' in payload:
+                execution['generation_attempts'] = int(payload['generation_attempt'])
+        elif event == 'asr_worker_exited' and payload.get('backend') == 'moss':
+            execution = _active_report.setdefault('moss_execution', {})
+            execution['worker_returncode'] = payload.get('returncode')
+            if payload.get('returncode'):
+                execution.update(complete=False, failure_stage=execution.get('phase'),
+                                 end_reason='worker_stopped_or_failed')
+        elif event == "moss_full_context_coverage":
+            execution = _active_report.setdefault("moss_execution", {})
+            execution["complete"] = False
+            execution.setdefault("truncation_reasons", []).append(payload.get("reason"))
+            execution["coverage_check"] = payload
+        elif event == "speaker_identity_stages":
+            _active_report.setdefault("moss_execution", {})["speaker_stages"] = payload.get("stages", {})
+        elif event == "moss_identity_mapping":
+            _active_report.setdefault("moss_execution", {}).update(payload)
         if event == "stage_started":
             _active_report["stages"].append(
                 {"index": payload.get("index"), "label": payload.get("label"), "resource": payload.get("resource"), "status": "running"}
@@ -220,7 +274,7 @@ def record_media_event(event, **payload):
 
 
 def _write_report(report):
-    json_path, text_path = report_paths_for_media(report["media"]["path"])
+    json_path, text_path = report_paths_for_media(report["media"]["path"], job_id=report.get("job_id"), media_index=report.get("media_index"))
     json_path = Path(json_path)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _archive_previous_report(json_path, str(report.get("started_at") or ""))
@@ -229,10 +283,13 @@ def _write_report(report):
     elapsed_seconds = float(result.get("elapsed_seconds", 0) or 0)
     audio_seconds = float(result.get("audio_seconds", 0) or 0)
     realtime_ratio = elapsed_seconds / audio_seconds if audio_seconds > 0 else 0.0
+    outcome = normalize_recognition_outcome(report)
     performance = report.get("settings", {}).get("performance", {})
     lines = [
         "2ByteASR 字幕任务报告",
         f"状态：{report['status']}",
+        f"处理结果：{outcome.status_label}",
+        *outcome.detail_lines,
         f"素材：{report['media']['name']}",
         f"开始：{report['started_at']}",
         f"结束：{report.get('finished_at', '')}",
@@ -265,8 +322,8 @@ def _write_report(report):
         f"- 云端批次：{'并行' if performance.get('parallel_cloud_batches') else '串行'}，"
         f"最多 {performance.get('cloud_batch_workers', 1)} 路",
         f"- MOSS/VAD：{'并行' if performance.get('parallel_cpu_vad') else '串行'}",
-        f"- MOSS 长音频分块：最多 {performance.get('moss_parallel_workers', 1)} 路，"
-        f"显存门槛 {performance.get('moss_parallel_min_vram_gb', 0)} GB",
+        "- MOSS：完整任务音频 / 单上下文生成；旧分块并行设置不再生效",
+        "- MOSS 实际执行：" + json.dumps(report.get("moss_execution", {}), ensure_ascii=False),
         f"- Qwen3-ASR：每批最多 {performance.get('qwen_asr_batch_size', 4)} 个短块",
         f"- FireRed/Qwen3 GPU：{'允许并行' if performance.get('parallel_gpu_asr') else '串行'}，"
         f"显存门槛 {performance.get('parallel_gpu_asr_min_vram_gb', 0)} GB",
@@ -292,64 +349,24 @@ def _write_report(report):
                 f"- {source} -> {info.get('label')} {info.get('name')} "
                 f"（相似度 {info.get('score')}，余量 {info.get('margin')}）"
             )
-    if report["status"] in {"success", "degraded_success"}:
-        correction_count = sum(
-            len(event.get("edits", []))
-            for event in report["events"]
-            if event.get("event") == "cloud_correction_applied"
-        )
-        term_started = [
-            event for event in report["events"]
-            if event.get("event") == "domain_term_search_started"
-        ]
-        term_completed = [
-            event for event in report["events"]
-            if event.get("event") == "domain_term_search_completed"
-        ]
-        term_failed = [
-            event for event in report["events"]
-            if event.get("event") == "domain_term_search_failed"
-        ]
-        term_applied = sum(
-            int(event.get("count", 0) or 0)
-            for event in report["events"]
-            if event.get("event") in {
-                "domain_term_mapping_applied",
-                "profile_term_mapping_applied",
-            }
-        )
-        verification=report.get('terminology_summary',{})
-        if verification:
-            status=verification.get('status')
-            term_status={'success':'核验成功','partial':'核验部分成功，仍有候选未核验',
-                         'failed':'核验未执行或失败，本次不更新术语','not_run':'核验未执行'}.get(status,'核验状态未知')
-            term_status+=f"；已核验 {verification.get('verified_count',0)} / {verification.get('candidate_count',0)} 条证据"
-        elif term_completed:
-            term_status = (
-                f"已检索 {term_started[-1].get('candidate_count', 0)} 条候选，"
-                f"采纳 {term_completed[-1].get('accepted_count', 0)} 组，"
-                f"实际应用 {term_applied} 处"
-            )
-        elif term_failed:
-            term_status = "联网检索失败，未自动修改专名（详情见 JSON 报告）"
-        elif (
-            report.get("settings", {}).get("content_profile", {}).get("domain_terms")
-            and "polished" in report.get("cache", {}).get("hits", [])
-        ):
-            term_status = "命中校对缓存，沿用上次已核验术语结果"
-        else:
-            term_status = "未执行或没有可检索正文"
+    if outcome.result_usable and outcome.core_status in {"completed", "partial"}:
+        correction_count = outcome.accepted_edits
+        term_status = outcome.search_label
+        if outcome.search_reason:
+            term_status += "；" + outcome.search_reason
+        if outcome.search_verified_records or outcome.search_unverified_records:
+            term_status += f"；已核验 {outcome.search_verified_records} / 未核验 {outcome.search_unverified_records} 条处理记录"
         summary=report.get('polishing_summary',{})
         if summary:
             lines.extend(['','校对结果：',
-                f"- 成功：{summary.get('success_batches',0)} 批 / {summary.get('success_cues',0)} 条字幕",
-                f"- ASR 原文回退：{summary.get('fallback_batches',0)} 批 / {summary.get('fallback_cues',0)} 条字幕",
+                f"- 成功：{summary.get('success_batches',0)} 批 / {summary.get('success_cues',0)} 条处理记录",
+                f"- ASR 原文回退：{summary.get('fallback_batches',0)} 批 / {summary.get('fallback_cues',0)} 条处理记录",
                 '- 失败分类：'+json.dumps(summary.get('failure_categories',{}),ensure_ascii=False),
-                '- 可在识别记录中重试失败项；保留已成功校对子批次缓存。'])
+                *(['- 可重试失败文字校对；保留已成功校对子批次缓存。'] if outcome.polish_retryable else [])])
         lines.extend([
             "",
             *(["降级说明：AI 校对或断句部分回退到本地，请查看待复核项和 JSON 事件。", ""]
-              if report["status"] == "degraded_success" else []),
+              if outcome.polish_status == "partial" or any(item.get("category") == "断句回退" for item in report.get("review_items", [])) else []),
             *(
                 [item.get("message", "") for item in report.get("review_summary", [])]
                 + ([""] if report.get("review_summary") else [])
@@ -362,8 +379,8 @@ def _write_report(report):
                 f"{key} {report.get('review_severity_counts', {}).get(key, 0)}"
                 for key in ("error", "warning", "review", "info", "debug")
             ),
-            f"TXT：{result.get('outputs', {}).get('txt', '')}",
-            f"SRT：{result.get('outputs', {}).get('srt', '')}",
+            *[f"{key.upper()}：{result.get('outputs', {}).get(key)}" for key in ("txt", "srt") if result.get("outputs", {}).get(key)],
+            *([f"工程：{result['outputs']['project']}"] if result.get("outputs", {}).get("project") else []),
         ])
     else:
         lines.extend(["", f"错误：{result.get('error', '')}"])

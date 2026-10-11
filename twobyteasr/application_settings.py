@@ -34,6 +34,7 @@ from .theme_manager import apply_theme, available_themes, theme_key
 from .ui_theme import DEFAULT_THEME_KEY, theme_display_label
 
 from .i18n import bind_text, tr
+from .lazy_pages import existing_page
 
 
 def read_studio_preferences() -> dict[str, object]:
@@ -74,6 +75,7 @@ def save_hub_preferences(
     restore_layout: bool,
     recovery_policy: str = "ask",
     reduce_motion: bool | None = None,
+    startup_page: str | None = None,
 ) -> None:
     def mutate(payload: dict) -> None:
         previous_preferences = payload.get("studio_preferences", {})
@@ -85,7 +87,8 @@ def save_hub_preferences(
             payload["project_root"] = str(Path(root).expanduser())
         else:
             payload.pop("project_root", None)
-        payload["studio_preferences"] = {
+        payload["studio_preferences"] = dict(previous_preferences) if isinstance(previous_preferences, dict) else {}
+        payload["studio_preferences"].update({
             "autosave_enabled": bool(auto_save), "autosave_interval_seconds": int(interval),
             "recent_project_count": int(recent_count), "auto_cover": bool(cover),
             "restore_layout": bool(restore_layout),
@@ -93,7 +96,11 @@ def save_hub_preferences(
             "reduce_motion": (
                 previous_reduce_motion if reduce_motion is None else bool(reduce_motion)
             ),
-        }
+        })
+        if startup_page is not None:
+            payload["studio_preferences"]["startup_page"] = (
+                "project_library" if startup_page == "project_library" else "recognition"
+            )
 
     _write_settings_json(mutate)
 
@@ -136,12 +143,17 @@ def open_application_settings(
         if matches: dialog.navigation.setCurrentItem(matches[0])
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
+    dialog.storage_panel.save_policy()
+    workshop = existing_page(owner, 'workshop')
+    if workshop is not None:
+        workshop.refresh()
     previous_root = str(project_library_root())
     save_hub_preferences(
         root_edit.text().strip(), bool(auto_save.isChecked()), int(interval.currentData() or 60),
         int(preferences.get("recent_project_count", 9) or 9), bool(cover.isChecked()), bool(restore_layout_box.isChecked()),
         str(recovery_policy.currentData() or "ask"),
         bool(reduce_motion_box.isChecked()),
+        str(dialog.startup_page.currentData() or "recognition"),
     )
     QApplication.instance().setProperty("reduceMotion", bool(reduce_motion_box.isChecked()))
     if advanced_owner is not None:

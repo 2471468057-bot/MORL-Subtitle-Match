@@ -36,10 +36,12 @@ class OpenAIResponse:
         return {"text": "云端复核文本。"}
 
 
-def test_qwen_asr_api_uses_dashscope_multimodal_payload():
+def test_saved_unrelated_asr_deployment_can_use_multimodal_transport():
     requests = FakeRequests()
     endpoint = {
-        "model": "qwen3-asr-flash",
+        "provider": "custom",
+        "protocol": "dashscope_multimodal",
+        "model": "fixture-unrelated-deployment",
         "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
         "api_key": "secret-test-key",
     }
@@ -54,7 +56,7 @@ def test_qwen_asr_api_uses_dashscope_multimodal_payload():
     assert url == endpoint["url"]
     assert kwargs["headers"]["Authorization"] == "Bearer secret-test-key"
     body = kwargs["json"]
-    assert body["model"] == "qwen3-asr-flash"
+    assert body["model"] == "fixture-unrelated-deployment"
     assert body["input"]["messages"][0]["content"][0]["text"] == "游戏专名上下文"
     assert body["input"]["messages"][1]["content"][0]["audio"].startswith(
         "data:audio/wav;base64,UklGR"

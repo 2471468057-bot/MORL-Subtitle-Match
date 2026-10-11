@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 
-_CONSENSUS_PARTICLES = frozenset("啊呀呢吧嘛吗啦了的地得他她它")
+_CONSENSUS_PARTICLES = frozenset("啊呀呢吧嘛吗啦哦呃嗯了的地得他她它")
 _CONSENSUS_NUMBER_CHARS = frozenset("0123456789零〇一二两三四五六七八九十百千万亿")
 
 
@@ -69,9 +69,14 @@ def reference_consensus_edits(primary, independent_references):
     single wrong homophone makes two long sentences look almost identical and was
     previously the reason correct FireRed/Qwen evidence lost to MOSS.
     """
+    from .caption_arbitration import usable_transcript
+    if not usable_transcript(primary):
+        return []
     primary_content = content_exact(primary)
     references = []
     for value in independent_references or ():
+        if not usable_transcript(value):
+            continue
         candidate = content_exact(value)
         # Equal text from FireRed and Qwen is precisely the strongest case here;
         # keep the two model slots separate instead of deduplicating by value.
@@ -123,6 +128,8 @@ def reference_consensus_edits(primary, independent_references):
             continue
         if source.lower() == target.lower():
             continue
+        if re.search(r'[A-Za-z0-9]', source + target):
+            continue
         if any(char in _CONSENSUS_NUMBER_CHARS for char in source + target):
             continue
         if len(source) == 1 and (
@@ -173,21 +180,33 @@ def apply_reference_consensus_corrections(segments):
         if total >= 80 and index % 40 == 0 and index < total:
             print(f"   [三路仲裁] 进度 {index}/{total} 段。")
         primary = content_exact(segment.text)
+        previous = dict(segment.caption_arbitration or {})
+        evidence = previous.get('independent_input_evidence') or {
+            'primary': segment.moss_text or segment.text,
+            'firered': segment.firered_text,
+            'qwen': segment.qwen_asr_text,
+        }
         edits = reference_consensus_edits(
             primary,
-            (segment.firered_text or segment.alternate_text, segment.qwen_asr_text),
+            (evidence['firered'], evidence['qwen']),
         )
         from .caption_arbitration import arbitrate
-        decision = arbitrate(segment.moss_text or segment.text,
-            segment.firered_text or segment.alternate_text,segment.qwen_asr_text,
+        decision = arbitrate(evidence['primary'], evidence['firered'],evidence['qwen'],
             manual_text=getattr(segment,'manual_text',None),
-            start_ms=round(segment.start*1000),end_ms=round(segment.end*1000))
+            start_ms=round(segment.start*1000),end_ms=round(segment.end*1000),
+            primary_model='MOSS' if segment.moss_text else str(segment.primary_source or 'primary'))
+        decision['independent_input_evidence'] = dict(evidence)
+        for name in ('terminology_polish', 'terminology_normalization', 'source_coverage',
+                     'speaker_evidence','native_model_probability','confidence_kind','timing_precision',
+                     'streaming_chunk_index','native_timestamp_source'):
+            if name in previous:
+                decision[name] = previous[name]
         segment.caption_arbitration = decision
         if decision['reason'] == '用户手动确认':
             segment.text = decision['selected_text']
             continue
         if decision['accepted_spans']:
-            if primary == content_exact(segment.moss_text or segment.text):
+            if primary == content_exact(evidence['primary']):
                 new_edits = decision['accepted_spans']
                 occupied = {i for row in new_edits for i in range(row['start'],max(row['end'],row['start']+1))}
                 edits = sorted(new_edits + [row for row in edits if not any(i in occupied for i in range(row['start'],row['end']))], key=lambda row:row['start'])
@@ -768,6 +787,10 @@ def apply_correction_edits(
     approved_global_mappings=(),
     verified_terms=(),
     independent_sources,
+    contextual_term_candidates=(),
+    cue_id=None,
+    moss_text='',
+    decisions=None,
 ):
     """只执行 Qwen 明确指出的唯一局部替换；每个补丁单独过安全门。
 
@@ -781,6 +804,7 @@ def apply_correction_edits(
         return clean_subtitle_text(original), []
 
     text = clean_subtitle_text(original)
+    original_text = text
     applied = []
     pending = list(edits[:6])
     processed = 0
@@ -790,6 +814,10 @@ def apply_correction_edits(
         if candidate:
             grouped.setdefault(str(family or ""), []).append(candidate)
     vote_sources = independent_sources
+    def reject(rule_id, **evidence):
+        if decisions is not None:
+            decisions.append({**edit, 'rule_id': rule_id, 'accepted': False,
+                'input_text': text, 'evidence': evidence})
     # 每家族取第一份非空文本，供相似度型计数（hinted / 数字 / 数量）使用。
     independent_alternates = [texts[0] for texts in grouped.values()]
     while pending and processed < 12:
@@ -799,22 +827,86 @@ def apply_correction_edits(
             continue
         source = clean_subtitle_text(edit.get("from", ""))
         target = clean_subtitle_text(edit.get("to", ""))
+        candidate_id = str(edit.get('candidate_id') or '')
+        if candidate_id and not any(row.get('candidate_id') == candidate_id
+                and row.get('canonical', '').casefold() == target.casefold()
+                for row in contextual_term_candidates):
+            reject('unknown_or_mismatched_candidate_id', candidate_id=candidate_id)
+            continue
+        canonical_spellings = {row['canonical'] for row in contextual_term_candidates
+            if row.get('status') == 'confirmed' and not row.get('ambiguous')
+            and row.get('canonical', '').casefold() == target.casefold()}
+        if len(canonical_spellings) == 1:
+            target = next(iter(canonical_spellings))
         if not source or not target or content_only(source) == content_only(target):
+            from .number_fidelity import numeric_events
+            rule = ('ordered_numeric_events_changed' if
+                tuple(x.value for x in numeric_events(source)) != tuple(x.value for x in numeric_events(target))
+                else 'invalid_or_no_effect')
+            reject(rule)
             continue
         if protect_primary_speaker:
             print(
                 "   [拦截补丁] 重叠说话人片段只保留当前主播文字："
                 f"{source} -> {target}"
             )
+            reject('overlapping_speaker_protection')
             continue
-        span = find_unique_patch_span(text, source)
+        if 'start' in edit or 'end' in edit:
+            a, b = edit.get('start'), edit.get('end')
+            if (type(a) is not int or type(b) is not int or not 0 <= a < b <= len(original_text)
+                    or original_text[a:b] != source
+                    or any(a < row['end'] and row['start'] < b for row in applied
+                           if 'start' in row)):
+                reject('invalid_original_span')
+                continue
+            shift = sum(len(row['to'])-(row['end']-row['start']) for row in applied
+                if 'start' in row and row['end'] <= a)
+            span = (a+shift, b+shift)
+            if text[span[0]:span[1]] != source:
+                reject('stale_original_span')
+                continue
+        else:
+            span = find_unique_patch_span(text, source)
         if span is None:
             print(f"   [跳过补丁] 原片段不唯一或不存在：{source} -> {target}")
+            reject('source_not_unique_or_missing')
             continue
         start, end = span
         candidate_preview = clean_subtitle_text(text[:start] + target + text[end:])
+        from .content_scene import alias_context_conflict
+        alias_entry = next((row for row in contextual_term_candidates
+            if row.get('canonical') == target and source in row.get('aliases', ())), None)
+        if alias_entry:
+            from .content_scene import runtime_content_scene
+            scene = runtime_content_scene()
+            domains = {row.get('domain_id') for row in alias_entry.get('sources', ()) if row.get('domain_id')}
+            labels = {row.get('domain_name') for row in alias_entry.get('sources', ()) if row.get('domain_name')}
+            if (scene.source == 'user_selected' and domains
+                    and not domains.intersection(scene.domain_ids) and scene.domain not in labels):
+                reject('alias_domain_conflict')
+                continue
+        if alias_entry and alias_context_conflict(text, source, target,
+                category=' '.join(str(row.get('category', '')) for row in alias_entry.get('sources', ())), span=span):
+            reject('alias_context_topic_conflict')
+            continue
         source_content = content_only(source)
         target_content = content_only(target)
+        from .terminology_retrieval import (contextual_patch_supported, latin_identifier_patch_supported,
+                                           short_latin_identifier_patch_supported)
+        short_latin_supported = short_latin_identifier_patch_supported(source, target,
+            str(edit.get('basis') or ''), contextual_term_candidates, cue_id, text, moss_text)
+        context_supported = contextual_patch_supported(source, target,
+            str(edit.get('basis') or ''), contextual_term_candidates, independent_sources, cue_id, text) or short_latin_supported
+        latin_term_supported = latin_identifier_patch_supported(source, target,
+            str(edit.get('basis') or ''), contextual_term_candidates, cue_id, text) or short_latin_supported
+        from .terminology_support import confirmed_patch_evidence, contextual_spelling_patch
+        normalization_evidence = confirmed_patch_evidence(source, target, edit.get('basis'),
+            contextual_term_candidates, cue_id, text, span=span)
+        spelling_supported = contextual_spelling_patch(source, target, edit.get('basis'), text, start)
+        context_supported = bool(context_supported or normalization_evidence or spelling_supported)
+        latin_term_supported = bool(latin_term_supported or (normalization_evidence
+            and re.fullmatch(r'[A-Za-z0-9_]+', target)))
         verified_contents = {
             content_only(term) for term in verified_terms if content_only(term)
         }
@@ -825,16 +917,29 @@ def apply_correction_edits(
         exact_target_support = count_independent_asr_supports(
             target_content, vote_sources
         )
+        actual_support = [{'family': family, 'text': value,
+            'exact_target_present': target_content in content_only(value)}
+            for family, value in vote_sources if content_only(value)]
         approved_pair = (source_content, target_content) in {
             (content_only(item.get("from", "")), content_only(item.get("to", "")))
             for item in approved_global_mappings
         }
+        if (any(row.get('canonical') == target for row in contextual_term_candidates)
+                and not context_supported and exact_target_support < 2 and not approved_pair):
+            # An unsupported catalog suggestion cannot fall through a looser
+            # legacy multi-character phonetic gate. The recall row itself
+            # never proves that this ordinary phrase is a proper name.
+            print(f"   [拦截补丁] 已召回词条缺少唯一语境与独立支持：{source} -> {target}")
+            reject('catalog_without_local_support', canonical=target, independent_exact_support=exact_target_support)
+            continue
         if (
             len(source_content) == 1
             and len(target_content) == 1
             and not approved_pair
+            and not spelling_supported
         ):
             print(f"   [拦截补丁] 单字歧义交给全文术语表决：{source} -> {target}")
+            reject('ambiguous_single_character')
             continue
         changed_chunk_sizes = []
         for tag, left_start, left_end, right_start, right_end in SequenceMatcher(
@@ -853,22 +958,27 @@ def apply_correction_edits(
             and not target_is_verified
             and exact_target_support < 2
             and not approved_pair
+            and not context_supported
         ):
             print(
                 "   [拦截补丁] 普通单字差异缺少两套精确支持："
                 f"{source} -> {target}"
             )
+            reject('local_difference_without_two_sources', independent_exact_support=exact_target_support)
             continue
         if (
             len(source_content) != len(target_content)
             and not target_is_verified
             and exact_target_support < 2
             and not approved_pair
+            and not context_supported
         ):
             print(
                 "   [拦截补丁] 增删字缺少两套精确支持："
                 f"{source} -> {target}"
             )
+            reject('length_change_without_support', independent_exact_support=exact_target_support,
+                actual_asr_support=actual_support, model_evidence_is_not_support=True)
             continue
         protected_hit = next(
             (
@@ -882,18 +992,26 @@ def apply_correction_edits(
             len(source_content) >= 2
             and source_content[-1:] in GLOBAL_DOMAIN_TERM_SUFFIXES
         )
-        if (protected_hit or source_looks_like_domain_term) and not approved_pair:
+        if (protected_hit or source_looks_like_domain_term) and not approved_pair and not (
+                context_supported and protected_hit not in verified_terms):
             protected_label = protected_hit or source
             print(
                 f"   [拦截补丁] 专名“{protected_label}”只能由联网全文表决修改："
                 f"{source} -> {target}"
             )
+            reject('protected_domain_term')
             continue
         cue_length = display_length(text)
-        from .number_fidelity import numeric_event_values
-        if numeric_event_values(text) != numeric_event_values(candidate_preview):
+        from .number_fidelity import numeric_events
+        # Digits inside a validated complete canonical ID are spelling, not
+        # a newly spoken quantity. Every numeric event outside this token
+        # still has to retain its value and order.
+        numeric_protection = (source, target) if latin_term_supported else ()
+        if (tuple(x.value for x in numeric_events(text, protected_terms=numeric_protection)) !=
+                tuple(x.value for x in numeric_events(candidate_preview, protected_terms=numeric_protection))):
             record_run_event('numeric_edit_rejected', source=text, proposed=candidate_preview,
                              reason='ordered_numeric_events_changed')
+            reject('ordered_numeric_events_changed')
             continue
         unwanted_formats = unwanted_arabic_format_values(text, candidate_preview)
         if unwanted_formats:
@@ -902,6 +1020,7 @@ def apply_correction_edits(
                 f"   [拦截补丁] 普通中文数词不得数字化（{values}）："
                 f"{source} -> {target}"
             )
+            reject('unwanted_numeric_format', values=sorted(unwanted_formats))
             continue
         quantity_hint_supported = hinted_quantity_change_is_supported(
             source,
@@ -929,6 +1048,7 @@ def apply_correction_edits(
                     "   [拦截补丁] 受保护词缺少两套 ASR 的新写法支持："
                     f"{','.join(lost_protected_phrases)}；{source} -> {target}"
                 )
+                reject('protected_phrase_removed')
                 continue
         broad_consensus = (
             allow_broad_consensus
@@ -950,12 +1070,15 @@ def apply_correction_edits(
                 pending = smaller_edits + pending
             else:
                 print(f"   [拦截补丁] 修改范围过大：{source} -> {target}")
+                reject('broad_semantic_rewrite')
             continue
         unsupported_numerals = introduces_unverified_numeral(
             source,
             target,
             independent_alternates,
         )
+        if latin_term_supported:
+            unsupported_numerals = set()
         if unsupported_numerals and contextual_quantity_change_is_supported(
             text,
             candidate_preview,
@@ -970,6 +1093,7 @@ def apply_correction_edits(
                 f"   [拦截补丁] 新数字缺少两套 ASR 支持（{values}）："
                 f"{source} -> {target}"
             )
+            reject('unverified_new_numeral', values=sorted(unsupported_numerals))
             continue
         lost_quantities = quantity_expression_keys(
             text,
@@ -990,19 +1114,23 @@ def apply_correction_edits(
                 f"   [拦截补丁] 不得破坏已有数量单位（{values}）："
                 f"{source} -> {target}"
             )
+            reject('quantity_unit_removed')
             continue
         source_digits = re.findall(r"\d+", source)
-        if source_digits and any(value not in target for value in source_digits):
+        if source_digits and any(value not in target for value in source_digits) and not latin_term_supported:
             print(f"   [拦截补丁] 不得改写已有数字：{source} -> {target}")
+            reject('existing_digits_changed')
             continue
         source_latin = re.findall(r"[A-Za-z]+", source)
-        if source_latin and any(
+        if source_latin and not latin_term_supported and any(
             value.lower() not in target.lower() for value in source_latin
         ):
             print(f"   [拦截补丁] 不得改写已有英文/缩写：{source} -> {target}")
+            reject('existing_latin_changed')
             continue
-        if len(target_content) < len(source_content) and not broad_consensus:
+        if len(target_content) < len(source_content) and not broad_consensus and not normalization_evidence:
             print(f"   [拦截补丁] 不得跟随第二套 ASR 删字：{source} -> {target}")
+            reject('unsupported_deletion')
             continue
         left_sound = phonetic_text(source_content)
         right_sound = phonetic_text(target_content)
@@ -1020,11 +1148,14 @@ def apply_correction_edits(
             and not broad_consensus
             and not quantity_hint_supported
             and not domain_hint_supported
+            and not latin_term_supported
+            and not normalization_evidence
         ):
             print(
                 f"   [拦截补丁] 局部读音差距过大（{local_sound_distance:.2f}）："
                 f"{source} -> {target}"
             )
+            reject('phonetic_distance', distance=local_sound_distance)
             continue
         following = content_only(text[end:])[:1]
         if (
@@ -1033,6 +1164,7 @@ def apply_correction_edits(
             and not source_content.endswith(following)
         ):
             print(f"   [拦截补丁] 替换后会产生边界重复：{source} -> {target}")
+            reject('boundary_duplicate')
             continue
         candidate = candidate_preview
         safe, reason = correction_is_safe(text, candidate, alternates)
@@ -1042,16 +1174,43 @@ def apply_correction_edits(
         elif not safe and domain_hint_supported:
             safe = True
             reason = "Qwen采纳强抽卡语境候选"
+        elif not safe and latin_term_supported:
+            safe = True
+            reason = "模型采纳本批已确认规范词，完整 Latin ID 的有限近形补丁；未核验原音"
+        elif not safe and normalization_evidence:
+            safe, reason = True, "已确认词条的有据局部规范化；未核验原音"
+        elif not safe and spelling_supported:
+            safe, reason = True, "持续动作语境中的局部同音字纠错"
         if not safe:
             print(f"   [拦截补丁] {source} -> {target}：{reason}")
+            reject('whole_sentence_safety', reason=reason)
             continue
         text = candidate
         applied.append(
             {
                 "from": source,
                 "to": target,
+                **({'start': edit['start'], 'end': edit['end']} if 'start' in edit and 'end' in edit else {}),
+                **({'candidate_id': candidate_id} if candidate_id else {}),
+                'type': ('alias_normalization' if normalization_evidence and
+                    normalization_evidence['rule_id'] == 'confirmed_exact_alias' else
+                    'id_spelling' if latin_term_supported else 'asr_correction'),
+                'evidence': str(edit.get('evidence') or edit.get('basis') or ''),
+                'actual_independent_exact_support': exact_target_support,
+                **({'model_to': clean_subtitle_text(edit.get('to', ''))}
+                   if target != clean_subtitle_text(edit.get('to', '')) else {}),
                 "basis": clean_subtitle_text(edit.get("basis", "")) or "未说明",
                 "reason": reason,
+                "rule_id": (normalization_evidence['rule_id'] if normalization_evidence
+                    else 'ongoing_aspect_spelling' if spelling_supported else 'existing_local_safety'),
+                **({'normalization_evidence': normalization_evidence} if normalization_evidence else {}),
+                **({'terminology_evidence': {'status': next(x['status'] for x in contextual_term_candidates
+                    if x.get('canonical') == target), 'basis': (
+                        'model_glossary_context_and_same_cue_moss_repeated_ids' if short_latin_supported
+                        else 'model_glossary_context_and_bounded_latin_token' if latin_term_supported
+                        else 'model_glossary_context_and_independent_phonetic_asr'),
+                    'acoustic_verified': False}}
+                   if context_supported and any(x.get('canonical') == target for x in contextual_term_candidates) else {}),
             }
         )
     return text, applied

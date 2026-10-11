@@ -11,12 +11,12 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .provider_diagnostics import redact_diagnostics, command_phase
+from .provider_diagnostics import redact_diagnostics, command_phase, cli_failure
 from .llm_adapter import post_chat_completion, post_responses
 from .llm_config import (
     endpoint_from_settings,
@@ -58,6 +58,10 @@ class ProviderStatus:
     authenticated: bool
     message: str
     models: tuple[str, ...] = ()
+    category: str = ''
+    request_succeeded: bool | None = None
+    auth_evidence: str = ''
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
 class AIProviderError(RuntimeError):
@@ -92,6 +96,12 @@ def _extract_cli_text(stdout: str) -> str:
     if isinstance(payload, str):
         return payload
     if isinstance(payload, dict):
+        if payload.get('is_error') or payload.get('status') not in (None, 'SUCCESS', 'success'):
+            raise AIProviderError('CLI 请求返回失败终态。', category='provider_result_error')
+        if payload.get('refusal'):
+            raise AIProviderError('模型拒绝返回业务正文。', category='provider_refusal')
+        if payload.get('finish_reason') in {'length', 'max_tokens'}:
+            raise AIProviderError('Provider 正文达到输出上限。', category='structured_output_truncated')
         for key in ('structured_output','structuredOutput'):
             if isinstance(payload.get(key),dict):return json.dumps(payload[key],ensure_ascii=False)
         for key in ("result", "response", "output", "content", "text", "message"):
@@ -103,6 +113,8 @@ def _extract_cli_text(stdout: str) -> str:
                     if isinstance(value.get(nested), str):
                         return str(value[nested])
         # Structured output may itself be the requested object.
+        if any(key in payload for key in ('event', 'type', 'usage', 'conversation_id', 'models', 'authenticated', 'loggedIn')):
+            return ''
         return json.dumps(payload, ensure_ascii=False)
     return json.dumps(payload, ensure_ascii=False)
 
@@ -117,15 +129,14 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         source = "\n".join(lines).strip()
-    starts = [index for index, char in enumerate(source) if char == "{"]
-    decoder = json.JSONDecoder()
-    for index in starts:
-        try:
-            payload, _end = decoder.raw_decode(source[index:])
-        except (TypeError, ValueError):
-            continue
-        if isinstance(payload, dict):
-            return payload
+    # The transport has already selected the final business answer. Never
+    # recover an arbitrary object from surrounding logs, tools or prose.
+    try:
+        payload = json.loads(source)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        return payload
     raise AIProviderError("AI 服务未返回合法 JSON 对象。", category="structured_json_parse_error")
 
 
@@ -362,6 +373,9 @@ class OpenAICompatibleProvider(AIProvider):
             finally:
                 from .llm_adapter import get_last_llm_response_diagnostics
                 diagnostics = get_last_llm_response_diagnostics()
+                request_diag = kwargs.get('request_diagnostics')
+                if isinstance(request_diag, dict):
+                    request_diag.update(diagnostics)
                 self.last_invocation_trace = dict(provider_id=self.provider_id, model=self.model,
                     request_id=diagnostics.get('request_id'), response_boundary=diagnostics,
                     reported_usage={key: diagnostics[key] for key in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'reasoning_tokens')
@@ -377,11 +391,15 @@ class OpenAICompatibleProvider(AIProvider):
         protocol = str(self.endpoint.get("protocol") or "openai_compatible_chat")
         if protocol == "responses":
             if kwargs.get("request_diagnostics") is not None:
-                from .asr_http_transport import complete
-                return complete(list(messages), model=self.endpoint["model"], api_key=self.endpoint["api_key"],
+                from .llm_adapter import audited_bounded_request
+                return audited_bounded_request(list(messages), stage=stage, request_mode="responses",
+                    key_source=str(self.endpoint.get("key_source") or ""),
+                    **{**kwargs, "provider": self.endpoint.get("provider", "openai"),
+                       "base_url": self.endpoint.get("base_url", "")},
+                    model=self.endpoint["model"], api_key=self.endpoint["api_key"],
                     url=self.endpoint["url"], max_tokens=max_tokens, temperature=temperature,
                     timeout=timeout, protocol="responses", json_schema=json_schema,
-                    cancel_check=cancel_check, **kwargs)
+                    cancel_check=cancel_check)
             try:
                 return post_responses(
                 list(messages),
@@ -435,6 +453,7 @@ class OpenAICompatibleProvider(AIProvider):
         diagnostics=get_last_llm_response_diagnostics()
         self.last_invocation_trace=dict(provider_id=self.provider_id,model=self.model,
             request_id=diagnostics.get('request_id'),http_status=diagnostics.get('http_status'),
+            response_boundary=diagnostics,
             reported_usage={key:diagnostics[key] for key in ('prompt_tokens','completion_tokens','total_tokens','reasoning_tokens')
                             if diagnostics.get(key) is not None} or None,
             actual_cost_usd=None,timings=dict(getattr(self,'last_timings',{})))
@@ -446,13 +465,69 @@ class CLIProvider(AIProvider):
     purpose = "AI CLI"
 
     def structured_output_mode(self) -> StructuredOutputMode:
-        return StructuredOutputMode.TEXT_JSON
+        evidence = self.json_capabilities()
+        return (StructuredOutputMode.STRICT_JSON_SCHEMA if evidence.get('native_schema')
+                else StructuredOutputMode.TEXT_JSON)
+
+    _json_capability_cache = {}
+    _json_capability_lock = threading.Lock()
+
+    def json_capabilities(self, *, probe=False, cancel_check=None, deadline=None, request_diagnostics=None):
+        """Separate framing, valid answer JSON and native grammar support.
+
+        Only a successful help response may establish unsupported. A timeout
+        or a model catalogue failure must not permanently revoke JSON.
+        """
+        key = (self.provider_id, self.executable_identity(),
+               getattr(self, 'cli_version', ''), self.model)
+        with self._json_capability_lock:
+            cached = self._json_capability_cache.get(key)
+        if cached is not None:
+            return dict(cached)
+        evidence = dict(state='unverified', outer_json=None, native_schema=None,
+                        answer_json='local_validation', request_verified=False,
+                        provider=self.provider_id, model=self.model,
+                        executable=self.executable_identity()[0],
+                        version=getattr(self, 'cli_version', ''))
+        if not probe:
+            return evidence
+        if not self.executable:
+            return {**evidence, 'state': 'failed', 'category': 'not_installed'}
+        remaining = deadline-time.monotonic() if deadline is not None else 5.
+        if remaining <= 0:
+            raise AIProviderError('CLI 能力检查总预算已用完。', category='total_timeout')
+        try:
+            result = self._run_cli_command([self.executable, '--help'],
+                purpose=f'{self.purpose} JSON capability help', timeout=min(5., remaining),
+                cancel_check=cancel_check,
+                **({'request_diagnostics':request_diagnostics} if request_diagnostics is not None else {}))
+            help_text = (result.stdout or '') + '\n' + (result.stderr or '')
+            if result.returncode or not help_text.strip():
+                return {**evidence, 'state': 'failed', 'category': 'capability_detection_failed'}
+        except AIProviderError as exc:
+            if exc.category == 'cancelled':
+                raise
+            return {**evidence, 'state': 'failed', 'category': exc.category}
+        except (OSError, subprocess.TimeoutExpired):
+            return {**evidence, 'state': 'failed', 'category': 'capability_detection_failed'}
+        evidence.update(state='supported_unverified' if '--json-schema' in help_text else 'unsupported',
+                        help_sha256=__import__('hashlib').sha256(help_text.encode('utf8')).hexdigest(),
+                        outer_json='--output-format' in help_text and 'json' in help_text,
+                        native_schema='--json-schema' in help_text,
+                        reasoning_effort_argument=('--reasoning-effort' if '--reasoning-effort' in help_text else
+                            '--effort' if '--effort' in help_text else None),
+                        stream_formats=[name for name in ('stream-json', 'streaming-json', 'streaming-messages-json')
+                                        if name in help_text])
+        with self._json_capability_lock:
+            self._json_capability_cache[key] = dict(evidence)
+        return evidence
     status_cache_ttl = 8 * 60.0
     _status_cache: dict[tuple[str, str], tuple[float, ProviderStatus]] = {}
     _status_cache_lock = threading.Lock()
 
     def __init__(self, *, model: str = "", executable: str = "") -> None:
         self.model = str(model or "")
+        self._explicit_executable = bool(executable)
         self.executable = str(executable or self._discover_executable())
         self.last_timings: dict[str, float | bool] = {}
         self.last_invocation_trace: dict[str, Any] = {}
@@ -466,6 +541,9 @@ class CLIProvider(AIProvider):
         """Keep configuration, give every broker request its own lifecycle."""
         import copy
         child = copy.copy(self)
+        # An in-flight task owns the selected executable just as it owns the
+        # model/config snapshot. A later re-detection must not retarget it.
+        child._explicit_executable = True
         child.last_timings = {}
         child.last_invocation_trace = {}
         child.process_trace_history = []
@@ -542,7 +620,70 @@ class CLIProvider(AIProvider):
         )[-8:]
 
     def _cache_key(self) -> tuple[str, str]:
-        return self.provider_id, str(self.executable or "").casefold() + "|" + self.model
+        return self.provider_id, str(self.executable_identity()) + "|" + self.model
+
+    def executable_identity(self):
+        path = Path(self.executable) if self.executable else None
+        try:
+            stamp = path.stat() if path else None
+            return (str(path.resolve()) if path else '', stamp.st_mtime_ns if stamp else 0,
+                    stamp.st_size if stamp else 0)
+        except OSError:
+            return (str(path.resolve()) if path else '', 0, 0)
+
+    def refresh_executable(self):
+        if not self._explicit_executable:
+            resolved = self._discover_executable()
+            if resolved != self.executable:
+                self.invalidate_status_cache()
+                self.executable = resolved
+                self.cli_version = ''
+        return self.executable
+
+    def cli_diagnostics(self):
+        import datetime
+        candidates = list(dict.fromkeys(str(Path(found).resolve()) for name in self.executable_names
+                                        if (found := shutil.which(name))))
+        if self.transport is AITransport.GROK_CLI:
+            for name in ('grok.exe', 'grok'):
+                native = Path.home() / '.grok' / 'bin' / name
+                if native.is_file() and str(native.resolve()) not in candidates:
+                    candidates.append(str(native.resolve()))
+        return redact_diagnostics({'executable': self.executable_identity()[0],
+            'cli_version': getattr(self, 'cli_version', ''),
+            'auth_evidence': getattr(self, 'auth_evidence', ''),
+            'request_succeeded': getattr(self, 'request_succeeded', None),
+            'category': getattr(self, 'failure_category', ''),
+            'last_tested_at': getattr(self, 'last_tested_at', ''),
+            'checked_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'host_executable': __import__('sys').executable,
+            'frozen': bool(getattr(__import__('sys'), 'frozen', False)),
+            'user_home': str(Path.home()), 'candidate_executables': candidates,
+            'resolution_note': '检测、登录和任务使用上方实际路径。终端若更新了另一份 CLI，不会改变这份版本；点击重新检测重新解析。',
+            'failure': getattr(self, 'last_cli_failure', {}),
+            'json_capabilities': self.json_capabilities()})
+
+    def _record_request_success(self):
+        import datetime
+        self.request_succeeded = True
+        self.auth_evidence = 'successful_model_request'
+        self.failure_category = ''
+        self.last_cli_failure = {}
+        self.last_tested_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.last_invocation_trace.update(request_succeeded=True, last_tested_at=self.last_tested_at,
+                                         cli_version=getattr(self, 'cli_version', ''))
+
+    def _fail_cli(self, failure):
+        self.failure_category = failure['category']
+        self.last_cli_failure = failure
+        self.request_succeeded = False
+        import datetime
+        self.last_tested_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.invalidate_status_cache()
+        self.last_invocation_trace.update(cli_failure=failure, cli_version=getattr(self, 'cli_version', ''),
+            executable=self.executable_identity()[0], category=failure['category'],
+            last_tested_at=self.last_tested_at, request_succeeded=False)
+        raise AIProviderError(failure['message'], category=failure['category'])
 
     def invalidate_status_cache(self) -> None:
         with self._status_cache_lock:
@@ -710,13 +851,24 @@ class CLIProvider(AIProvider):
                 try:process.wait(timeout=.05)
                 except subprocess.TimeoutExpired:pass
         finally:
-            if process is not None and process.poll() is None:stop_process_tree(process)
+            cleanup_deadline=(request_diagnostics or {}).get('cleanup_deadline_monotonic')
+            if process is not None and process.poll() is None:
+                if cleanup_deadline is None:
+                    stop_process_tree(process)
+                else:
+                    stop_process_tree(process, deadline_monotonic=cleanup_deadline)
             job=getattr(process,'_request_job',None) if process is not None else None
             if job is not None:
                 self.last_timings['cleanup_complete']=False
                 job.close()
                 self.last_timings['cleanup_complete']=True
-            for reader in readers:reader.join(timeout=1)
+            for reader in readers:
+                reader.join(timeout=max(0., min(1.,cleanup_deadline-time.monotonic())) if cleanup_deadline is not None else 1)
+            if cleanup_deadline is not None:
+                cleanup_complete = (process is None or process.poll() is not None) and not any(reader.is_alive() for reader in readers)
+                self.last_timings['cleanup_complete'] = cleanup_complete
+                if request_diagnostics is not None:
+                    request_diagnostics.update(cleanup_complete=cleanup_complete, cleanup_pending=not cleanup_complete)
             stdout,stderr=''.join(buffers['stdout']),''.join(buffers['stderr'])
             code=process.returncode if process is not None else None
             if request_diagnostics is not None:
@@ -755,7 +907,9 @@ class CLIProvider(AIProvider):
         if require_terminal_result and '--json-schema' in command:
             schema_argument = command[command.index('--json-schema') + 1]
             try:
-                state['response_schema'] = json.loads(schema_argument)
+                state['response_schema'] = (json.loads(Path(schema_argument).read_text('utf8'))
+                    if schema_argument.endswith('.json') and Path(schema_argument).is_file()
+                    else json.loads(schema_argument))
             except (ValueError, TypeError):
                 pass
         from .studio_project import studio_data_root
@@ -772,6 +926,12 @@ class CLIProvider(AIProvider):
             if on_stream_event is not None:
                 on_stream_event(kind, redact_diagnostics(detail))
         def consume(name, line):
+            failure = cli_failure(line)
+            if failure:
+                state.update(terminal_error=failure['message'], terminal_category=failure['category'],
+                             cli_failure=failure, finished=True)
+                emit('error', failure['message'])
+                return
             if getattr(self,'_private_asr_request',False):
                 import hashlib
                 safe_line={'bytes':len(line.encode('utf8')),'sha256':hashlib.sha256(line.encode('utf8')).hexdigest()}
@@ -857,7 +1017,14 @@ class CLIProvider(AIProvider):
         finally:
             if request_diagnostics is not None:
                 request_diagnostics['search_evidence']=search_evidence
+                request_diagnostics.update(terminal_result_received=bool(state.get('terminal_result')),
+                    assistant_message_completed=bool(state.get('assistant_complete')),
+                    returned_content_chars=len(str(state.get('final') or state.get('text') or '')),
+                    terminal_error_category=state.get('terminal_category'),
+                    terminal_result_required=bool(require_terminal_result))
         if state.get('terminal_error'):
+            if state.get('cli_failure'):
+                self._fail_cli(state['cli_failure'])
             if state.get('terminal_diagnostics'):
                 self.last_timings['structured_output_diagnostics'] = state['terminal_diagnostics']
                 if request_diagnostics is not None:
@@ -868,6 +1035,8 @@ class CLIProvider(AIProvider):
         if _cancelled(cancel_check):
             raise AIProviderError('AI CLI 请求已取消',category='cancelled')
         if result.returncode != 0 and not self.last_timings.get('terminal_cleanup_requested'):
+            if failure := cli_failure('\n'.join((result.stdout or '', result.stderr or ''))):
+                self._fail_cli(failure)
             detail = redact_diagnostics((result.stderr or result.stdout)[-600:])
             category = "authentication_required" if self._auth_error(detail) else "nonzero_exit"
             raise AIProviderError(detail or f"AI CLI 返回 {result.returncode}", category=category)
@@ -879,6 +1048,7 @@ class CLIProvider(AIProvider):
         if not text:
             message='Provider 已完成思考但未返回主题正文' if state.get('thinking') else 'Provider 已结束请求但未返回正文'
             raise AIProviderError(message, category="provider_no_body")
+        self._record_request_success()
         return text
 
     @staticmethod
@@ -914,8 +1084,10 @@ class CLIProvider(AIProvider):
                     return
             state['final'] = value
         def stop_reason(reason):
-            if reason == 'max_tokens':
+            if reason in {'max_tokens', 'length', 'MAX_TOKENS'}:
                 state.update(terminal_error='Provider正文达到输出上限',terminal_category='structured_output_truncated')
+            elif reason in {'refusal', 'content_filter', 'safety', 'SAFETY'}:
+                state.update(terminal_error='模型拒绝返回业务正文', terminal_category='provider_refusal')
         event = str(payload.get("event") or "")
         if event == "step_update":
             step = payload.get("step_update")
@@ -935,7 +1107,14 @@ class CLIProvider(AIProvider):
             result = result if isinstance(result, dict) else {}
             if result.get('status') not in (None,'SUCCESS','success'):
                 state['terminal_error']=str(result.get('error') or result.get('status'))
+                state['terminal_category'] = ('provider_refusal' if str(result.get('status')).lower() in {'refusal','blocked'}
+                    else 'structured_output_truncated' if str(result.get('status')).lower() in {'max_tokens','length','truncated'}
+                    else 'provider_result_error')
                 state.update(finished=True, terminal_result=True)
+                return
+            stop_reason(result.get('stop_reason') or result.get('finish_reason'))
+            if result.get('refusal'):
+                state.update(terminal_error='模型拒绝返回业务正文', terminal_category='provider_refusal', finished=True, terminal_result=True)
                 return
             structured=result.get('structured_output',result.get('structuredOutput'))
             # agy event/result carries its authoritative structured object
@@ -1028,6 +1207,10 @@ class CLIProvider(AIProvider):
                 if not text:emit('thinking_end','')
             return
         if kind == "result":
+            stop_reason(payload.get('stop_reason') or payload.get('finish_reason'))
+            if payload.get('refusal'):
+                state.update(terminal_error='模型拒绝返回业务正文', terminal_category='provider_refusal', finished=True, terminal_result=True)
+                return
             if state.get('artifact_mode'):
                 reason = payload.get('stop_reason')
                 subtype = payload.get('subtype')
@@ -1047,6 +1230,10 @@ class CLIProvider(AIProvider):
                 else:
                     detail = redact_diagnostics(str(payload.get('errors') or subtype))[-600:]
                     category = 'model'
+                    failure = cli_failure(payload)
+                    if failure:
+                        detail, category = failure['message'], failure['category']
+                        state['cli_failure'] = failure
                 state.update(terminal_error=detail, terminal_category=category,
                              finished=True, terminal_result=True)
                 return
@@ -1142,9 +1329,16 @@ class CLIProvider(AIProvider):
         except (OSError, subprocess.TimeoutExpired) as exc:
             return ProviderStatus(True, False, str(exc))
         output = "\n".join(filter(None, (completed.stdout, completed.stderr))).strip()
+        if failure := cli_failure(output):
+            self.failure_category = failure['category']
+            self.last_cli_failure = failure
+            return ProviderStatus(True, False, failure['message'], category=failure['category'],
+                                  request_succeeded=False, diagnostics=self.cli_diagnostics())
         models = self._parse_models(completed.stdout)
         if completed.returncode == 0 and models:
-            return ProviderStatus(True, True, "账号模型目录可用；推理/结构化/检索尚未验证", models)
+            self.auth_evidence = 'model_catalog'
+            return ProviderStatus(True, True, "账号模型目录可用；推理/结构化/检索尚未验证", models,
+                                  auth_evidence='model_catalog', diagnostics=self.cli_diagnostics())
         if self._auth_error(output):
             return ProviderStatus(True, False, "尚未登录")
         return ProviderStatus(True, False, output[-200:] or "登录尚未完成")
@@ -1184,6 +1378,8 @@ class CLIProvider(AIProvider):
         if cached is not None and cached.authenticated:
             return cached
         fresh = self.validate(timeout=20.0, use_cache=False)
+        if fresh.category == 'upgrade_required':
+            return fresh
         if fresh.authenticated:
             progress("已处于登录状态，无需再次登录。")
             return fresh
@@ -1237,6 +1433,8 @@ class CLIProvider(AIProvider):
                     except (NotImplementedError, OSError) as exc:
                         return ProviderStatus(True, False, f"无法打开官方登录窗口：{exc}")
                 probe = self._login_probe()
+                if probe.category == 'upgrade_required':
+                    return probe
                 if probe.authenticated:
                     self.invalidate_status_cache()
                     message = f"{self.purpose} 登录完成 · Session READY（无需保持任何外部窗口）"
@@ -1294,7 +1492,9 @@ class CLIProvider(AIProvider):
         *,
         timeout: float = 12.0,
         cancel_check: Callable[[], bool] | None = None,
+        request_diagnostics=None,
     ) -> ProviderStatus:
+        self.refresh_executable()
         if not self.executable:
             return ProviderStatus(False, False, f"未检测到 {self.purpose}")
         started = time.monotonic()
@@ -1304,6 +1504,7 @@ class CLIProvider(AIProvider):
                 purpose=f"{self.purpose} version",
                 timeout=timeout,
                 cancel_check=cancel_check,
+                **({'request_diagnostics':request_diagnostics} if request_diagnostics is not None else {}),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return ProviderStatus(False, False, f"CLI 版本检测失败：{exc}")
@@ -1313,21 +1514,34 @@ class CLIProvider(AIProvider):
         self.cli_version=output[:120] if completed.returncode==0 else ""
         if completed.returncode != 0:
             return ProviderStatus(False, False, output[-300:] or f"CLI 返回 {completed.returncode}")
-        return ProviderStatus(True, False, f"CLI 已安装{f' · {output[:120]}' if output else ''}")
+        return ProviderStatus(True, False, f"CLI 已安装{f' · {output[:120]}' if output else ''}",
+                              diagnostics=self.cli_diagnostics())
 
     _versions_lock=threading.Lock()
     _versions={}
 
-    def _record_installed_version(self, cancel_check=None):
+    def _record_installed_version(self, cancel_check=None, deadline=None, request_diagnostics=None):
         path=Path(self.executable)
         if path.name.lower() not in {'grok','grok.exe','agy','agy.exe','codex','codex.exe'} or not path.is_file():
             return
         identity=(str(path.resolve()),path.stat().st_mtime_ns,path.stat().st_size)
-        with self._versions_lock:
+        while not self._versions_lock.acquire(timeout=.025):
+            if _cancelled(cancel_check):
+                raise AIProviderError('CLI 版本检查已取消。', category='cancelled')
+            if deadline is not None and time.monotonic() >= deadline:
+                raise AIProviderError('CLI 版本检查总预算已用完。', category='total_timeout')
+        try:
             if identity not in self._versions:
-                self.detect_installation(timeout=5,cancel_check=cancel_check)
-                self._versions[identity]=getattr(self,'cli_version','unknown')
-            self.cli_version=self._versions[identity]
+                remaining = deadline-time.monotonic() if deadline is not None else 5.
+                if remaining <= 0:
+                    raise AIProviderError('CLI 版本检查总预算已用完。', category='total_timeout')
+                detected = self.detect_installation(timeout=min(5.,remaining),cancel_check=cancel_check,
+                    **({'request_diagnostics':request_diagnostics} if request_diagnostics is not None else {}))
+                if detected.available:
+                    self._versions[identity]=getattr(self,'cli_version','unknown')
+            self.cli_version=self._versions.get(identity,getattr(self,'cli_version','unknown'))
+        finally:
+            self._versions_lock.release()
 
     def validate(
         self,
@@ -1364,12 +1578,21 @@ class CLIProvider(AIProvider):
             return self._store_status(status)
         self.last_timings["auth_seconds"] = time.monotonic() - auth_started
         output = "\n".join(filter(None, (completed.stdout, completed.stderr))).strip()
-        if self._auth_error(output):
-            status = ProviderStatus(True, False, "CLI 已安装，尚未登录")
+        if failure := cli_failure(output):
+            self.failure_category = failure['category']
+            self.last_cli_failure = failure
+            status = ProviderStatus(True, False, failure['message'], category=failure['category'],
+                                    request_succeeded=False, diagnostics=self.cli_diagnostics())
+        elif self._auth_error(output):
+            self.auth_evidence = 'official_auth_error'
+            status = ProviderStatus(True, False, "CLI 已安装，尚未登录", category='authentication_required',
+                                    auth_evidence=self.auth_evidence, diagnostics=self.cli_diagnostics())
         elif completed.returncode != 0:
             status = ProviderStatus(True, False, output[-300:] or f"CLI 返回 {completed.returncode}")
         else:
-            status = ProviderStatus(True, True, "账号模型目录可用；推理/结构化/检索尚未验证", self._parse_models(output))
+            self.auth_evidence = 'model_catalog'
+            status = ProviderStatus(True, True, "账号模型目录可用；推理/结构化/检索尚未验证", self._parse_models(output),
+                                    auth_evidence=self.auth_evidence, diagnostics=self.cli_diagnostics())
         self.last_timings["total_seconds"] = time.monotonic() - started
         return self._store_status(status)
 
@@ -1388,7 +1611,7 @@ class CLIProvider(AIProvider):
         if not status.available:
             raise AIProviderError(status.message, category="model_discovery")
         if not status.authenticated:
-            raise AIProviderError(status.message, category="authentication_required")
+            raise AIProviderError(status.message, category=status.category or "authentication_required")
         if not status.models:
             raise AIProviderError(
                 "该 Provider 未返回模型列表，可手动输入模型 ID。",
@@ -1414,13 +1637,17 @@ class CLIProvider(AIProvider):
                  cancel_check=None, stage="", json_schema=None, on_stream_event=None,
                  **_kwargs) -> str:
         del temperature
+        call_started = time.monotonic()
         self._private_asr_request=_kwargs.get('operation_kind') in {'polish','domain_terms','group'}
         if not self.executable:
             raise AIProviderError("未安装所选 AI CLI。", category="not_installed")
         if _cancelled(cancel_check):
             raise AIProviderError("AI 请求已取消。", category="cancelled")
-        self._record_installed_version(cancel_check)
         seconds = max(timeout) if isinstance(timeout, tuple) else float(timeout)
+        request_deadline = min(call_started+seconds, float(_kwargs.get('_total_deadline') or float('inf')))
+        cleanup_deadline = (_kwargs.get('request_diagnostics') or {}).get('cleanup_deadline_monotonic')
+        probe_diagnostics = {'cleanup_deadline_monotonic':cleanup_deadline} if cleanup_deadline is not None else None
+        self._record_installed_version(cancel_check, request_deadline, probe_diagnostics)
         search = bool(_kwargs.get('enable_search'))
         if search and self.transport not in (AITransport.GROK_CLI, AITransport.ANTIGRAVITY_CLI):
             raise AIProviderError('当前 CLI 未验证联网检索协议。', category='unsupported_search')
@@ -1435,6 +1662,29 @@ class CLIProvider(AIProvider):
                     response_kind=_kwargs.get('response_kind', 'structured' if json_schema else 'text'),
                     model=self.model, provider=self.provider_id, cli_version=getattr(self, 'cli_version', 'unknown'),
                     failure_stage=None)
+        effort_argument = None
+        if _kwargs.get('enable_thinking') is False:
+            evidence = self.json_capabilities(probe=True, cancel_check=cancel_check,
+                deadline=request_deadline, request_diagnostics=probe_diagnostics)
+            effort_argument = evidence.get('reasoning_effort_argument')
+            model_suffix = self.model.rsplit('-',1)[-1]
+            suffix_owns_effort = self.transport is AITransport.ANTIGRAVITY_CLI and model_suffix in {'low','medium','high'}
+            if suffix_owns_effort:
+                # agy rejects an effort argument combined with an explicit
+                # effort variant. Preserve the visible user-selected model.
+                effort_argument = None
+            diag['cli_reasoning_effort'] = {
+                'requested_enable_thinking': False, 'requested_effort': 'low',
+                'argument': effort_argument,
+                'value': 'low' if effort_argument else None,
+                'actual_model_suffix': model_suffix if suffix_owns_effort else None,
+                'not_applied_reason': 'selected_model_suffix_owns_effort' if suffix_owns_effort else
+                    None if effort_argument else 'installed_help_has_no_effort_argument',
+                'source': 'installed CLI --help',
+                'executable': evidence.get('executable'), 'version': evidence.get('version'),
+                'help_sha256': evidence.get('help_sha256'),
+                'model': self.model,
+            }
         from .provider_input_budget import project_transport_messages
         messages = project_transport_messages(messages, json_schema, self.transport)
         try:
@@ -1540,6 +1790,13 @@ class CLIProvider(AIProvider):
                     command[command.index('--json-schema')+1]=str(schema_path)
                     budget['native_schema_projection']=schema_preflight
             else:budget['transport']='argv'
+            if effort_argument:
+                # Request scoped: do not edit the account or CLI configuration.
+                existing = next((flag for flag in ('--reasoning-effort','--effort') if flag in command), None)
+                if existing:
+                    command[command.index(existing)+1] = 'low'
+                else:
+                    command.extend([effort_argument, 'low'])
             budget.update(launch_budget(command),transmitted_prompt_utf8_bytes=len(prompt.encode('utf8')),
                           transmitted_prompt_characters=len(prompt))
             import math
@@ -1553,6 +1810,11 @@ class CLIProvider(AIProvider):
                 budget['passed']=False
                 diag['failure_stage']='local_budget'
                 raise AIProviderError('CLI命令参数超限：'+compact(budget),category='request_too_large')
+            seconds = request_deadline-time.monotonic()
+            if seconds <= 0:
+                raise AIProviderError('AI CLI 请求总时限已用完；未启动模型请求。', category='total_timeout')
+            if '--print-timeout' in command:
+                command[command.index('--print-timeout')+1] = f'{seconds:g}s'
             value=self._complete_cli_command(command,seconds,streaming,cancel_check,on_stream_event,_kwargs)
             if _cancelled(cancel_check):
                 raise AIProviderError('AI 请求已取消，丢弃迟到结果。',category='cancelled')
@@ -1594,7 +1856,7 @@ class CLIProvider(AIProvider):
                 cancel_check=cancel_check,
                 on_stream_event=on_stream_event,
                 complete_json_early=bool(_kwargs.get('complete_json_early')),
-                require_terminal_result=(self.transport == AITransport.GROK_CLI and '--json-schema' in command
+                require_terminal_result=(self.transport in (AITransport.GROK_CLI, AITransport.ANTIGRAVITY_CLI) and ('--json-schema' in command or self._private_asr_request)
                                          or _kwargs.get('response_kind') == 'source_artifact'),
                 input_text=_kwargs.get('_input_text'),
                 request_diagnostics=_kwargs.get('request_diagnostics'),
@@ -1609,6 +1871,8 @@ class CLIProvider(AIProvider):
         except subprocess.TimeoutExpired as exc:
             raise AIProviderError("AI CLI 请求超时。",category="timeout") from exc
         stdout,stderr=process.stdout,process.stderr
+        if failure := cli_failure('\n'.join(filter(None, (stdout, stderr)))):
+            self._fail_cli(failure)
         combined=redact_diagnostics("\n".join(filter(None,(stdout,stderr))).strip())
         if process.returncode != 0:
             if self._auth_error(combined):
@@ -1619,6 +1883,7 @@ class CLIProvider(AIProvider):
             raise AIProviderError("AI CLI 尚未登录，请先使用官方登录流程。", category="authentication_required")
         if not content:
             raise AIProviderError("AI CLI 没有返回内容。", category="empty_response")
+        self._record_request_success()
         return content
 
     def structured_complete(
@@ -1627,18 +1892,47 @@ class CLIProvider(AIProvider):
         schema: Mapping[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Use prompt + strict local validation for complex CLI schemas.
-
-        Antigravity's native ``--json-schema`` is excellent for small payloads,
-        but the real Gemini high model can spend several minutes satisfying a
-        deeply nested three-variant recipe schema.  The Studio prompt carries
-        the compact contract and the parser enforces the same allowlist/ranges;
-        avoiding the CLI-side constrained decoder keeps the request responsive
-        without accepting executable or unvalidated renderer data.
-        """
-        del schema
-        value = _extract_json_object(self.complete(messages, json_schema=None, **kwargs))
+        """Use installed native schema support and preserve local safety rules."""
+        # The settings selection is a request snapshot, independent of later
+        # asynchronous model list updates. Explicit compatibility is allowed;
+        # automatic compatibility requires successful help evidence.
+        use_native = kwargs.pop('native_structured_output', True)
+        began = time.monotonic()
+        timeout = kwargs.get('timeout', 120)
+        seconds = max(timeout) if isinstance(timeout, tuple) else float(timeout)
+        deadline = min(began+seconds, float(kwargs.get('_total_deadline') or float('inf')))
+        cleanup_deadline = (kwargs.get('request_diagnostics') or {}).get('cleanup_deadline_monotonic')
+        probe_diagnostics = {'cleanup_deadline_monotonic':cleanup_deadline} if cleanup_deadline is not None else None
+        self._record_installed_version(kwargs.get('cancel_check'),deadline,probe_diagnostics)
+        evidence = self.json_capabilities(probe=True, cancel_check=kwargs.get('cancel_check'),
+            deadline=deadline, request_diagnostics=probe_diagnostics)
+        if time.monotonic() >= deadline:
+            raise AIProviderError('CLI 结构化请求总预算已用完。', category='total_timeout')
+        if use_native and evidence.get('native_schema') is None:
+            raise AIProviderError('CLI JSON 能力检测未完成；请重新检测后重试。', category='capability_detection_failed')
+        kwargs['timeout'] = deadline-time.monotonic()
+        kwargs['_total_deadline'] = deadline
+        native = bool(use_native and evidence.get('native_schema'))
+        wire_schema = schema if native else None
+        if not native:
+            messages = [*messages, {'role': 'user', 'content':
+                'Return only one JSON object matching this contract: ' +
+                json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}]
+        value = _extract_json_object(self.complete(messages, json_schema=wire_schema, **kwargs))
+        from jsonschema import Draft202012Validator
+        try:
+            Draft202012Validator(schema).validate(value)
+        except Exception as exc:
+            raise AIProviderError('最终 JSON 字段校验失败：' + str(exc).splitlines()[0],
+                                  category='structured_output_schema') from exc
         self.last_timings["json_parsed"] = True
+        self.last_timings['structured_output_mode'] = 'STRICT_JSON_SCHEMA' if native else 'TEXT_JSON_LOCAL_VALIDATION'
+        self.last_invocation_trace['json_capabilities'] = {**evidence, 'request_verified': True,
+            'state': 'verified' if native else evidence['state']}
+        key = (self.provider_id, self.executable_identity(), getattr(self, 'cli_version', ''), self.model)
+        if native:
+            with self._json_capability_lock:
+                self._json_capability_cache[key] = {**evidence, 'state': 'verified', 'request_verified': True}
         return value
 
 
@@ -1757,6 +2051,62 @@ class GrokCLIProvider(CLIProvider):
     transport = AITransport.GROK_CLI
     executable_names = ("grok", "grok.exe")
     purpose = "Grok CLI"
+
+    def cli_update_plan(self):
+        """Inspect this installation's own update help; never use PATH 'grok'."""
+        path = Path(self.executable).resolve() if self.executable else None
+        identity = self.executable_identity()
+        plan = {'executable': str(path) if path else '', 'identity': list(identity),
+                'version': getattr(self, 'cli_version', ''), 'command': [], 'supported': False,
+                'message': '当前安装方式无法安全自动更新。请在这份 CLI 的官方安装渠道更新，再点击重新检测。'}
+        # The native per-user installer has a self-updater. An npm/batch wrapper
+        # may delegate elsewhere: do not guess a global package/install target.
+        if (path and path.is_file() and path.parent.name.casefold() == 'bin'
+                and path.parent.parent.name.casefold() == '.grok'
+                and path.name.casefold() in {'grok', 'grok.exe'}):
+            help_result = self._run_cli_command([str(path), 'update', '--help'],
+                purpose='Grok CLI update help', timeout=10)
+            text = '\n'.join((help_result.stdout or '', help_result.stderr or ''))
+            if help_result.returncode == 0 and 'grok update' in text and '--check' in text:
+                plan.update(supported=True, command=[str(path), 'update'],
+                            message='使用这份官方 CLI 的自更新命令；保留现有登录凭据。')
+        return plan
+
+    def update_cli(self, plan, *, user_confirmed=False, cancel_check=None):
+        if not user_confirmed:
+            raise AIProviderError('请先确认更新目标路径和动作。', category='explicit_update_required')
+        expected = [self.executable_identity()[0], 'update']
+        if (not plan.get('supported') or plan.get('command') != expected
+                or tuple(plan.get('identity') or ()) != self.executable_identity()):
+            raise AIProviderError('CLI 路径或文件已变化，请重新预览更新动作。', category='stale_update_plan')
+        result = self._run_cli_command(expected, purpose='Grok CLI confirmed update',
+                                       timeout=180, cancel_check=cancel_check)
+        if result.returncode != 0:
+            raise AIProviderError('CLI 更新失败：' + redact_diagnostics(result.stderr or result.stdout)[-600:],
+                                  category='cli_update_failed')
+        self.invalidate_status_cache()
+        with self._versions_lock:
+            for key in tuple(self._versions):
+                if key[0] == expected[0]:
+                    self._versions.pop(key, None)
+        self.request_succeeded = None
+        self.auth_evidence = ''
+        self.failure_category = ''
+        self.cli_version = ''
+        self.refresh_executable()
+        detected = self.detect_installation(timeout=10, cancel_check=cancel_check)
+        if not detected.available:
+            return detected
+        reply = self.complete([{'role': 'user', 'content': 'Return exactly: 2ByteASR_OK'}],
+            max_tokens=32, timeout=45, cancel_check=cancel_check, stage='connection_test').strip()
+        if reply != '2ByteASR_OK':
+            self.request_succeeded = False
+            return ProviderStatus(True, True, '更新完成，但最小请求未返回预期内容，请重新测试。',
+                                  request_succeeded=False, auth_evidence=self.auth_evidence,
+                                  diagnostics=self.cli_diagnostics())
+        return ProviderStatus(True, True, '更新后连接测试通过 · 返回 2ByteASR_OK；结构化输出与联网搜索尚未验证。',
+                              request_succeeded=True, auth_evidence=self.auth_evidence,
+                              diagnostics=self.cli_diagnostics())
 
     def runtime_capabilities(self):
         return {'vision':True}

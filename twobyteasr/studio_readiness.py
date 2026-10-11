@@ -6,8 +6,10 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QProgressBar, QVBoxLayout, QHBoxLayout, QApplication
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import (QFrame, QLabel, QPushButton, QProgressBar, QVBoxLayout, QHBoxLayout,
+                               QApplication, QWidget)
 
 from .i18n import bind_text
 
@@ -19,6 +21,77 @@ def project_file_identity(path):
         return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
     except OSError:
         return None
+
+
+class ReadinessSteps(QWidget):
+    """The real opening stages: done ✓, current ●, waiting ○, failed ✕."""
+
+    ROW = 30
+
+    def __init__(self, tasks, parent=None):
+        super().__init__(parent)
+        self.tasks = tuple(tasks)
+        self.completed: set[str] = set()
+        self.current = ''
+        self.failed = ''
+        self.setMinimumHeight(self.ROW * len(self.tasks))
+
+    def sizeHint(self):
+        return QSize(360, self.ROW * len(self.tasks))
+
+    def set_state(self, completed, current='', failed=''):
+        self.completed, self.current, self.failed = set(completed), str(current or ''), str(failed or '')
+        self.update()
+
+    def paintEvent(self, _event):
+        from .i18n import current_language, translate
+        from .theme_manager import theme_key
+        from .ui_theme import theme_definition
+        theme = theme_definition(theme_key())
+        language = current_language()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for index, task in enumerate(self.tasks):
+            top = index * self.ROW
+            dot = QRectF(4, top + (self.ROW - 16) / 2, 16, 16)
+            if task == self.failed:
+                state, color = 'failed', QColor(theme.danger)
+            elif task in self.completed:
+                state, color = 'done', QColor(theme.success)
+            elif task == self.current:
+                state, color = 'active', QColor(theme.accent_text)
+            else:
+                state, color = 'waiting', QColor(theme.border_strong)
+            if state == 'waiting':
+                painter.setPen(QPen(color, 1.6))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(dot.adjusted(1.5, 1.5, -1.5, -1.5))
+            else:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawEllipse(dot)
+                painter.setPen(QPen(QColor(theme.on_vivid), 1.8, Qt.PenStyle.SolidLine,
+                                    Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                c = dot.center()
+                if state == 'done':
+                    painter.drawLine(c.x() - 3.8, c.y() + 0.2, c.x() - 1.0, c.y() + 3.0)
+                    painter.drawLine(c.x() - 1.0, c.y() + 3.0, c.x() + 4.0, c.y() - 2.6)
+                elif state == 'failed':
+                    painter.drawLine(c.x() - 3, c.y() - 3, c.x() + 3, c.y() + 3)
+                    painter.drawLine(c.x() - 3, c.y() + 3, c.x() + 3, c.y() - 3)
+                else:
+                    painter.setBrush(QColor(theme.on_vivid))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(c, 3, 3)
+            font = QFont(self.font())
+            font.setPixelSize(14)
+            font.setWeight(QFont.Weight.DemiBold if state == 'active' else QFont.Weight.Medium)
+            painter.setFont(font)
+            painter.setPen(QColor(theme.text if state in {'active', 'failed'} else
+                                  theme.text_secondary if state == 'done' else theme.text_muted))
+            label = translate(task, language) if language != 'zh' else task
+            painter.drawText(QRectF(32, top, self.width() - 32, self.ROW),
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
 
 
 class StudioReadiness(QObject):
@@ -43,34 +116,60 @@ class StudioReadiness(QObject):
         # A native CHILD can cover mpv while loading without reparenting mpv
         # or creating a flashing top-level splash window.
         self.overlay.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        layout = QVBoxLayout(self.overlay)
-        layout.addStretch()
-        title = QLabel('准备工作台', self.overlay)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label = QLabel('', self.overlay)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer = QVBoxLayout(self.overlay)
+        outer.addStretch(1)
+        # 2026-10-08: a centred card shows which project opens and the real
+        # opening stages, instead of a bare label over an empty page.
+        self.card = QFrame(self.overlay)
+        self.card.setObjectName('studioLoadingCard')
+        self.card.setFixedWidth(460)
+        outer.addWidget(self.card, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch(1)
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(28, 26, 28, 24)
+        layout.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        self.icon = QLabel(self.card)
+        self.icon.setObjectName('studioLoadingIcon')
+        self.icon.setFixedSize(48, 48)
+        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        head.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
+        heading = QVBoxLayout()
+        heading.setSpacing(4)
+        title = QLabel('准备工作台', self.card)
+        title.setObjectName('studioLoadingTitle')
+        from .elided_label import ElidedLabel
+        self.project_name = ElidedLabel('', self.card, minimum=40)
+        self.project_name.setObjectName('studioLoadingProject')
+        heading.addWidget(title)
+        heading.addWidget(self.project_name)
+        head.addLayout(heading, 1)
+        layout.addLayout(head)
+        self.bar = QProgressBar(self.card)
+        self.bar.setRange(0, len(self.TASKS))
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        layout.addWidget(self.bar)
+        self.steps_view = ReadinessSteps(self.TASKS, self.card)
+        layout.addWidget(self.steps_view)
+        self.label = QLabel('', self.card)
+        self.label.setObjectName('studioLoadingStatus')
         self.label.setTextFormat(Qt.TextFormat.PlainText)
         self.label.setWordWrap(True)
-        self.bar = QProgressBar(self.overlay)
-        self.bar.setRange(0, len(self.TASKS))
-        self.bar.setFixedWidth(360)
-        self.bar.setTextVisible(False)
-        layout.addWidget(title)
-        layout.addSpacing(12)
         layout.addWidget(self.label)
-        layout.addSpacing(16)
-        layout.addWidget(self.bar, 0, Qt.AlignmentFlag.AlignHCenter)
         actions = QHBoxLayout()
+        actions.setSpacing(10)
         actions.addStretch()
         self.retry = QPushButton('重试')
-        self.retry.clicked.connect(lambda: self.begin(self.path, skip_dirty_guard=True))
-        back = QPushButton('返回主页')
+        self.retry.setObjectName('studioLoadingRetry')
+        self.retry.clicked.connect(lambda: self.begin(self.path, skip_dirty_guard=True,expected_result_ref=self.expected_result_ref))
+        back = self.back = QPushButton('返回主页')
+        back.setObjectName('studioLoadingBack')
         back.clicked.connect(self.cancel)
-        actions.addWidget(self.retry)
         actions.addWidget(back)
-        actions.addStretch()
+        actions.addWidget(self.retry)
         layout.addLayout(actions)
-        layout.addStretch()
         self.overlay.hide()
         page.installEventFilter(self)
         page.timeline.installEventFilter(self)
@@ -93,6 +192,7 @@ class StudioReadiness(QObject):
             self.completed.add(name)
             self.profile['stages_ms'][name] = round((time.perf_counter()-self.started)*1000, 3)
             self.bar.setValue(len(self.completed))
+            self.steps_view.set_state(self.completed, self.steps_view.current)
 
     def _set_stage_label(self, stage: str) -> None:
         """阶段文案带已用时间（用户要求：显示真实阶段，可附已用时间）。"""
@@ -104,9 +204,11 @@ class StudioReadiness(QObject):
         elapsed = time.perf_counter() - self.started
         text = translate(str(stage), language) if language != "zh" else str(stage)
         self.label.setText(f"{text} · {elapsed:.1f}s")
+        self.steps_view.set_state(self.completed, str(stage))
 
-    def begin(self, path, *, skip_dirty_guard=False):
+    def begin(self, path, *, skip_dirty_guard=False,expected_result_ref=None):
         page = self.page
+        self.expected_result_ref = expected_result_ref
         path = str(Path(path).resolve())
         file_identity = project_file_identity(path)
         if (self.ready and self.path == path and page.project is not None
@@ -134,15 +236,30 @@ class StudioReadiness(QObject):
         self.next_stage = ''
         self.hydrated = False
         self.retry.hide()
+        bind_text(self.back, '返回当前工程' if page.project is not None else '返回工程库')
         self.bar.setValue(0)
         bind_text(self.label, '读取工程')
+        self.project_name.setText(Path(path).stem)
+        self.steps_view.set_state((), '读取工程')
         from .theme_manager import theme_key, theme_definition
         theme = theme_definition(theme_key())
         self.overlay.setStyleSheet(
             f'QFrame#studioLoadingSurface {{background:{theme.app_background};}}'
+            f'QFrame#studioLoadingCard {{background:{theme.surface};border:1px solid {theme.border};border-radius:16px;}}'
             f'QLabel {{color:{theme.text};background:transparent;}}'
-            f'QProgressBar {{border:0;background:{theme.surface};height:5px;}}'
-            f'QProgressBar::chunk {{background:{theme.accent};}}')
+            f'QLabel#studioLoadingIcon {{background:{theme.accent_tint};border-radius:12px;}}'
+            f'QLabel#studioLoadingTitle {{font-size:18px;font-weight:600;}}'
+            f'QLabel#studioLoadingProject {{color:{theme.text_secondary};font-size:13px;}}'
+            f'QLabel#studioLoadingStatus {{color:{theme.text_muted};font-size:13px;}}'
+            f'QProgressBar {{border:0;background:{theme.panel};border-radius:3px;}}'
+            f'QProgressBar::chunk {{background:{theme.accent};border-radius:3px;}}'
+            f'QPushButton#studioLoadingBack {{background:transparent;color:{theme.text_secondary};'
+            f'border:1px solid {theme.border_strong};border-radius:8px;padding:6px 16px;}}'
+            f'QPushButton#studioLoadingBack:hover {{background:{theme.selected};color:{theme.text};}}'
+            f'QPushButton#studioLoadingRetry {{background:{theme.accent};color:{theme.text_on_accent};'
+            f'border:0;border-radius:8px;padding:6px 18px;font-weight:600;}}')
+        import qtawesome as qta
+        self.icon.setPixmap(qta.icon('fa5s.closed-captioning', color=theme.accent_text).pixmap(QSize(22, 22)))
         self.overlay.setGeometry(page.rect())
         self.overlay.show()
         self.overlay.raise_()
@@ -222,7 +339,8 @@ class StudioReadiness(QObject):
             return
         self.mark('读取工程')
         self.steps = self.page.project_controller._open_project_steps(
-            self.path, single_shot_fn=QTimer.singleShot, skip_dirty_guard=True, loaded_project=project)
+            self.path, single_shot_fn=QTimer.singleShot, skip_dirty_guard=True, loaded_project=project,
+            expected_result_ref=self.expected_result_ref)
 
     def _tick(self):
         now = time.perf_counter()
@@ -248,7 +366,8 @@ class StudioReadiness(QObject):
                     self.hydrated = True
                     self.page.timeline.setUpdatesEnabled(True)
                     self.page.timeline.update()
-                    if self.page.project is None:
+                    if (self.page.project is None or self.page.project_path is None
+                            or Path(self.page.project_path).resolve() != Path(self.path).resolve()):
                         self.fail('建立时间轴', '工程未能打开')
                         return
                     self.mark('建立时间轴')
@@ -260,10 +379,12 @@ class StudioReadiness(QObject):
             if audio_state.get('state') == 'ENDPOINT_FAILED':
                 self.fail('准备音频', str(audio_state.get('decoder_error') or '音频进程已退出'))
                 return
-            has_media = bool(page.project.media.path)
+            from .media_availability import media_available
+            has_media = bool(page.project.media.path and
+                             media_available(page.project, page.project.media.path))
             if not has_media or page.video._startup_state == 'READY':
                 self.mark('准备播放器')
-            if '准备播放器' in self.completed and page._playback_buffers_ready():
+            if '准备播放器' in self.completed and (not has_media or page._playback_buffers_ready()):
                 self.mark('准备音频')
             # ASS/LIVE initialization is complete only after the initial job
             # and visible renderer have a result, not after their scheduling.
@@ -292,6 +413,10 @@ class StudioReadiness(QObject):
             self.overlay.hide()
             page._studio_trace('STUDIO_READY_GATE', **self.profile)
             self._finish()
+            # Load the Chinese word/pinyin dictionaries in the background now,
+            # so the proofreading page never waits on their one-time load.
+            from .stutter_cleanup import warm_text_analysis
+            QTimer.singleShot(1500, warm_text_analysis)
         except Exception as exc:
             self.fail(self.label.text(), str(exc))
 
@@ -302,6 +427,8 @@ class StudioReadiness(QObject):
         self.steps = None
         self.profile['error'] = {'stage': stage, 'message': error}
         bind_text(self.label, '{stage}失败\n{error}\n工程文件仍保留，可重试载入：\n{value2}', stage=stage, error=error, value2=self.path)
+        failed = next((task for task in self.TASKS if task not in self.completed), '')
+        self.steps_view.set_state(self.completed, '', failed)
         self.retry.show()
         # 2026-09-17：识别交接的 reload 在此静默失败过——字幕已写入工程文件
         # 但 Studio 保持旧数据，用户只能回工程库重开。失败必须可见且可重试。
@@ -330,9 +457,21 @@ class StudioReadiness(QObject):
         except Exception:
             pass
         self.overlay.hide()
-        self.page._request_return_home()
+        if self.page.project is not None:
+            self.page._project_view_state = 'open'
+            self.page._sync_navigation_chrome()
+            self.finished.emit()
+        else:
+            self.page.show_project_hub(skip_dirty_guard=True)
 
     def _finish(self):
+        if self.expected_result_ref:
+            from .recognition_result import verify_result_reference
+            try:
+                verify_result_reference(self.expected_result_ref, project=self.page.project,project_path=self.page.project_path)
+            except Exception as exc:
+                self.fail('核对识别结果', str(exc))
+                return
         callback, self.on_ready = self.on_ready, None
         if callback is not None:
             callback()

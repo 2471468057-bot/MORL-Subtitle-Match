@@ -55,11 +55,9 @@ def basic_caption(project, cue_id, width, height, error):
     if payload and (payload.get('webTheme') or payload.get('engine')=='remotion' or route_recipe(payload).engine=='remotion'):return None
     basic = SubtitleProject(media=project.media, render_settings=dict(project.render_settings),
         styles=[SubtitleStyle('preview-fallback', '基础预览')],
-        cues=[StudioCue(cue.id, cue.start_ms, cue.end_ms, cue.text, cue.speaker_id, 'preview-fallback')])
+        cues=[StudioCue(cue.id, cue.start_ms, cue.end_ms, cue.text, cue.speaker_id,
+                       'preview-fallback', transform=dict(cue.transform))])
     snapshot = build_visual_cue_snapshot(basic, cue.id, width=width, height=height)
-    from .subtitle_stacking import project_stack_layout
-    offset=project_stack_layout(project).offset_for(cue_id)
-    if offset:snapshot=replace(snapshot,position_y=snapshot.position_y-offset)
     return PreparedCaption(snapshot, snapshot.stable_hash(), RecipeRoute('native', ()), preview_error=error)
 
 
@@ -126,7 +124,9 @@ class PlaybackCaptionCache(QObject):
                 if current != key:
                     project = materialize_caption_project(revision)
                     current = key
-                    self._materialized, self._materialized_key = project, key
+                    with self._lock:
+                        if not self._closed:
+                            self._materialized, self._materialized_key = project, key
                 from .visual_snapshot import build_visual_cue_snapshot
                 for cue_id in ids:
                     with self._lock:
@@ -186,4 +186,7 @@ class PlaybackCaptionCache(QObject):
             self._pending=None
             self._frames.clear()
             self._failures.clear()
+            # The materialized copy is a whole project; release it with the session.
+            self._materialized=None
+            self._materialized_key=None
             self._wake.set()

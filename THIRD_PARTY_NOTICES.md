@@ -62,3 +62,15 @@
 本次从明确GPL-2.0-or-later的50b6a0c0e7e3076e33044254b560f466b67cd245取得20件未修改构建脚本/补丁，逐字节等于旧构建输入。版权©2026 Jonny Burger；对应[上游LICENSE](https://github.com/remotion-dev/rust-ffmpeg-splitter/blob/50b6a0c0e7e3076e33044254b560f466b67cd245/LICENSE)、[原文](licenses/source-materials/remotion-4.0.513/splitter-licensed/LICENSE)、[完整GPLv2](licenses/source-materials/remotion-4.0.513/splitter-licensed/COPYING.GPLv2.txt)、[原README](licenses/source-materials/remotion-4.0.513/splitter-licensed/README.md)及[逐文件来源/校验](licenses/source-materials/remotion-4.0.513/splitter-licensed/PROVENANCE.json)配套提供，GPL or-later不覆盖各补丁上下文中独立FFmpeg/x265等版权。
 
 用途是**原样第三方构建/许可材料**，不用于修改本轮运行载荷；没有本地代码补丁。旧版9件不同文件没有按此冒认授权，公开范围不含它们。完整媒体库仍缺其准确构建输入和组合权利，提供此20件不等于已交付完整对应源码，也不解决FDK混合分发。本项目4件自有Remotion/GSAP接口按GPL-3.0-only独立提供，不把调用的库实现计入自有代码。
+## Optional models added in the 2026-10-06 source increment
+
+Microsoft VibeVoice code `1541f590c7099820f10ea012f48d2399282df69f` and both official VibeVoice-ASR-Streaming checkpoints are marked MIT. BUTSpeechFIT DiariZen code `844f5555b0a98acd0931511fc641a8c5b8ba92c7` is MIT; its specific WavLM large s80 md v2 weights are CC-BY-NC-4.0, with complete upstream research/compatibility wording retained. The WeSpeaker auxiliary weights and PLDA materials retain independent CC-BY-4.0 terms. Exact checkpoint revisions, filenames, hashes, original notices and modifications are in [the shared optional-model manifest and local originals](licenses/optional-models/README.md).
+
+No optional weights are bundled by default; model acquisition and consent do not settle formal redistribution compatibility. Original application adapters remain GPL-3.0-only under the existing historical grant. Existing components and unresolved permission/source conditions retain their status. This addition does not include pyannote Community-1 or restore a Docker product.
+## 2026-10-07授权回复与实际依赖更新
+
+Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**；Rust/FFmpeg按各自许可。原请求的准确原生构建材料未提供，额外组合权利未提供，两项**分别未解决**；没有将所有项写成拒绝或已获许可。个人免费资格、非商用声明、Company订阅及独立进程不能代替这些权利。
+
+当前生产高级字幕仍保留；直接/传递npm包、真实API、compositor/Rust/媒体DLL、Chromium、自动npm安装/备用CLI、两个独立onedir及配对B内部材料已分别核对。现有HTML档案可独立求值，正常Studio宿主仍调用Remotion；最小纯CDP验证不会偷偷替换全部AI功能。原封存Setup/候选/A/B/C声明与自有GPL-3.0-only、0.2.6-test.3分界保持。
+
+[组件、实际材料及发布门](licenses/REMOTION_DEPENDENCY_AUDIT.md)。新统一候选保留既有实现并继续标公开发布阻塞；纯源码C不代替内部B及原生对应材料。

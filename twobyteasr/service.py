@@ -7,9 +7,11 @@ import glob
 import inspect
 import json
 import os
+import sys
 import threading
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +23,12 @@ from twobyteasr.runtime import (
 
 
 EventSink = Callable[["PipelineEvent"], None]
+
+
+def preview_glossary_correction(*args, **kwargs):
+    """Review copied original transcriptions without re-running ASR or saving."""
+    from .studio_glossary_service import preview_glossary_correction as implementation
+    return implementation(*args, **kwargs)
 
 
 class CancelledError(RuntimeError):
@@ -61,8 +69,14 @@ class RunOptions:
     recognition_snapshot_json: str = ""
     speaker_source: str = "single"
     settings_snapshot_json: str = field(default="", repr=False)
+    glossary_snapshot_json: str = field(default="", repr=False)
+    enable_term_search: bool = False
+    job_id: str = ""
 
     def __post_init__(self) -> None:
+        if self.job_id:
+            from .recognition_result import validate_job_id
+            validate_job_id(self.job_id)
         if not 0 <= self.expected_speakers <= 6:
             raise ValueError("expected_speakers 只能是 0（自动）或 1 到 6")
         if self.dialogue_coverage_mode not in {
@@ -78,9 +92,15 @@ class RunOptions:
 
     @classmethod
     def from_legacy(cls, legacy: Any, *, overwrite_policy: str = "overwrite") -> "RunOptions":
+        from .terminology import snapshot_glossaries
+        enabled = bool(getattr(legacy, "RUNTIME_ENABLE_DOMAIN_TERMS", False))
+        ids = tuple(getattr(legacy, "RUNTIME_ENABLED_GLOSSARY_IDS", ()) or ())
+        if enabled and not ids and getattr(legacy, "RUNTIME_GAME_NAME", ""):
+            ids = (getattr(legacy, "runtime_game_identity", str)(legacy.RUNTIME_GAME_NAME),)
         return cls(
             content_name=str(getattr(legacy, "RUNTIME_GAME_NAME", "") or ""),
             enable_domain_terms=bool(getattr(legacy, "RUNTIME_ENABLE_DOMAIN_TERMS", False)),
+            enable_term_search=bool(getattr(legacy, "RUNTIME_ENABLE_TERM_SEARCH", False)),
             enabled_glossary_ids=tuple(
                 getattr(legacy, "RUNTIME_ENABLED_GLOSSARY_IDS", ()) or ()
             ),
@@ -97,8 +117,9 @@ class RunOptions:
             overwrite_policy=overwrite_policy,
             studio_project_path=str(getattr(legacy, "RUNTIME_STUDIO_PROJECT_PATH", "") or ""),
             recognition_purpose=str(getattr(legacy, "RUNTIME_RECOGNITION_PURPOSE", "final") or "final"),
-            speaker_source=str(getattr(legacy, 'RUNTIME_SETTINGS', {}).get('models', {}).get('speaker_source', 'single')),
+            speaker_source=__import__('twobyteasr.speaker_strategy', fromlist=['resolve']).resolve(getattr(legacy, 'RUNTIME_SETTINGS', {})),
             settings_snapshot_json=json.dumps(getattr(legacy, 'RUNTIME_SETTINGS', {}), ensure_ascii=False),
+            glossary_snapshot_json=json.dumps(snapshot_glossaries(legacy, ids if enabled else ()).to_dict(), ensure_ascii=False),
         )
 
     def create_runtime_context(
@@ -106,6 +127,7 @@ class RunOptions:
         legacy: Any,
         *,
         cancellation_token: Any | None = None,
+        _glossary_snapshot: Any | None = None,
     ) -> RuntimeContext:
         canonicalize = getattr(legacy, "canonicalize_runtime_game_name", str)
         identity = getattr(legacy, "runtime_game_identity", str)
@@ -119,10 +141,19 @@ class RunOptions:
                 enabled_ids.append(text)
         if self.enable_domain_terms and not enabled_ids and content_name:
             enabled_ids = [identity(content_name)]
+        from .terminology import GlossarySnapshot, snapshot_glossaries
+        snapshot = _glossary_snapshot if _glossary_snapshot is not None else (GlossarySnapshot.from_dict(json.loads(self.glossary_snapshot_json))
+            if self.glossary_snapshot_json else snapshot_glossaries(legacy, enabled_ids if self.enable_domain_terms else ()))
+        if not self.enable_domain_terms:
+            snapshot = GlossarySnapshot()
+        enabled_ids = [library.id for library in snapshot.libraries]
         return RuntimeContext(
+            job_id=self.job_id or uuid.uuid4().hex,
             game_name=content_name,
             enable_domain_terms=bool(self.enable_domain_terms and enabled_ids),
+            enable_term_search=bool(self.enable_term_search),
             enabled_glossary_ids=enabled_ids,
+            glossary_snapshot=snapshot,
             output_review_track=bool(self.output_review_track),
             output_jianying_txt=bool(self.output_jianying_txt),
             output_speaker_tracks=bool(self.output_speaker_tracks),
@@ -135,7 +166,8 @@ class RunOptions:
             studio_project_path=str(self.studio_project_path or ""),
             recognition_purpose=self.recognition_purpose,
             recognition_snapshot=json.loads(self.recognition_snapshot_json) if self.recognition_snapshot_json else {},
-            speaker_source=self.speaker_source,
+            speaker_source=__import__('twobyteasr.speaker_strategy', fromlist=['resolve']).resolve(
+                json.loads(self.settings_snapshot_json) if self.settings_snapshot_json else getattr(legacy, 'RUNTIME_SETTINGS', {})),
         )
 
     def apply(
@@ -147,10 +179,17 @@ class RunOptions:
         configured = self.create_runtime_context(
             legacy,
             cancellation_token=context.cancellation_token,
+            _glossary_snapshot=context.glossary_snapshot,
         )
         context.game_name = configured.game_name
         context.enable_domain_terms = configured.enable_domain_terms
+        context.enable_term_search = configured.enable_term_search
         context.enabled_glossary_ids = list(configured.enabled_glossary_ids)
+        # apply() is also used with an already created context: never reload
+        # task contents after its first snapshot was fixed.
+        if context.glossary_snapshot is None or not configured.enable_domain_terms:
+            context.glossary_snapshot = configured.glossary_snapshot
+        context.enabled_glossary_ids = [x.id for x in context.glossary_snapshot.libraries]
         context.discovered_terms.clear()
         context.output_review_track = configured.output_review_track
         context.output_jianying_txt = configured.output_jianying_txt
@@ -186,6 +225,7 @@ class PipelineEvent:
     output_path: str = ""
     error: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
+    job_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -201,6 +241,11 @@ class MediaResult:
     project_path: str = ""
     elapsed_seconds: float = 0.0
     error: str = ""
+    job_id: str = ""
+    project_id: str = ""
+    result_revision: str = ""
+    media_fingerprint: str = ""
+    result_ref_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,6 +253,7 @@ class QueueResult:
     results: tuple[MediaResult, ...]
     elapsed_seconds: float
     log_path: str = ""
+    job_id: str = ""
 
     @property
     def successes(self) -> tuple[MediaResult, ...]:
@@ -258,6 +304,7 @@ def _event_from_payload(kind: str, payload: dict[str, Any], state: dict[str, Any
         output_path=output_path,
         error=str(payload.get("error") or ""),
         payload=dict(payload),
+        job_id=str(payload.get("job_id") or state.get("job_id") or ""),
     )
 
 
@@ -316,9 +363,16 @@ def run_media_queue(
         legacy,
         cancellation_token=token,
     )
-    run_options.apply(legacy, runtime_context)
+    runtime_context.identity_task_active = True
     runtime_scope = activate_runtime_context(runtime_context, legacy=legacy)
     runtime_scope.__enter__()
+    try:
+        # Acquire ownership before mirroring task settings into legacy globals.
+        # A rejected concurrent queue must not overwrite the active review.
+        run_options.apply(legacy, runtime_context)
+    except BaseException:
+        runtime_scope.__exit__(*sys.exc_info())
+        raise
     try:
         process_media_supports_context = "runtime_context" in inspect.signature(
             pipeline.process_media
@@ -326,7 +380,7 @@ def run_media_queue(
     except (TypeError, ValueError):
         process_media_supports_context = False
     normalized_paths = [os.path.abspath(os.fspath(path)) for path in media_paths]
-    state: dict[str, Any] = {"media_path": "", "media_index": 0, "media_total": len(normalized_paths)}
+    state: dict[str, Any] = {"media_path": "", "media_index": 0, "media_total": len(normalized_paths), "job_id": runtime_context.job_id}
 
     def forward_event(kind: str, payload: dict[str, Any]) -> None:
         if event_sink is None:
@@ -356,6 +410,8 @@ def run_media_queue(
                 startup_self_test=startup_self_test,
                 runtime_settings=legacy.runtime_settings_snapshot(),
             )
+            legacy.record_run_event("terminology_snapshot_loaded", job_id=runtime_context.job_id,
+                **runtime_context.glossary_snapshot.summary())
             if legacy.HF_TOKEN:
                 os.environ["HF_TOKEN"] = legacy.HF_TOKEN
                 os.environ["HUGGINGFACE_HUB_TOKEN"] = legacy.HF_TOKEN
@@ -367,6 +423,8 @@ def run_media_queue(
                 if isinstance(runtime_settings, dict):
                     import copy
                     runtime_settings=copy.deepcopy(runtime_settings)
+                    from .speaker_strategy import resolve
+                    runtime_context.speaker_source = resolve(runtime_settings)
                     runtime_settings.setdefault('models', {})['speaker_source'] = runtime_context.speaker_source
                     runtime_context.asr_settings_snapshot=runtime_settings
                     from .llm_config import qwen_asr_endpoint_from_settings
@@ -389,8 +447,8 @@ def run_media_queue(
                             **snapshot.public_identity())
                     group_identity = (f"{runtime_context.provider_snapshot.provider} / {runtime_context.provider_snapshot.model}"
                         if runtime_context.provider_snapshot is not None else "本地规则（AI 未启用）")
-                    print(f"[任务配置] 实际断句模型：{group_identity}；说话人区分："
-                          f"{'关闭' if runtime_context.speaker_source == 'single' else '开启 · ' + runtime_context.speaker_source}", flush=True)
+                    source_label='主转写原生结果'
+                    print(f"[任务配置] 实际断句模型：{group_identity}；身份来源：{source_label}", flush=True)
                 # Phase B：运行环境 preflight correctness gate——坏的 Main/MOSS
                 # 环境必须在真正启动 ASR/MOSS worker/FireRed pipeline 之前
                 # 被拒绝（UI 按钮检查只是更好展示，不是唯一保护）。
@@ -400,14 +458,21 @@ def run_media_queue(
                         from twobyteasr.environment import ensure_environment_ready
 
                         ensure_environment_ready(runtime_settings)
-                        if runtime_context.speaker_source=='nemotron':
-                            from .nemotron_diarization import ensure_ready
-                            ensure_ready()
                 pipeline.check_runtime(legacy)
                 if runtime_context.recognition_snapshot:
                     from .recognition_input import prepare_recognition_input
                     from .media_service import GLOBAL_MEDIA_SERVICE
                     snapshot = runtime_context.recognition_snapshot
+                    from .recognition_result import media_identity_for_task, digest_payload
+                    # Source hashes are computed by this worker once per job;
+                    # mapping/range/audio graph stay part of the input identity.
+                    for source, source_identity in snapshot["sources"].items():
+                        current = media_identity_for_task(source, runtime_context)
+                        if (current["size"], current["mtime_ns"]) != (source_identity["size"], source_identity["mtime_ns"]):
+                            raise RuntimeError(f"识别启动后素材已改变：{source}")
+                        source_identity["sha256"] = current["sha256"]
+                    snapshot["fingerprint"] = digest_payload({k: snapshot[k] for k in
+                        ("version", "duration_ms", "audio_graph", "sequence", "sources")})
                     legacy.record_run_event("timeline_input_preparing", fingerprint=snapshot["fingerprint"],
                                             duration_ms=snapshot["duration_ms"])
                     prepared = prepare_recognition_input(snapshot, legacy.CACHE_ROOT, GLOBAL_MEDIA_SERVICE.ffmpeg_path, token=token)
@@ -417,6 +482,9 @@ def run_media_queue(
                     legacy.record_run_event("timeline_input_ready", input_path=prepared,
                         fingerprint=snapshot["fingerprint"], duration_ms=snapshot["duration_ms"],
                         time_domain="timeline", audio_graph=snapshot["audio_graph"])
+                from .recognition_result import media_identity_for_task
+                for path in normalized_paths:
+                    media_identity_for_task(path, runtime_context)
                 legacy.cleanup_old_cache()
                 token.raise_if_cancelled()
                 try:
@@ -449,16 +517,18 @@ def run_media_queue(
                 for path in normalized_paths:
                     results.append(MediaResult(path, "cancelled", error=str(exc)))
                 legacy.record_run_event("queue_cancelled", error=str(exc))
-                return QueueResult(tuple(results), time.perf_counter() - queue_started, log_path)
+                return QueueResult(tuple(replace(r, job_id=runtime_context.job_id) for r in results), time.perf_counter() - queue_started, log_path, runtime_context.job_id)
             except Exception as exc:
                 error = _exception_message(exc, "运行环境检查失败")
                 for path in normalized_paths:
                     results.append(MediaResult(path, "failed", error=error))
                 legacy.record_run_event("queue_failed", error=error)
-                return QueueResult(tuple(results), time.perf_counter() - queue_started, log_path)
+                return QueueResult(tuple(replace(r, job_id=runtime_context.job_id) for r in results), time.perf_counter() - queue_started, log_path, runtime_context.job_id)
 
             for index, media_path in enumerate(normalized_paths, 1):
                 state.update(media_path=media_path, media_index=index)
+                runtime_context.media_path = media_path
+                runtime_context.media_index = index
                 if token.is_cancelled:
                     results.extend(
                         MediaResult(path, "cancelled", error="队列已取消。")
@@ -487,6 +557,14 @@ def run_media_queue(
                 file_started = time.perf_counter()
                 try:
                     token.raise_if_cancelled()
+                    from .recognition_result import media_identity_for_task, recognition_project_path
+                    runtime_context.media_identity = media_identity_for_task(media_path, runtime_context)
+                    if runtime_context.recognition_snapshot:
+                        runtime_context.media_identity["fingerprint"] = runtime_context.recognition_snapshot["fingerprint"]
+                    elif not run_options.studio_project_path:
+                        runtime_context.studio_project_path = str(recognition_project_path(media_path, runtime_context.job_id, media_index=index))
+                    runtime_context.committed_result_ref.clear()
+                    sync_legacy_runtime(legacy, runtime_context)
                     process_kwargs = (
                         {"runtime_context": runtime_context}
                         if process_media_supports_context
@@ -499,6 +577,7 @@ def run_media_queue(
                         legacy,
                         **process_kwargs,
                     )
+                    token.raise_if_cancelled()
                     report_json, report_text = legacy.task_reporting.report_paths_for_media(media_path)
                     speaker_paths, review_path = _result_output_details(
                         media_path, srt_path, run_options.output_review_track
@@ -515,16 +594,16 @@ def run_media_queue(
                                 media_status = reported_status
                         except (OSError, ValueError, TypeError):
                             pass
-                    from twobyteasr.studio_project import canonical_project_path
-                    project_candidate = (
-                        Path(runtime_context.studio_project_path)
-                        if runtime_context.studio_project_path and len(normalized_paths) == 1
-                        else canonical_project_path(media_path)
-                    )
                     outputs = report_payload.get('result',{}).get('outputs',{}) or report_payload.get('outputs',{})
                     project_error = str(outputs.get('project_error') or '')
-                    if outputs.get('project'):
-                        project_candidate = Path(outputs['project'])
+                    reference = dict(runtime_context.committed_result_ref or {})
+                    # Only the pipeline's validated atomic commit is publishable.
+                    # A historical report or an old basename path is no fallback.
+                    if reference:
+                        from .recognition_result import verify_result_reference
+                        verify_result_reference(reference)
+                        if reference["job_id"] != runtime_context.job_id:
+                            raise RuntimeError("工程交付的任务 ID 与当前任务不一致。")
 
                     result = MediaResult(
                         media_path=str(runtime_context.recognition_snapshot.get("project", {}).get("media", {}).get("path") or media_path),
@@ -535,9 +614,14 @@ def run_media_queue(
                         review_path=review_path,
                         report_json_path=report_json if os.path.isfile(report_json) else "",
                         report_text_path=report_text if os.path.isfile(report_text) else "",
-                        project_path=str(project_candidate) if not project_error and project_candidate.is_file() else "",
+                        project_path=str(reference.get("path") or "") if not project_error else "",
                         error=('工程交付失败，字幕输出已保存，可从结果页恢复：'+project_error) if project_error else str(runtime_context.speaker_recovery.get('processing', {}).get('error', '')),
                         elapsed_seconds=float(elapsed),
+                        job_id=runtime_context.job_id,
+                        project_id=str(reference.get("project_id") or ""),
+                        result_revision=str(reference.get("result_revision") or ""),
+                        media_fingerprint=str(reference.get("media_fingerprint") or runtime_context.media_identity.get("fingerprint") or ""),
+                        result_ref_json=json.dumps(reference, ensure_ascii=False) if reference else "",
                     )
                     results.append(result)
                     durations.append(float(elapsed))
@@ -605,8 +689,11 @@ def run_media_queue(
                     "local_asr_session_state",
                     **session_state(),
                 )
-            return QueueResult(tuple(results), total_elapsed, log_path)
+            return QueueResult(tuple(replace(r, job_id=runtime_context.job_id) for r in results), total_elapsed, log_path, runtime_context.job_id)
     finally:
+        end_event_log = getattr(legacy, "end_run_event_log", None)
+        if callable(end_event_log):
+            end_event_log()
         if local_asr_session_started and not persistent_model_session:
             end_model_session = getattr(legacy, "end_local_asr_session", None)
             if callable(end_model_session):

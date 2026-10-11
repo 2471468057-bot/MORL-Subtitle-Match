@@ -7,12 +7,19 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import threading
 import time
 
+# A reusable worker exits by itself after this long without requests, so a
+# hidden Studio does not keep an extra interpreter alive.
+_WORKER_IDLE_SECONDS = 60.0
 
-def _probe_worker(connection):
+
+def _probe_worker(connection, idle_seconds=None):
     try:
         while True:
+            if idle_seconds is not None and not connection.poll(idle_seconds):
+                return
             request = connection.recv()
             if request is None:
                 return
@@ -46,17 +53,32 @@ def _probe_worker(connection):
         connection.close()
 
 
-def probe_sources(sources, *, timeout=3.0, cancel_check=None, decode=False, previous=None):
-    """Call on a background thread. Never wait indefinitely on a remote path."""
-    context = multiprocessing.get_context('spawn')
-    process = connection = None
-    results = {}
+class _ProbeProcess:
+    """One spawned probe worker. Killed (never reused) after any timeout,
+    cancellation or protocol error, so a late reply cannot reach a new caller."""
 
-    def stop():
-        nonlocal process, connection
+    def __init__(self, idle_seconds=None):
+        from .windows_ipc import process_pipe
+        context = multiprocessing.get_context('spawn')
+        self.connection, child = process_pipe(context)
+        self.process = context.Process(target=_probe_worker, args=(child, idle_seconds), daemon=True)
+        self.process.start()
+        child.close()
+
+    def alive(self):
+        return self.process is not None and self.process.is_alive()
+
+    def close(self, *, graceful=False):
+        connection, process = self.connection, self.process
+        self.connection = self.process = None
+        if connection is not None and process is not None and graceful and process.is_alive():
+            try:
+                connection.send(None)
+                process.join(timeout=.3)
+            except (BrokenPipeError, OSError):
+                pass
         if connection is not None:
             connection.close()
-            connection = None
         if process is not None:
             if process.is_alive():
                 # This worker may own an ffprobe child. Reap only this tree.
@@ -73,43 +95,114 @@ def probe_sources(sources, *, timeout=3.0, cancel_check=None, decode=False, prev
                 process.kill()
             process.join(timeout=1)
             process.close()
-            process = None
+
+
+# Studio checks media every few seconds. Spawning a fresh interpreter for each
+# check cost ~0.15-0.3 s CPU every 3 s, so one idle-bounded worker is reused.
+_SHARED_LOCK = threading.Lock()
+_shared_worker = None
+
+
+def _shared_probe_process():
+    global _shared_worker
+    if _shared_worker is None or not _shared_worker.alive():
+        if _shared_worker is not None:
+            _shared_worker.close()
+        _shared_worker = _ProbeProcess(_WORKER_IDLE_SECONDS)
+    return _shared_worker
+
+
+def _discard_shared_probe_process():
+    global _shared_worker
+    if _shared_worker is not None:
+        _shared_worker.close()
+        _shared_worker = None
+
+
+def shutdown_probe_worker():
+    """Stop the reusable worker (application exit or tests)."""
+    with _SHARED_LOCK:
+        global _shared_worker
+        if _shared_worker is not None:
+            _shared_worker.close(graceful=True)
+            _shared_worker = None
+
+
+def probe_sources(sources, *, timeout=3.0, cancel_check=None, decode=False, previous=None):
+    """Call on a background thread. Never wait indefinitely on a remote path."""
+    shared = _SHARED_LOCK.acquire(blocking=False)
+    worker = None
+    results = {}
+    clean = False
+
+    def discard():
+        nonlocal worker
+        if shared:
+            _discard_shared_probe_process()
+        elif worker is not None:
+            worker.close()
+        worker = None
+
+    def acquire():
+        nonlocal worker
+        if worker is None:
+            worker = _shared_probe_process() if shared else _ProbeProcess()
+        return worker
 
     try:
         for source in dict.fromkeys(str(p) for p in sources if p):
             if cancel_check and cancel_check():
                 raise InterruptedError('媒体探测已取消')
-            if process is None:
-                from .windows_ipc import process_pipe
-                connection, child = process_pipe(context)
-                process = context.Process(target=_probe_worker, args=(child,), daemon=True)
-                process.start()
-                child.close()
-            connection.send((source, decode, (previous or {}).get(source, {})))
-            deadline = time.monotonic() + timeout
+            request = (source, decode, (previous or {}).get(source, {}))
+            # A reused worker may exit on its idle limit just as a request
+            # arrives. That is not a media failure: retry once on a new one.
+            retries = 1 if shared else 0
             while True:
-                if cancel_check and cancel_check():
-                    raise InterruptedError('媒体探测已取消')
-                if connection.poll(.025):
-                    try:
-                        results[source] = connection.recv()
-                    except EOFError:
-                        results[source] = dict(path=source, status='probe_failed', reason='媒体探测进程退出')
-                        stop()
+                try:
+                    acquire().connection.send(request)
+                except (BrokenPipeError, EOFError, OSError):
+                    discard()
+                    if retries:
+                        retries -= 1
+                        continue
+                    results[source] = dict(path=source, status='probe_failed', reason='媒体探测进程退出')
                     break
-                if time.monotonic() >= deadline:
+                deadline = time.monotonic() + timeout
+                reply = None
+                while True:
+                    if cancel_check and cancel_check():
+                        raise InterruptedError('媒体探测已取消')
+                    if worker.connection.poll(.025):
+                        try:
+                            reply = worker.connection.recv()
+                        except EOFError:
+                            reply = 'eof'
+                        break
+                    if time.monotonic() >= deadline:
+                        reply = 'timeout'
+                        break
+                if isinstance(reply, dict) and reply.get('path') == source:
+                    results[source] = reply
+                    break
+                discard()
+                if reply == 'timeout':
                     results[source] = dict(path=source, status='timeout', reason='媒体位置响应超时')
-                    stop()
                     break
+                if reply == 'eof' and retries:
+                    retries -= 1
+                    continue
+                results[source] = dict(path=source, status='probe_failed', reason='媒体探测进程退出')
+                break
+        clean = True
         return results
     finally:
-        if connection is not None and process is not None and process.is_alive():
-            try:
-                connection.send(None)
-                process.join(timeout=.3)
-            except (BrokenPipeError, OSError):
-                pass
-        stop()
+        if shared:
+            if not clean:
+                # Cancelled or failed mid-request: the worker may still answer.
+                _discard_shared_probe_process()
+            _SHARED_LOCK.release()
+        elif worker is not None:
+            worker.close(graceful=clean)
 
 
 def apply_availability(project, results):

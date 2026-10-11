@@ -12,6 +12,7 @@ import math
 import re
 import subprocess
 import threading
+import time
 from dataclasses import dataclass,asdict,replace
 
 
@@ -202,28 +203,59 @@ def launch_budget(command):
 def pack_items(items, build_messages, *, operation, max_tokens, schema=None):
     """Greedily pack complete items using their final serialized requests.
 
+    A request only grows when an item is added, so each batch is the longest
+    fitting prefix. It is found by exponential search from the previous batch
+    length (the whole list for the first batch), then bisection: a list that
+    already fits costs one build. Building one request per added item made a
+    33-cue polish batch spend 33 s of local CPU before dispatch (2026-10-10).
     A rejected singleton is returned separately with its budget report. No text,
     JSON, or editable item is truncated. The caller must report its fallback.
     """
-    batches, rejected, current = [], [], []
-    for item in items:
-        trial = [*current, item]
-        try:
-            prepare_input(build_messages(trial), schema=schema, max_tokens=max_tokens, operation=operation)
-        except InputBudgetError:
-            if current:
-                batches.append(current)
-                current = []
+    items = list(items)
+    batches, rejected, start, guess = [], [], 0, len(items)
+    while start < len(items):
+        failures = {}
+        def fits(length):
             try:
-                prepare_input(build_messages([item]), schema=schema, max_tokens=max_tokens, operation=operation)
+                prepare_input(build_messages(items[start:start+length]), schema=schema,
+                              max_tokens=max_tokens, operation=operation)
             except InputBudgetError as exc:
-                rejected.append((item, exc.report))
-            else:
-                current = [item]
+                failures[length] = exc
+                return False
+            return True
+        remaining = len(items) - start
+        # good: longest length known to fit (0: none); bad: shortest known not to.
+        good, bad = 0, remaining + 1
+        probe = max(1, min(guess, remaining))
+        if fits(probe):
+            good = probe
+            while good < remaining:
+                probe = min(remaining, good * 2)
+                if not fits(probe):
+                    bad = probe
+                    break
+                good = probe
         else:
-            current = trial
-    if current:
-        batches.append(current)
+            bad = probe
+            while bad > 1:
+                probe = bad // 2
+                if fits(probe):
+                    good = probe
+                    break
+                bad = probe
+        while bad - good > 1:
+            middle = (good + bad) // 2
+            if fits(middle):
+                good = middle
+            else:
+                bad = middle
+        if not good:
+            rejected.append((items[start], failures[1].report))
+            start += 1
+        else:
+            batches.append(items[start:start+good])
+            start += good
+            guess = good
     return batches, rejected
 
 
@@ -231,8 +263,10 @@ DETERMINISTIC_FAILURES = frozenset({
     'request_too_large', 'payload_too_large', 'transport_length',
     'authentication_required', 'cancelled', 'permission_denied', 'forbidden',
     'configuration_error', 'not_installed', 'unsupported_cli', 'unsupported_search',
-    'model_unavailable',
+    'model_unavailable', 'unknown_model', 'upgrade_required',
 })
+
+TASK_CONFIGURATION_FAILURES = frozenset({'unknown_model', 'model_unavailable', 'configuration_error'})
 
 
 def failure_category(error):
@@ -246,7 +280,7 @@ def retry_delay(error, attempt):
     if failure_category(error) in DETERMINISTIC_FAILURES:
         return None
     response = getattr(error, 'response', None)
-    if getattr(response, 'status_code', None) in {400, 401, 403, 404}:
+    if getattr(response, 'status_code', None) in {400, 401, 403, 404, 426}:
         return None
     hint = getattr(response, 'headers', {}).get('Retry-After') if response is not None else None
     try:
@@ -261,24 +295,75 @@ def retry_delay(error, attempt):
 
 
 class RetryBudget:
-    """One bounded pool of retries, shared by siblings and split children."""
-    def __init__(self, count):
+    """Retries and wall time owned by a task, shared by all child requests."""
+    def __init__(self, count, *, total_seconds=None, clock=None, cleanup_reserve_seconds=0):
         self.remaining=max(0,int(count))
         self._lock=threading.Lock()
+        self._rejected_snapshots={}
+        self._clock=clock or time.monotonic
+        self.cleanup_reserve_seconds=max(0.,float(cleanup_reserve_seconds))
+        self.deadline_monotonic=(self._clock()+max(0.,float(total_seconds))
+            if total_seconds is not None else None)
+
+    def reject_snapshot(self, stage, fingerprint, error):
+        """A task-local rejection; a different model snapshot remains retryable."""
+        category=failure_category(error)
+        if category not in TASK_CONFIGURATION_FAILURES:
+            return False
+        from .provider_diagnostics import redact_diagnostics
+        with self._lock:
+            self._rejected_snapshots.setdefault((stage,fingerprint),
+                (category,str(redact_diagnostics(str(error)))[:600]))
+        return True
+
+    def snapshot_rejection(self, stage, fingerprint):
+        with self._lock:
+            return self._rejected_snapshots.get((stage,fingerprint))
+
+    def raise_if_rejected(self, stage, fingerprint):
+        rejected=self.snapshot_rejection(stage,fingerprint)
+        if rejected:
+            from .ai_providers import AIProviderError
+            raise AIProviderError('本任务此阶段的模型配置已被服务端拒绝；未发送新请求。 '+rejected[1],
+                category=rejected[0])
+
+    def remaining_seconds(self):
+        return (max(0., self.deadline_monotonic-self._clock())
+            if self.deadline_monotonic is not None else None)
+
+    @property
+    def expired(self):
+        return self.deadline_monotonic is not None and self.remaining_seconds() <= 0
+
+    def request_policy(self, policy):
+        """Queue, transport, and adapter receive the same absolute deadline."""
+        if self.deadline_monotonic is None:
+            return policy
+        from types import SimpleNamespace
+        remaining=self.remaining_seconds()-self.cleanup_reserve_seconds
+        if remaining <= 0:
+            from .ai_providers import AIProviderError
+            raise AIProviderError('校对任务总时限已用完；保留未完成条目的原文。', category='total_timeout')
+        return SimpleNamespace(**{name:min(float(getattr(policy,name)),remaining)
+            for name in ('connect','read_idle','total','queue')},
+            deadline_monotonic=self.deadline_monotonic-self.cleanup_reserve_seconds,
+            cleanup_deadline_monotonic=self.deadline_monotonic)
+
+    def wait(self, seconds, cancel_check):
+        return wait_retry(seconds, cancel_check, deadline=self.deadline_monotonic)
 
     def take(self):
         with self._lock:
-            if not self.remaining:
+            if not self.remaining or self.expired:
                 return False
             self.remaining-=1
             return True
 
 
-def wait_retry(seconds, cancel_check):
-    import time
+def wait_retry(seconds, cancel_check, *, deadline=None):
     until = time.monotonic() + seconds
     while time.monotonic() < until:
-        if cancel_check():
+        if cancel_check() or deadline is not None and time.monotonic() >= deadline:
             return False
         time.sleep(min(.05, max(0, until-time.monotonic())))
-    return not cancel_check()
+    return not cancel_check() and (deadline is None or time.monotonic() < deadline)

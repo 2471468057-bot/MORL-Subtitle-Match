@@ -6,6 +6,8 @@ import json
 import os
 import re
 import threading
+
+_LIBRARY_INDEX_LOCK = threading.RLock()
 from .i18n import tr, user_text, current_language, join_text
 from .project_display_name import display_project_name
 
@@ -748,6 +750,8 @@ class StudioHubMixin:
             bind_text(self.resume_title, '还没有打开过工程')
             bind_text(self.resume_meta, '导入视频或打开 .2byteproj，开始你的第一批字幕。')
             bind_text(self.resume_status, '等待开始')
+            if hasattr(self, "resume_status_pill"):
+                self.resume_status_pill.hide()
             self.resume_continue_button.setEnabled(False)
             self.resume_details_button.setEnabled(False)
             self._resume_cover_aspect = 16 / 9
@@ -759,13 +763,33 @@ class StudioHubMixin:
         name = display_project_name(record)
         count = int(record.get("cue_count", 0) or 0)
         duration = max(0, int(record.get("duration_ms", 0) or 0))
-        status_text, _status_key = self._project_status(record)
+        status_text, status_key = self._project_status(record)
         progress = record.get("review_progress")
-        progress_text = tr("复核 {percent}%", percent=int(progress)) if isinstance(progress, (int, float)) else status_text
         self._resume_target = str(path)
         user_text(self.resume_title).setText(name)
-        bind_text(self.resume_meta, '{count} 条字幕 · {value1} · {progress_text}', count=count, value1=_library_duration(duration), progress_text=progress_text)
-        bind_text(self.resume_status, join_text([status_text, source_path.name or tr("无源媒体")]))
+        if isinstance(progress, (int, float)):
+            bind_text(self.resume_meta, '{count} 条字幕 · {value1} · {progress_text}', count=count,
+                      value1=_library_duration(duration), progress_text=tr("复核 {percent}%", percent=int(progress)))
+        elif hasattr(self, "resume_status_pill"):
+            # The state is already the pill below; do not repeat it here.
+            edited = self._library_edited_time(record)
+            if edited:
+                bind_text(self.resume_meta, '{count} 条字幕 · {value1} · 上次编辑 {edited}', count=count,
+                          value1=_library_duration(duration), edited=edited)
+            else:
+                bind_text(self.resume_meta, '{count} 条字幕 · {value1}', count=count, value1=_library_duration(duration))
+        else:
+            bind_text(self.resume_meta, '{count} 条字幕 · {value1} · {progress_text}', count=count,
+                      value1=_library_duration(duration), progress_text=status_text)
+        if hasattr(self, "resume_status_pill"):
+            self.resume_status_pill.setText(status_text)
+            self.resume_status_pill.setProperty("status", status_key)
+            self.resume_status_pill.style().unpolish(self.resume_status_pill)
+            self.resume_status_pill.style().polish(self.resume_status_pill)
+            self.resume_status_pill.show()
+            user_text(self.resume_status).setText(source_path.name or tr("无源媒体"))
+        else:
+            bind_text(self.resume_status, join_text([status_text, source_path.name or tr("无源媒体")]))
         enabled = bool(str(path))
         self.resume_continue_button.setEnabled(enabled)
         self.resume_details_button.setEnabled(enabled)
@@ -825,6 +849,7 @@ class StudioHubMixin:
         里直接读索引，不再等扫描。
         """
         self._library_read_warnings = []
+        scan_generation = int(getattr(self, '_hub_scan_generation', 0))
         index = load_library_index(diagnostics=self._library_read_warnings)
         index_dirty = False
 
@@ -915,6 +940,13 @@ class StudioHubMixin:
                 key=lambda path: path.stat().st_mtime_ns,
                 reverse=True,
             )
+        except FileNotFoundError as exc:
+            # A fresh library has no directory yet. Removing its last recent
+            # external/missing project must still produce the empty state.
+            # An unavailable drive remains an actionable read error.
+            if not Path(library_root.anchor).is_dir():
+                raise OSError(f'{library_root}：{exc}') from exc
+            candidates = []
         except OSError as exc:
             raise OSError(f'{library_root}：{exc}') from exc
         for path in candidates:
@@ -950,7 +982,9 @@ class StudioHubMixin:
             logical_seen.add(key)
             deduplicated.append(record)
         if index_dirty and not self._library_read_warnings:
-            save_library_index(index)
+            with _LIBRARY_INDEX_LOCK:
+                if scan_generation == int(getattr(self, '_hub_scan_generation', 0)):
+                    save_library_index(index)
         return deduplicated
 
     def _library_records_from_index(self) -> list[dict[str, object]] | None:
@@ -1228,6 +1262,10 @@ class StudioHubMixin:
     def _remove_recent_project_metadata_batch(self, targets: set[str]) -> None:
         if not targets:
             return
+        def _normalized(path: str) -> str:
+            return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+
+        wanted = {_normalized(target) for target in targets}
         settings = studio_settings_path()
         try:
             payload = json.loads(settings.read_text(encoding="utf-8")) if settings.is_file() else {}
@@ -1235,7 +1273,7 @@ class StudioHubMixin:
             payload = {}
         payload["recent_projects"] = [
             item for item in payload.get("recent_projects", [])
-            if not isinstance(item, dict) or str(item.get("path", "")) not in targets
+            if not isinstance(item, dict) or _normalized(item.get("path", "")) not in wanted
         ]
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1245,21 +1283,16 @@ class StudioHubMixin:
         # 后比较，避免原始/resolved 写法差异导致清不掉。
         from .studio_project import load_library_index, save_library_index
 
-        def _normalized(path: str) -> str:
-            try:
-                return str(Path(str(path)).resolve()).replace("/", "\\").lower()
-            except (OSError, ValueError):
-                return str(path).replace("/", "\\").lower()
-
-        wanted = {_normalized(target) for target in targets}
-        index = load_library_index()
-        stale = [key for key in index if _normalized(key) in wanted]
-        if stale:
-            for key in stale:
-                index.pop(key, None)
-            save_library_index(index)
-        # bump 扫描代次：在途扫描线程的过期结果会被丢弃重扫。
-        self._hub_scan_generation = int(getattr(self, "_hub_scan_generation", 0)) + 1
+        with _LIBRARY_INDEX_LOCK:
+            # Also prevent a scan captured before deletion from re-persisting
+            # the old index after the card has been removed.
+            self._hub_scan_generation = int(getattr(self, "_hub_scan_generation", 0)) + 1
+            index = load_library_index()
+            stale = [key for key in index if _normalized(key) in wanted]
+            if stale:
+                for key in stale:
+                    index.pop(key, None)
+                save_library_index(index)
         # 同步重算（索引命中时 <100ms），立即得到删除后的正确列表。
         try:
             self._hub_library_records = self._project_library_records()
@@ -1357,25 +1390,21 @@ class StudioHubMixin:
                 save_project(project, path)
                 self._refresh_studio_empty_state()
         elif chosen is remove:
-            settings = studio_settings_path()
-            try:
-                payload = json.loads(settings.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                payload = {}
-            payload["recent_projects"] = [
-                item for item in payload.get("recent_projects", [])
-                if not isinstance(item, dict) or str(item.get("path", "")) != str(path)
-            ]
-            settings.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self._remove_recent_project_metadata(str(path))
             self._refresh_studio_empty_state()
         elif chosen is reveal and path.exists():
             os.startfile(str(path.parent))
-        elif chosen is delete and path.exists():
+        elif chosen is delete:
             answer = studio_message_box(
                 self, QMessageBox.Icon.Warning, tr('删除工程'), tr('确定删除 {value0}？', value0=path.name),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
             if answer == QMessageBox.StandardButton.Yes:
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    studio_message_box(self, QMessageBox.Icon.Warning, tr('工程删除失败'), str(exc))
+                    return
+                self._remove_recent_project_metadata(str(path))
                 self._refresh_studio_empty_state()

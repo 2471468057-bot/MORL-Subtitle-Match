@@ -27,6 +27,9 @@ def test_stage8_stage9_preflight_share_snapshot_despite_stale_modules(context, m
         return json.dumps({'checked_ids':[cue['id'] for cue in data['cues']],'cues':[]}) if kwargs['stage']=='polished' else json.dumps({'boundaries':[data['total_length']]})
     monkeypatch.setattr(polishing,"post_chat_completion",sender)
     monkeypatch.setattr(grouping,"post_chat_completion",sender)
+    # Production polish progress uses the SSE adapter boundary. Keep that
+    # boundary isolated too; replacing only its non-streaming sender is stale.
+    monkeypatch.setattr('twobyteasr.llm_adapter.post_chat_completion_stream', sender)
     pipeline._preflight_cloud_stages(core)
     row=segment(core)
     polished=polishing.call_correction_api([row], [], "", "", "test", "", [], [], [])

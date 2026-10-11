@@ -64,6 +64,7 @@ class QCEvidence:
     text: str = ""
     source: str = ""
     confidence: float | None = None
+    context_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -359,6 +360,7 @@ def segmentation_equivalent(current: str, evidence: str) -> bool:
 class QCCandidate:
     text: str
     sources: tuple[str, ...]
+    context_only: bool = False
 
 
 def _review_candidates_from_evidence(
@@ -377,13 +379,16 @@ def _review_candidates_from_evidence(
         equivalent = (
             bool(equivalent_to_current.get(item, False))
             if equivalent_to_current is not None and item is not None
-            else label != "Current" and segmentation_equivalent(cue.text, text)
+            else label != "Current" and (
+                normalize_spoken_text(cue.text) == normalize_spoken_text(text)
+                or bool(item and item.context_only and segmentation_equivalent(cue.text, text)))
         )
         if label != "Current" and equivalent:
             normalized = normalize_candidate_text(cue.text)
         if not normalized:
             continue
-        row = grouped.setdefault(normalized, {"text": str(text).strip(), "sources": []})
+        row = grouped.setdefault(normalized, {"text": str(text).strip(), "sources": [], "context_only": True})
+        row['context_only'] = row['context_only'] and bool(item and item.context_only)
         if label not in row["sources"]:
             row["sources"].append(label)
     rows = list(grouped.values())
@@ -397,7 +402,7 @@ def _review_candidates_from_evidence(
             item[0],
         )
     )
-    return tuple(QCCandidate(row["text"], tuple(row["sources"])) for _index, row in indexed_rows)
+    return tuple(QCCandidate(row["text"], tuple(row["sources"]), row['context_only']) for _index, row in indexed_rows)
 
 
 def review_candidates(project: SubtitleProject, cue: StudioCue) -> tuple[QCCandidate, ...]:
@@ -430,93 +435,20 @@ def model_evidence(
     *,
     index: _EvidenceTimeIndex | None = None,
 ) -> tuple[QCEvidence, ...]:
-    """Return useful model text once per model, joined in evidence time order."""
-    rows: list[tuple[int, Mapping[str, Any]]] = []
-    confidences: dict[str, list[float]] = defaultdict(list)
-    references = set(cue.evidence_refs)
-    tolerance_ms = 300
-    if references:
-        seen: set[str] = set()
-        for reference in cue.evidence_refs:
-            if reference in seen:
-                continue
-            seen.add(reference)
-            row = project.asr_evidence.get(reference)
-            if not isinstance(row, Mapping):
-                continue
-            start = int(row.get("start_ms", 0) or 0)
-            end = int(row.get("end_ms", start) or start)
-            if start or end:
-                # Recognition-to-cue rounding can leave a neighboring segment
-                # with a 3-7 ms overlap. It is not evidence for this cue.
-                overlap = max(0, min(cue.end_ms, end) - max(cue.start_ms, start))
-                cue_duration = max(1, int(cue.end_ms) - int(cue.start_ms))
-                if overlap < max(50, round(cue_duration * 0.20)):
-                    continue
-            rows.append((start, row))
-    elif index is not None:
-        rows = [
-            (start, row)
-            for start, _reference, row in index.overlapping(
-                cue.start_ms, cue.end_ms, tolerance_ms
-            )
-        ]
-    else:
-        for reference, row in project.asr_evidence.items():
-            if not isinstance(row, Mapping):
-                continue
-            start = int(row.get("start_ms", 0) or 0)
-            end = int(row.get("end_ms", start) or start)
-            timed_overlap = end >= cue.start_ms - tolerance_ms and start <= cue.end_ms + tolerance_ms
-            if (start or end) and timed_overlap:
-                rows.append((start, row))
-    rows.sort(key=lambda item: item[0])
-    texts: dict[str, list[str]] = defaultdict(list)
-    sources: dict[str, str] = {}
-    for _start, row in rows:
-        row_labels_seen: set[str] = set()
-        fields = sorted(
-            row.items(),
-            key=lambda item: 0 if str(item[0]).casefold() == "text" else 1,
-        )
-        for key, value in fields:
-            lowered = str(key).casefold()
-            if lowered != "text" and not lowered.endswith("_text"):
-                continue
-            text = str(value or "").strip()
-            if not text:
-                continue
-            label = _model_name(row, lowered)
-            # A canonical row often carries both ``text`` and the same
-            # content under ``moss_text``/``qwen_asr_text``. Keep the first
-            # populated field for a model instead of duplicating one segment.
-            if label in row_labels_seen:
-                continue
-            row_labels_seen.add(label)
-            if not texts[label] or texts[label][-1] != text:
-                texts[label].append(text)
-            sources[label] = lowered
-        for key, value in row.items():
-            if "confidence" not in str(key).casefold():
-                continue
-            try:
-                confidence = float(value)
-            except (TypeError, ValueError):
-                continue
-            if 0.0 <= confidence <= 1.0:
-                confidences["主识别"].append(confidence)
-    result: list[QCEvidence] = []
-    for label, parts in texts.items():
-        joined = "".join(parts)
-        confidence_values = confidences.get(label) or confidences.get("主识别", [])
-        result.append(
-            QCEvidence(
-                label=label,
-                text=joined,
-                source=sources.get(label, "asr_evidence"),
-                confidence=min(confidence_values) if confidence_values else None,
-            )
-        )
+    """Join independent cue-local observations, keeping their model identity."""
+    from .asr_source_evidence import MODEL_LABELS, cue_source_hypotheses
+    grouped = defaultdict(list)
+    for row in cue_source_hypotheses(project, cue, index=index):
+        grouped[row['model']].append(row)
+    result = []
+    for model, rows in grouped.items():
+        parts = [str(row['text']) for row in rows]
+        confidence = [row['confidence'] for row in rows if row.get('confidence') is not None]
+        result.append(QCEvidence(label=MODEL_LABELS.get(model, model), text=''.join(parts),
+            source=model, confidence=min(confidence) if confidence else None,
+            # A concatenation is cue-local only when every contributing row is.
+            # Otherwise a neighboring segment could become an adoptable suffix.
+            context_only=any(row.get('context_only', False) for row in rows)))
     return tuple(result)
 
 
@@ -527,11 +459,21 @@ def _confidence_values(project: SubtitleProject, cue: StudioCue) -> list[float]:
         if not isinstance(row, Mapping):
             continue
         for key, value in row.items():
-            if "confidence" not in str(key).casefold():
+            name = str(key).casefold()
+            # Availability/version/other metadata are not model scores;
+            # bool is numeric in Python and would otherwise become 0/1.
+            if (name != 'confidence' and not name.endswith('_confidence')) or isinstance(value, bool):
+                continue
+            # A timing-alignment score is not a transcription confidence.
+            if name.endswith('_alignment_confidence'):
                 continue
             try:
                 parsed = float(value)
             except (TypeError, ValueError):
+                continue
+            # Old SpeechSegment/project serialization stores zero when Qwen
+            # did not provide a score. Explicitly measured zero stays valid.
+            if name == 'qwen_confidence' and parsed == 0 and row.get('qwen_confidence_available') is not True:
                 continue
             # moss_firered_pipeline uses exactly 0.50 when no independent
             # FireRed candidate exists. That is missing comparison support,
@@ -604,6 +546,16 @@ class ASREvidenceRule:
         if evidence is None:
             evidence = model_evidence(context.project, cue, index=context.evidence_index)
             context.evidence_by_cue[cue.id] = evidence
+        from .asr_source_evidence import cue_source_hypotheses, coverage_summary
+        coverage = coverage_summary(cue_source_hypotheses(context.project, cue, index=context.evidence_index))
+        projection_difference = coverage.get('current_text_supported') is False and not coverage['conflict']
+        if projection_difference:
+            yield QCIssue(
+                'current_projection_difference', QCSeverity.WARNING, QCCategory.ASR,
+                cue.id, '当前全文缺少局部证据',
+                '原始模型文字一致，但按当前时间范围投影后缺少部分字词。请检查字幕边界；已确认文字保留。',
+                evidence, source='asr_projection',
+            )
         distinct: dict[str, QCEvidence] = {_compact(cue.text): QCEvidence("Current", cue.text, "project")}
         segmentation_rows: list[QCEvidence] = []
         equivalent_to_current: dict[QCEvidence, bool] = {}
@@ -611,10 +563,10 @@ class ASREvidenceRule:
             normalized = _compact(item.text)
             if normalized:
                 equivalent = (
-                    segmentation_equivalent(cue.text, item.text)
-                    or _spanning_evidence_matches_current(
-                        context.project, cue, item, index=context.evidence_index
-                    )
+                    normalize_spoken_text(cue.text) == normalize_spoken_text(item.text)
+                    or item.context_only and (segmentation_equivalent(cue.text, item.text)
+                        or _spanning_evidence_matches_current(
+                            context.project, cue, item, index=context.evidence_index))
                 )
                 equivalent_to_current[item] = equivalent
                 if equivalent:
@@ -632,7 +584,7 @@ class ASREvidenceRule:
                 tuple(segmentation_rows),
                 source="asr_segmentation",
             )
-        if len(distinct) > 1:
+        if len(distinct) > 1 and not projection_difference:
             items = list(distinct.values())
             pairs = [
                 (items[index], other)
@@ -652,7 +604,9 @@ class ASREvidenceRule:
                 content_conflicts = tuple(
                     (left, right)
                     for left, right in conflicting
-                    if not segmentation_equivalent(left.text, right.text)
+                    if normalize_spoken_text(left.text) != normalize_spoken_text(right.text)
+                    and not ((left.context_only or right.context_only)
+                             and segmentation_equivalent(left.text, right.text))
                 )
                 if content_conflicts:
                     yield QCIssue(
@@ -678,7 +632,7 @@ class ASREvidenceRule:
                     )
         agreement_sources = max(
             (
-                len(candidate.sources)
+                len([source for source in candidate.sources if source != 'Current'])
                 for candidate in _review_candidates_from_evidence(
                     cue,
                     evidence,
@@ -693,7 +647,7 @@ class ASREvidenceRule:
             # Independent matching transcripts are stronger positive evidence
             # than one decoder's token confidence. Agreement stays out of the
             # priority queue unless another real QC rule finds a problem.
-            if agreement_sources >= 3:
+            if agreement_sources >= 3 and not projection_difference:
                 severity = None
             elif confidence < context.config.low_confidence_warning:
                 # Confidence alone is weak evidence. A real model conflict is
@@ -1110,6 +1064,41 @@ class SubtitleQCEngine:
             return self.analyze(project, terminology=terminology)
         affected = {
             context.ordered[index].id
+            for index in range(max(0, position - 2), min(len(context.ordered), position + 3))
+        }
+        partial = self.analyze(project, cue_ids=affected, terminology=terminology)
+        merged = dict(previous.issues_by_cue)
+        for affected_id in affected:
+            merged.pop(affected_id, None)
+        merged.update(partial.issues_by_cue)
+        existing = {cue.id for cue in project.cues}
+        return QCResult({key: value for key, value in merged.items() if key in existing})
+
+    def analyze_incremental_many(
+        self,
+        project: SubtitleProject,
+        cue_ids: Iterable[str],
+        previous: QCResult,
+        *,
+        terminology: Iterable[TerminologyEntry] = (),
+    ) -> QCResult:
+        """Same result as folding analyze_incremental() over ``cue_ids``.
+
+        The project does not change between those calls, so each fold step
+        rebuilt the same whole-project context and re-evaluated overlapping
+        windows. Build it once and evaluate the union of the +/-2 windows.
+        """
+        cue_ids = [str(item) for item in cue_ids]
+        if not cue_ids:
+            return previous
+        terminology = tuple(terminology)
+        context = self._context(project, terminology)
+        positions = [context.positions.get(cue_id) for cue_id in cue_ids]
+        if any(position is None for position in positions):
+            return self.analyze(project, terminology=terminology)
+        affected = {
+            context.ordered[index].id
+            for position in positions
             for index in range(max(0, position - 2), min(len(context.ordered), position + 3))
         }
         partial = self.analyze(project, cue_ids=affected, terminology=terminology)

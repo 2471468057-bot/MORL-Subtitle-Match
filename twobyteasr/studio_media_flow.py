@@ -841,7 +841,7 @@ class StudioMediaFlowMixin:
                 models_cfg = {}
             from .ui import ASR_API_PRESETS
 
-            provider = str(models_cfg.get("qwen_asr_api_provider") or "dashscope")
+            provider = str(models_cfg.get("qwen_asr_api_provider") or "qwen31_filetrans")
             preset = ASR_API_PRESETS.get(provider) or {}
             model_id = str(models_cfg.get("qwen_asr_api_model") or preset.get("model") or "")
             short = str(preset.get("short") or provider)
@@ -879,7 +879,6 @@ class StudioMediaFlowMixin:
         speaker_source = QComboBox()
         speaker_source.addItem("统一字幕轨（默认，不额外运行说话人分离）", "single")
         speaker_source.addItem("Filetrans 原生分轨（使用所选 Filetrans 版本）", "filetrans")
-        speaker_source.addItem("Nemotron 3 独立说话人分析（需可选运行环境和模型）", "nemotron")
         speaker_source.addItem("说话人：ECAPA 快速分离 · 不重复转写（身份需复核）", "ecapa")
         speaker_source.addItem("高级：按接口原始标签整理说话人", "native")
         speaker_source.addItem("说话人：MOSS · 保留模型身份（主稿为其它模型时额外运行 MOSS）", "moss")
@@ -1488,29 +1487,9 @@ class StudioMediaFlowMixin:
             return duration
 
         def decode_source_resolver():
-            if Path(media_key).suffix.lower() != ".flv":
-                return None
-            from .indexed_media import GLOBAL_INDEXED_MEDIA
-
-            def report(status: dict) -> None:
-                if cancel_event.is_set():
-                    return
-                if status.get("state") == "RUNNING":
-                    percent = int(float(status.get("progress") or 0.0) * 100)
-                    self.waveform_progress_signal.emit(
-                        generation, media_key, f"正在优化媒体 {percent}%…"
-                    )
-
-            self.waveform_progress_signal.emit(
-                generation, media_key, "正在优化媒体，为快速预览做准备…"
-            )
-            path = GLOBAL_INDEXED_MEDIA.wait_optimized(
-                media_key, cancelled=cancel_event.is_set, on_status=report,
-            )
-            if path and str(Path(path).resolve()) != media_key:
-                trace_log("WAVEFORM", {"stage": "optimized_source_ready", "target": str(path)})
-                return path
-            trace_log("WAVEFORM", {"stage": "optimized_source_unavailable"})
+            # ffmpeg decodes the selected audio directly from FLV; making an
+            # entire MP4 is unrelated to waveform/audio extraction. Keeping
+            # the original also preserves its audio offset and track identity.
             return None
 
         def work():

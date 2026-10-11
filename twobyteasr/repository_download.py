@@ -52,14 +52,14 @@ class SourceAttemptError(RuntimeError):
 
 
 @contextmanager
-def preparation_lock(path: Path):
+def preparation_lock(path: Path, *, timeout: float = 1800):
     """OS-owned lock, released on cancellation/crash rather than stale lock files."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as handle:
         handle.seek(0, 2)
         if handle.tell() == 0:
             handle.write(b'0'); handle.flush()
-        deadline = time.monotonic() + 1800
+        deadline = time.monotonic() + timeout
         while True:
             try:
                 handle.seek(0)
@@ -174,7 +174,8 @@ def _artifact_url(manifest: SourceManifest, relative: str) -> str:
             f"?Revision={revision}&FilePath={path}"
         )
     endpoint = "https://hf-mirror.com" if manifest.mode == "HF_MIRROR" else "https://huggingface.co"
-    return f"{endpoint}/{manifest.repository}/resolve/{revision}/{path}"
+    url=f"{endpoint}/{manifest.repository}/resolve/{revision}/{path}"
+    return url
 
 
 def _download_direct(manifest: SourceManifest, staging: Path, relative: str) -> Path:
@@ -182,7 +183,7 @@ def _download_direct(manifest: SourceManifest, staging: Path, relative: str) -> 
     target = staging / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     downloader = Path(__file__).resolve().parents[1] / "scripts" / "download_file_fast.py"
-    interpreter = main_python_executable(downloader.parent.parent)
+    interpreter = os.environ.get('TWOBYTEASR_DOWNLOAD_PYTHON') or main_python_executable(downloader.parent.parent)
     if not interpreter:
         raise SourceAttemptError(
             "主运行环境尚未配置；请先运行“配置或修复 2ByteASR”"
@@ -279,12 +280,15 @@ def download_model(
     staging_root: Path,
     only_files: Iterable[str] | None = None,
 ) -> str:
+    if model_key in {'diarizen', 'diarizen_embedding', 'vibevoice_1_5b', 'vibevoice_7b'}:
+        raise ValueError('DiariZen / VibeVoice models have been removed; no download was started.')
     with preparation_lock(staging_root / model_key / '.prepare.lock'):
         return _download_model_locked(model_key=model_key, spec=spec, destination=destination,
                                       mode=mode, staging_root=staging_root, only_files=only_files)
 
 
 def _download_model_locked(*, model_key, spec, destination, mode, staging_root, only_files=None):
+    from .model_download_cache import write_transaction, discard_published_staging
     declared = spec.get('source_manifests') or {}
     for source in (SOURCE_ORDER if str(mode).upper() == 'AUTO' else (str(mode).upper(),)):
         payload = declared.get('modelscope' if source == 'MODELSCOPE' else 'hf') or {}
@@ -307,6 +311,7 @@ def _download_model_locked(*, model_key, spec, destination, mode, staging_root, 
         })
         identity = hashlib.sha256(json.dumps([manifest.repository,manifest.revision,manifest.sha256],sort_keys=True).encode()).hexdigest()[:16]
         staging = staging_root / model_key / manifest.mode.lower() / identity
+        files = requested_only or manifest.files
         try:
             if not requested_only:
                 ready, _reason = validate_files(destination, manifest)
@@ -320,27 +325,34 @@ def _download_model_locked(*, model_key, spec, destination, mode, staging_root, 
                         "status": "selected",
                     })
                     return manifest.mode
-            files = requested_only or manifest.files
+            write_transaction(staging, model_key=model_key, destination=destination,
+                              files=files, state='downloading')
             # A missing small file must not redownload healthy multi-GB weights.
             # Reuse only bytes authenticated by this exact source manifest.
+            reused_installed = []
             for relative in files:
-                original=destination/relative;cached=staging/relative
+                original=destination/relative
                 expected=manifest.sha256.get(relative)
-                if expected and original.is_file() and not cached.is_file() and _sha256(original)==expected:
-                    cached.parent.mkdir(parents=True,exist_ok=True)
-                    pending=cached.with_name(cached.name+'.cache-copy')
-                    shutil.copy2(original,pending);os.replace(pending,cached)
+                if expected and original.is_file() and _sha256(original)==expected:
+                    reused_installed.append(relative)
                     _emit('[2BYTEASR_CACHE]',dict(file=relative,bytes=original.stat().st_size,
                         origin='verified installed file',network_bytes=0))
-            download_source(manifest, staging, only_files=requested_only or None)
+            pending_files = tuple(relative for relative in files if relative not in reused_installed)
+            if pending_files:
+                download_source(manifest, staging, only_files=pending_files)
             probe_manifest = SourceManifest(
                 manifest.mode, manifest.repository, manifest.revision,
-                tuple(files), {key: value for key, value in manifest.sha256.items() if key in files},
+                pending_files, {key: value for key, value in manifest.sha256.items() if key in pending_files},
             )
             ok, reason = validate_files(staging, probe_manifest)
             if not ok:
                 raise SourceAttemptError(reason)
-            publish_files(staging, destination, files)
+            publish_files(staging, destination, pending_files)
+            installed_probe = SourceManifest(manifest.mode, manifest.repository, manifest.revision,
+                tuple(files), {key: value for key, value in manifest.sha256.items() if key in files})
+            ok, reason = validate_files(destination, installed_probe)
+            if not ok:
+                raise SourceAttemptError('安装后校验失败：' + reason)
             _emit("[2BYTEASR_SOURCE]", {
                 "mode": manifest.mode,
                 "label": SOURCE_LABELS[manifest.mode],
@@ -358,10 +370,20 @@ def _download_model_locked(*, model_key, spec, destination, mode, staging_root, 
             (destination / ".2byteasr-source.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            write_transaction(staging, model_key=model_key, destination=destination,
+                              files=files, state='published')
+            cleanup = discard_published_staging(staging, staging_root=staging_root)
+            if cleanup['failures']:
+                write_transaction(staging, model_key=model_key, destination=destination,
+                                  files=files, state='cleanup_failed', detail=str(cleanup['failures']))
+            _emit('[2BYTEASR_STAGING_CLEANUP]', cleanup)
             return manifest.mode
         except Exception as exc:
             detail = str(exc).replace("\r", " ").replace("\n", " ")
             failures.append(f"{manifest.mode}: {detail}")
+            if staging.exists():
+                write_transaction(staging, model_key=model_key, destination=destination,
+                                  files=files, state='paused', detail=detail)
             _emit("[2BYTEASR_SOURCE]", {
                 "mode": manifest.mode,
                 "label": SOURCE_LABELS[manifest.mode],

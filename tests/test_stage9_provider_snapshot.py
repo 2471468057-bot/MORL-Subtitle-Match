@@ -62,6 +62,23 @@ def test_transport_changes_identity(snapshot):
     assert changed.fingerprint != snapshot.fingerprint
 
 
+def test_production_rule_versions_are_pinned_in_public_identity_and_cache(snapshot, monkeypatch):
+    from twobyteasr import number_fidelity, terminology_retrieval
+    from twobyteasr.asr_provider_snapshot import resolve_provider_snapshot, POLISH_PROMPT_VERSION
+    identity = snapshot.public_identity()
+    assert identity['numeric_rules'] == number_fidelity.RULE_VERSION
+    assert identity['prompt_versions']['polished'] == POLISH_PROMPT_VERSION
+    assert identity['terminology_retrieval_rules'] == terminology_retrieval.RULE_VERSION
+    original_fingerprint = snapshot.fingerprint
+    monkeypatch.setattr(number_fidelity, 'RULE_VERSION', 'fixture-next-numeric-policy')
+    monkeypatch.setattr(terminology_retrieval, 'RULE_VERSION', 'fixture-next-recall-policy')
+    changed = resolve_provider_snapshot(config())
+    assert changed.fingerprint != original_fingerprint
+    assert snapshot.fingerprint == original_fingerprint
+    assert changed.numeric_rules == 'fixture-next-numeric-policy'
+    assert changed.terminology_retrieval_rules == 'fixture-next-recall-policy'
+
+
 def test_unselected_legacy_cli_is_rejected():
     from twobyteasr.asr_provider_snapshot import resolve_provider_snapshot
     with pytest.raises(ValueError, match="explicitly selected"):

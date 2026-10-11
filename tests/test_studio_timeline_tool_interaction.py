@@ -189,28 +189,6 @@ def test_razor_release_commits_exactly_the_previewed_split():
     assert emitted == [(cue.id, expected)]
 
 
-def test_tool_card_wraps_long_text_instead_of_truncating():
-    _app()
-    timeline, project = _timeline_with_project()
-    track = timeline._track_layout()[0]["S01"]
-    short = timeline._tool_card_geometry(
-        [("前段", "今天吃", "3 字")], "标题", 600.0, track
-    )
-    long_rows = [
-        ("前段", "这是一段非常长的字幕前半部分内容用来验证预览卡不会截断文字必须完整换行显示" * 3, "90 字"),
-        ("后段", "后半部分同样很长需要换行显示完整内容不能出现省略号否则用户不知道切点在哪里" * 3, "84 字"),
-    ]
-    tall = timeline._tool_card_geometry(long_rows, "标题", 600.0, track)
-    assert tall.width() >= 520.0
-    assert tall.height() > short.height() + 60.0
-    heights = timeline._tool_card_row_heights(long_rows, tall.width())
-    assert all(height > 24 for height in heights)  # wrapped beyond one line
-    # The card never exceeds the panel width and stays inside the canvas.
-    assert tall.width() <= timeline.width()
-    assert tall.top() >= timeline.RULER_HEIGHT
-    timeline.deleteLater()
-
-
 def test_razor_subdrag_move_still_commits_previewed_position():
     """Regression: sub-threshold wiggles moved the preview but the release
     used to commit the press position — off by one character vs the card."""
@@ -229,14 +207,101 @@ def test_razor_subdrag_move_still_commits_previewed_position():
     assert abs(emitted[0][1] - timeline._x_to_time(x + 5)) <= 30
 
 
-def test_razor_hover_alone_never_previews():
+def test_razor_hover_previews_without_touching_the_project():
+    """Hover shows the cut (2026-10-10 redesign); it never edits or cuts."""
     _app()
     timeline, project = _timeline_with_project()
     timeline.set_tool_mode("razor")
+    emitted = []
+    timeline.razor_split_requested.connect(lambda cue_id, ms: emitted.append((cue_id, ms)))
+    before = [(c.id, c.start_ms, c.end_ms, c.text) for c in project.cues]
     x, y = _cue_point(timeline, project.cues[0], 0.5)
     _mouse(timeline, QMouseEvent.Type.MouseMove, x, y)
     assert timeline._razor_drag is None
+    preview, cue = timeline._razor_preview()
+    assert cue.id == "a" and preview.left_text + preview.right_text == cue.text
+    assert not preview.measured  # synthetic cue: no evidence, labelled estimate
+    timeline.leaveEvent(None)
     assert timeline._razor_preview() is None
+    assert emitted == []
+    assert [(c.id, c.start_ms, c.end_ms, c.text) for c in project.cues] == before
+
+
+def test_razor_click_commits_exactly_the_hover_preview():
+    _app()
+    timeline, project = _timeline_with_project()
+    timeline.set_tool_mode("razor")
+    emitted = []
+    timeline.razor_split_requested.connect(lambda cue_id, ms: emitted.append((cue_id, ms)))
+    x, y = _cue_point(timeline, project.cues[1], 0.37)
+    _mouse(timeline, QMouseEvent.Type.MouseMove, x, y)
+    hovered, _cue = timeline._razor_preview()
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, x, y)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, x, y)
+    assert emitted == [("b", hovered.split_ms)]
+
+
+def test_razor_escape_cancels_the_pending_cut():
+    _app()
+    timeline, project = _timeline_with_project()
+    timeline.set_tool_mode("razor")
+    emitted = []
+    timeline.razor_split_requested.connect(lambda cue_id, ms: emitted.append((cue_id, ms)))
+    x, y = _cue_point(timeline, project.cues[0], 0.4)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, x, y)
+    from PySide6.QtGui import QKeyEvent
+    timeline.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    assert timeline._razor_drag is None and timeline._razor_preview() is None
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, x, y)
+    assert emitted == []
+
+
+def test_razor_never_cuts_another_speakers_overlapping_caption():
+    _app()
+    timeline = WaveformTimeline()
+    timeline.resize(1200, 560)
+    project = SubtitleProject(
+        media=StudioMedia(path="D:/synthetic.mp4", duration_ms=6000),
+        cues=[
+            StudioCue("host", 0, 3000, "主播这一句很长", speaker_id="S01"),
+            StudioCue("guest", 1000, 2500, "嘉宾插话", speaker_id="S02"),
+            StudioCue("host2", 3200, 4600, "主播下一句", speaker_id="S01"),
+        ],
+        speakers=[StudioSpeaker(id="S01", name="主播"), StudioSpeaker(id="S02", name="嘉宾")],
+    )
+    timeline.set_project(project)
+    timeline.set_visible_window(0, 6000)
+    timeline.set_tool_mode("razor")
+    emitted = []
+    timeline.razor_split_requested.connect(lambda cue_id, ms: emitted.append((cue_id, ms)))
+    host_track = timeline._track_layout()[0]["S01"]
+    y = host_track.center().y()
+    _mouse(timeline, QMouseEvent.Type.MouseMove, timeline._time_to_x(1800), y)
+    assert timeline._razor_preview()[1].id == "host"
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, timeline._time_to_x(500), y)
+    # Slide through the guest's overlapping caption, then onto host2.
+    _mouse(timeline, QMouseEvent.Type.MouseMove, timeline._time_to_x(1800), y, Qt.MouseButton.LeftButton)
+    assert str(timeline._razor_drag["cue_id"]) == "host"
+    _mouse(timeline, QMouseEvent.Type.MouseMove, timeline._time_to_x(3900), y, Qt.MouseButton.LeftButton)
+    assert str(timeline._razor_drag["cue_id"]) == "host2"
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, timeline._time_to_x(3900), y)
+    assert [cue_id for cue_id, _ms in emitted] == ["host2"]
+
+
+def test_razor_locked_track_shows_state_and_does_not_cut():
+    _app()
+    timeline, project = _timeline_with_project()
+    timeline.set_tool_mode("razor")
+    timeline.locked_speakers.add("S01")
+    emitted, blocked = [], []
+    timeline.razor_split_requested.connect(lambda cue_id, ms: emitted.append((cue_id, ms)))
+    timeline.edit_blocked.connect(blocked.append)
+    x, y = _cue_point(timeline, project.cues[0], 0.5)
+    _mouse(timeline, QMouseEvent.Type.MouseMove, x, y)
+    assert timeline._razor_resolution().locked and timeline._razor_preview() is None
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, x, y)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, x, y)
+    assert emitted == [] and blocked
 
 
 def test_razor_press_on_empty_space_anchors_nearest_and_release_anywhere_cuts():
@@ -609,3 +674,70 @@ def test_small_structural_edits_route_to_incremental_qc(tmp_path, monkeypatch):
     assert new_right_id in cache
     page.close_page()
     page.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# Merge preview (2026-10-10: in-track ghost instead of the card)
+# ---------------------------------------------------------------------------
+
+def test_merge_preview_states_follow_the_gesture_without_editing():
+    _app()
+    timeline, project = _timeline_with_project()
+    timeline.set_tool_mode("merge")
+    before = [(c.id, c.start_ms, c.end_ms, c.text) for c in project.cues]
+    xb, yb = _cue_point(timeline, project.cues[1], 0.5)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, xb, yb)
+    state = timeline._merge_preview_state()
+    assert (state.kind, state.anchor.id, state.other) == ("anchor", "b", None)
+    _mouse(timeline, QMouseEvent.Type.MouseMove, xb + 120, yb)
+    state = timeline._merge_preview_state()
+    assert (state.kind, state.other.id, state.direction) == ("drag", "c", 1)
+    assert state.span == (1500, 4600)
+    from twobyteasr import timeline_merge
+    line, left, right = timeline_merge.status_lines(state)
+    assert (left, right) == ("德基麦当劳", "再来一句")
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, xb + 120, yb)
+    # Anchor, then hover another cue: the click-to-pair result is previewed.
+    xa, ya = _cue_point(timeline, project.cues[0], 0.5)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonPress, xa, ya)
+    _mouse(timeline, QMouseEvent.Type.MouseButtonRelease, xa, ya)
+    xc, yc = _cue_point(timeline, project.cues[2], 0.5)
+    _mouse(timeline, QMouseEvent.Type.MouseMove, xc, yc, Qt.MouseButton.NoButton)
+    state = timeline._merge_preview_state()
+    assert (state.kind, state.anchor.id, state.other.id) == ("pair", "a", "c")
+    assert timeline.cancel_selection_gesture() is True  # Esc drops the anchor
+    assert timeline._merge_preview_state() is None
+    assert [(c.id, c.start_ms, c.end_ms, c.text) for c in project.cues] == before
+
+
+def test_merge_neighbour_skips_another_speakers_simultaneous_caption():
+    _app()
+    timeline = WaveformTimeline()
+    timeline.resize(1200, 560)
+    project = SubtitleProject(
+        media=StudioMedia(path="D:/synthetic.mp4", duration_ms=6000),
+        cues=[
+            StudioCue("host", 0, 1500, "主播第一句", speaker_id="S01"),
+            StudioCue("guest", 1000, 2000, "嘉宾插话", speaker_id="S02"),
+            StudioCue("host2", 2600, 4000, "主播第二句", speaker_id="S01"),
+        ],
+        speakers=[StudioSpeaker(id="S01", name="主播"), StudioSpeaker(id="S02", name="嘉宾")],
+    )
+    timeline.set_project(project)
+    timeline.set_visible_window(0, 6000)
+    timeline.set_tool_mode("merge")
+    assert timeline._merge_neighbor("host", 1).id == "host2"  # overlapping guest skipped
+    assert timeline._merge_neighbor("guest", -1) is None      # host overlaps it
+    assert timeline._merge_neighbor("host2", -1).id == "guest"  # sequential: allowed
+
+
+def test_split_text_layout_keeps_the_boundary_characters_centred():
+    _app()
+    from PySide6.QtGui import QFont, QFontMetrics
+    from twobyteasr.timeline_razor import split_text_layout, MARKER_GAP
+    metrics = QFontMetrics(QFont())
+    left, right, total = split_text_layout(metrics, "主播投的是对面的", "没挡眼睛的哥哥", 2000)
+    assert (left, right) == ("主播投的是对面的", "没挡眼睛的哥哥")
+    narrow = metrics.horizontalAdvance("对面的没挡") + MARKER_GAP + 10
+    left, right, total = split_text_layout(metrics, "主播投的是对面的", "没挡眼睛的哥哥", narrow)
+    assert left.endswith("的") and right.startswith("没") and total <= narrow + 2

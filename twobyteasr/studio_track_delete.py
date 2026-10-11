@@ -50,11 +50,19 @@ class DeleteTrackCommand(QUndoCommand):
         super().__init__('删除视频片段及关联音频' if clip_ids is not None else delete_label(project, kind, track_id))
         self.project, self.page = project, page
         self.kind, self.track_id = kind, track_id
-        self.fields = ('cues', 'speakers') if kind == 'subtitle' else ('video_tracks', 'audio_tracks', 'av_track_groups')
+        self.fields = ('cues', 'speakers', 'render_settings') if kind == 'subtitle' else ('video_tracks', 'audio_tracks', 'av_track_groups', 'cues', 'render_settings')
         self.before = {key: copy.deepcopy(getattr(project, key)) for key in self.fields}
         self.after = copy.deepcopy(self.before)
         self.before_state = copy.deepcopy(project.studio_state)
         self.after_state = copy.deepcopy(project.studio_state)
+        working_captions = copy.copy(project)
+        working_captions.cues = copy.deepcopy(project.cues)
+        working_captions.render_settings = copy.deepcopy(project.render_settings)
+        working_captions.studio_state = self.after_state
+        from .studio_caption_timeline import ensure_independent_captions
+        ensure_independent_captions(working_captions)
+        self.after['cues'] = copy.deepcopy(working_captions.cues)
+        self.after['render_settings'] = copy.deepcopy(working_captions.render_settings)
         self.before_sequence = copy.deepcopy(sequence_of(project))
         self.after_sequence = copy.deepcopy(self.before_sequence)
         self.sequence_changed = False
@@ -155,6 +163,12 @@ class DeleteTrackCommand(QUndoCommand):
             locked = set(page.timeline.locked_speakers) if page else set()
             if locked and _locked_caption_ranges(project, locked) != _locked_caption_ranges(working, locked):
                 raise ValueError('关联字幕轨道已锁定，请先解锁；此次删除未提交')
+            try:
+                from .studio_transitions import reconcile_transitions
+            except ImportError:
+                pass
+            else:
+                reconcile_transitions(working)
             duration = timeline_duration_ms(working)
             for name in ('in_point_ms', 'out_point_ms'):
                 value = getattr(self.after_sequence, name)
@@ -164,7 +178,7 @@ class DeleteTrackCommand(QUndoCommand):
                 self.after_sequence.in_point_ms = self.after_sequence.out_point_ms = None
             self.sequence_changed |= self.before_sequence != self.after_sequence
             self.dirty |= D.SEQUENCE_STRUCTURE | D.CUE_TIMING | D.NATIVE_SUBTITLE | D.ADVANCED_PREVIEW
-        self.dirty |= D.AUTOSAVE | D.TIMELINE_PIXELS
+        self.dirty |= D.AUTOSAVE | D.TIMELINE_PIXELS | D.PROJECT_METADATA | D.CUE_MODEL | D.CUE_TIMING
         self.state_keys = {key for key in self.before_state.keys() | self.after_state.keys()
                            if self.before_state.get(key) != self.after_state.get(key)}
 
@@ -260,6 +274,14 @@ def delete_current(page):
 def track_menu(page, kind, track_id, pos):
     from .studio_theme import create_studio_menu
     menu = create_studio_menu(page)
+    if kind == 'subtitle':
+        from .studio_caption_timeline import DISABLED_KEY,set_caption_ripple_command
+        from .i18n import tr
+        enabled=track_id not in page.project.studio_state.get(DISABLED_KEY,[])
+        action=menu.addAction(tr('跟随波纹编辑'))
+        action.setCheckable(True);action.setChecked(enabled)
+        action.triggered.connect(lambda checked:page.undo_stack.push(set_caption_ripple_command(page.project,track_id,checked)))
+        menu.addSeparator()
     if kind == 'audio':
         track = next((t for t in page.project.audio_tracks if t.id == track_id), None)
         if track is None:return

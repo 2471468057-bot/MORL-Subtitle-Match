@@ -169,7 +169,10 @@ def test_review_treats_cross_cue_asr_segment_as_boundary_evidence():
         cue, review_hypotheses_from_project(project, cue)
     )
     assert aggregate.models_agree_text is True
-    assert aggregate.requires_review is False
+    # A neighboring transcript is context; without words its exact coverage
+    # is unknown and cannot be certified as complete cue-local evidence.
+    assert aggregate.requires_review is True
+    assert aggregate.source_coverage['coverage_unknown']
     assert aggregate.risk_types == ()
 
 

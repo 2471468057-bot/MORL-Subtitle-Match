@@ -554,6 +554,7 @@ class GlossaryUpdateReviewDialog(QWidget):
         self.owner = owner
         self.game_name = str(game_name)
         self.result = dict(result)
+        self.library_id = str(result.get('library_id') or getattr(owner.legacy, 'resolve_glossary_identity', lambda _name: '')(game_name) or game_name)
         self.diffs = list(result.get("diffs", ()))
         self.apply_locked = apply_locked
         self._history_failed = False
@@ -609,11 +610,17 @@ class GlossaryUpdateReviewDialog(QWidget):
         stats = self.result.get("build_stats") or {}
         if stats:
             stats_line = (
+                (f"计划查询 {stats['planned_queries']} · 发现链接 {stats.get('discovered_links', 0)}"
+                 f" · 抓取成功 {stats.get('fetch_success', 0)} · 解析成功 {stats.get('parse_success', 0)}"
+                 f" · 核对名称 {stats.get('verified_success', 0)} · AI 候选 {stats.get('ai_candidates', 0)}"
+                 f" · 去重后 {stats.get('unique_candidates', 0)} · 新增 {stats.get('new_candidates', 0)}"
+                 f" · 已有重复 {stats.get('duplicate_candidates', 0)} · 过滤 {stats.get('filtered_candidates', 0)}"
+                 if 'planned_queries' in stats else
                 f"版本 {stats.get('current_version') or '未知'}（{stats.get('game_version_status') or '未独立核对'}） · 目录页 {len(stats.get('catalogs', ()) or ())}"
                 f" · 候选 {stats.get('names_kept', 0)} / 确定性采集 {stats.get('deterministic_count', 0)}"
                 f" · 页面核对 {stats.get('page_verified', 0)}"
                 f" · 目录核对 {stats.get('catalog_verified', 0)}"
-                + (f" · 截断 {stats.get('names_truncated')}（名称超预算，按类别优先级保留）" if stats.get("names_truncated") else "")
+                + (f" · 截断 {stats.get('names_truncated')}（名称超预算，按类别优先级保留）" if stats.get("names_truncated") else ""))
             )
             stats_label = QLabel(stats_line)
             stats_label.setObjectName("muted")
@@ -629,6 +636,8 @@ class GlossaryUpdateReviewDialog(QWidget):
             evidence_view.setMaximumHeight(160)
             evidence_view.hide()
             lines = ['待补齐分类：' + '、'.join(stats.get('missing_categories', []))]
+            lines += list(stats.get('freshness_limitations', []))
+            lines += [f"{row.get('stage','')}：{row.get('category','')} · {row.get('message','')}" for row in stats.get('failures', [])]
             execution = execution_summary(result)
             lines += [f"配置模型：{result.get('service','')} / {result.get('model','')}（不等于本次实际调用）",
                       f"本次执行：{summary_text(result)}",
@@ -737,12 +746,15 @@ class GlossaryUpdateReviewDialog(QWidget):
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setObjectName("muted")
             layout.addWidget(empty, 1)
-        summary_bits = [f"候选 {self.result.get('candidate_count', 0)}"]
+        summary_bits = [f"待审阅变化 {len(self.diffs)}"]
+        if 'collected_count' in self.result:
+            summary_bits.append(f"已整理名称 {self.result['collected_count']}（已有重复 {(self.result.get('build_stats') or {}).get('duplicate_candidates', 0)}）")
         summary_bits += [
             f"{label} {group_counts[key]}" for key, label in _CHANGE_GROUP_ORDER
             if group_counts[key]
         ]
         summary = QLabel("；".join(summary_bits))
+        self.summary_label = summary
         summary.setObjectName("muted")
         summary.setWordWrap(True)
         layout.addWidget(summary)
@@ -869,6 +881,11 @@ class GlossaryUpdateReviewDialog(QWidget):
         inside = self.model.checked_in_filter()
         bind_text(self.checked_label, '总勾选 {checked}；当前筛选中 {inside}/{total}；筛选外 {value3}', checked=checked, inside=inside, total=total, value3=checked - inside)
         if not self.apply_locked:
+            self.apply_button.setEnabled(checked > 0)
+            self.apply_button.setProperty('zeroApplicable', checked == 0)
+            self.apply_button.setStyleSheet('QPushButton:disabled { color: #958b97; background: transparent; border: 1px solid #55475c; }' if not checked else '')
+            if not checked:
+                self.apply_button.setToolTip((self.result.get('outcome') or {}).get('message') or '没有勾选可应用候选')
             (bind_text(self.apply_button, '应用所选（{value0}）', value0=checked) if checked else bind_text(self.apply_button, '应用所选'))
 
     def _apply(self):
@@ -877,9 +894,12 @@ class GlossaryUpdateReviewDialog(QWidget):
         selected = self.model.checked_diffs()
         if not selected:
             return
+        if self.result.get('target_known') and not getattr(self.owner.legacy, 'resolve_glossary_identity', lambda _name: '')(self.library_id):
+            self._set_detail_text('该任务目标词库已删除；旧候选不会写入其他同名词库。')
+            return
         session = apply_term_updates(
             self.owner.legacy,
-            self.game_name,
+            self.library_id,
             selected,
             model_label=self.result.get("model", ""),
             service_label=self.result.get("service", ""),
@@ -902,6 +922,9 @@ class GlossaryUpdateReviewDialog(QWidget):
             self.model.layoutChanged.emit()
             self._refresh_checked_label()
             self._set_detail_text(f"已保存 {session['added']} 条，已存在 {session['duplicates']} 条，失败 {session['failed']} 条。失败候选已保留，请重试。")
+            if session.get('failed_errors'):
+                from .provider_diagnostics import redact_diagnostics
+                self._set_detail_text(self.detail.toPlainText() + '\n' + '\n'.join(redact_diagnostics(session['failed_errors'])))
             if self._history_failed:
                 self._set_detail_text(self.detail.toPlainText() + " 本轮部分撤销记录未保存。")
             return

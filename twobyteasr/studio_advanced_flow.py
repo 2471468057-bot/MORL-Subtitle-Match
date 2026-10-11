@@ -62,7 +62,9 @@ class StudioAdvancedFlowMixin:
         scene = getattr(self, '_caption_scene', None)
         if scene is None:
             raster_only = getattr(getattr(self.video, 'controller', None), 'supports_native_subtitles', True) is False
-            if len(cues) < 2 and not raster_only:
+            audio_tail = getattr(self, '_audio_tail_visual_active', lambda:False)()
+            from .studio_caption_timeline import independent_captions
+            if len(cues) < 2 and not raster_only and not audio_tail and not independent_captions(self.project):
                 return False
             scene = self._caption_scene = CaptionScene(self)
         return scene.present(cues, milliseconds)

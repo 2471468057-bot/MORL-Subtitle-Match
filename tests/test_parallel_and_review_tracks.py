@@ -1,5 +1,6 @@
 ﻿from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import pytest
 import threading
 import time
 
@@ -15,120 +16,23 @@ class _MossPerformanceSettings:
     MOSS_PARALLEL_MIN_VRAM_GB = 14
 
 
-def test_moss_parallel_workers_require_multiple_chunks_and_enough_vram():
+def test_old_parallel_settings_are_ignored():
     legacy = _MossPerformanceSettings()
-    jobs = [{"chunk_id": 1}, {"chunk_id": 2}, {"chunk_id": 3}]
-
-    assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs, legacy, total_vram_gb=16, free_vram_gb=16
-    ) == 2
-    assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs[:1], legacy, total_vram_gb=16, free_vram_gb=16
-    ) == 1
-    assert moss_firered_pipeline._moss_parallel_worker_count(
-        jobs, legacy, total_vram_gb=12, free_vram_gb=12
-    ) == 1
+    for count in (1, 2, 3):
+        for vram in (12, 16, 100):
+            assert moss_firered_pipeline._moss_parallel_worker_count(
+                [{"chunk_id": i} for i in range(count)], legacy,
+                total_vram_gb=vram, free_vram_gb=vram) == 1
 
 
-def test_parallel_moss_payloads_are_merged_in_stable_chunk_order(
-    tmp_path, monkeypatch
-):
-    legacy = _MossPerformanceSettings()
-    legacy.record_run_event = lambda *_args, **_kwargs: None
-    paths = {"moss_python": "python", "moss_worker": "worker.py"}
-
-    def fake_worker(command, *_args, **_kwargs):
-        output_path = command[command.index("--output") + 1]
-        manifest_path = command[command.index("--manifest") + 1]
-        import json
-
-        jobs = json.loads(Path(manifest_path).read_text(encoding="utf-8"))["jobs"]
-        Path(output_path).write_text(
-            json.dumps(
-                {
-                    "chunks": [
-                        {
-                            **job,
-                            "segments": [{"start": 0, "end": 1, "text": "x"}],
-                            "generated_tokens": 1,
-                        }
-                        for job in reversed(jobs)
-                    ],
-                    "generated_tokens": len(jobs),
-                    "performance": {"peak_reserved_gb": 2.2},
-                }
-            ),
-            encoding="utf-8",
-        )
-        return 0, []
-
-    monkeypatch.setattr(moss_firered_pipeline, "_run_streaming_worker", fake_worker)
-    monkeypatch.setattr(moss_firered_pipeline, "_cuda_total_memory_gb", lambda: 16.0)
-    monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 16.0)
-    payload = moss_firered_pipeline._run_moss_manifest_jobs(
-        [
-            {"chunk_id": 3, "group_id": "a", "offset": 320.0},
-            {"chunk_id": 1, "group_id": "a", "offset": 0.0},
-            {"chunk_id": 2, "group_id": "a", "offset": 160.0},
-        ],
-        str(tmp_path),
-        paths,
-        legacy,
-        "test",
-    )
-
-    assert [item["chunk_id"] for item in payload["chunks"]] == [1, 2, 3]
-    assert payload["generated_tokens"] == 3
-    assert payload["performance"]["parallel_workers"] == 2
-
-
-def test_parallel_moss_failure_falls_back_to_single_worker_and_keeps_all_chunks(
-    tmp_path, monkeypatch
-):
-    legacy = _MossPerformanceSettings()
-    events = []
-    legacy.record_run_event = lambda kind, **payload: events.append((kind, payload))
-    paths = {"moss_python": "python", "moss_worker": "worker.py"}
-
-    def fake_worker(command, *_args, **kwargs):
-        if kwargs.get("line_prefix"):
-            return 1, ["CUDA out of memory"]
-        output_path = command[command.index("--output") + 1]
-        manifest_path = command[command.index("--manifest") + 1]
-        import json
-
-        jobs = json.loads(Path(manifest_path).read_text(encoding="utf-8"))["jobs"]
-        Path(output_path).write_text(
-            json.dumps(
-                {
-                    "chunks": [
-                        {
-                            **job,
-                            "segments": [{"start": 0, "end": 1, "text": "x"}],
-                            "generated_tokens": 1,
-                        }
-                        for job in jobs
-                    ],
-                    "generated_tokens": len(jobs),
-                }
-            ),
-            encoding="utf-8",
-        )
-        return 0, []
-
-    monkeypatch.setattr(moss_firered_pipeline, "_run_streaming_worker", fake_worker)
-    monkeypatch.setattr(moss_firered_pipeline, "_cuda_total_memory_gb", lambda: 16.0)
-    monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 16.0)
-    payload = moss_firered_pipeline._run_moss_manifest_jobs(
-        [{"chunk_id": 1}, {"chunk_id": 2}],
-        str(tmp_path),
-        paths,
-        legacy,
-        "test",
-    )
-
-    assert [item["chunk_id"] for item in payload["chunks"]] == [1, 2]
-    assert any(kind == "moss_chunks_parallel_fallback" for kind, _ in events)
+@pytest.mark.parametrize("force", [None, 1, 2])
+def test_retired_multi_request_manifest_is_rejected_before_worker_start(tmp_path, monkeypatch, force):
+    monkeypatch.setattr(moss_firered_pipeline, "_run_streaming_worker",
+                        lambda *a, **k: pytest.fail("independent requests were launched"))
+    with pytest.raises(ValueError, match="full_context"):
+        moss_firered_pipeline._run_moss_manifest_jobs(
+            [{"chunk_id": 1, "offset": 0}, {"chunk_id": 2, "offset": 160}],
+            str(tmp_path), {}, _MossPerformanceSettings(), "test", force_workers=force)
 
 
 def test_review_capture_is_thread_local():

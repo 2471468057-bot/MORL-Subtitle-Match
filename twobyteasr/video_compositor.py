@@ -18,6 +18,21 @@ from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import QWidget
 
+
+_RESOLVED_PATHS: dict[str, Path] = {}
+
+
+def _resolved(path: str) -> Path:
+    """Path.resolve() opens every component on Windows; composition is synced
+    on each playback tick with the same few media paths."""
+    resolved = _RESOLVED_PATHS.get(path)
+    if resolved is None:
+        resolved = Path(path).resolve()
+        if len(_RESOLVED_PATHS) > 256:
+            _RESOLVED_PATHS.clear()
+        _RESOLVED_PATHS[path] = resolved
+    return resolved
+
 from .clip_time_mapper import frame_tolerance_ms
 from .audio_playback_graph import AudioPlaybackDecision, AudioPlaybackGraph
 from .secondary_video import SecondaryVideoSource, SourceState
@@ -464,10 +479,10 @@ class VideoCompositionScene(QWidget):
                 served_by_mpv = bool(bound_path and source and
                     str(layer.get('track_id') or '') == track_id and
                     str(layer.get('clip_id') or '') == clip_id and
-                    Path(source).resolve() == Path(bound_path).resolve() == Path(mpv_source).resolve())
+                    _resolved(source) == _resolved(bound_path) == _resolved(mpv_source))
             elif "primary_media" not in layer and not served_by_mpv and mpv_source and source:
                 try:
-                    served_by_mpv = Path(source).resolve() == Path(mpv_source).resolve()
+                    served_by_mpv = _resolved(source) == _resolved(mpv_source)
                 except (OSError, ValueError):
                     served_by_mpv = source == mpv_source
             if not served_by_mpv:
@@ -482,7 +497,8 @@ class VideoCompositionScene(QWidget):
         default_transform = dict(position_x=.5, position_y=.5, scale_x=1., scale_y=1.,
                                  rotation=0., opacity=1., anchor_x=.5, anchor_y=.5, fit_mode="contain")
         self._composes_base = bool(
-            any((layer.get("effects") or {}).get("blendMode", "normal") != "normal" for layer in all_layers)
+            any(layer.get("transition_active") for layer in all_layers)
+            or any((layer.get("effects") or {}).get("blendMode", "normal") != "normal" for layer in all_layers)
             or (base_effects.get("chromaKey") or {}).get("enabled")
             or any(base_transform.get(key, value) != value for key, value in default_transform.items())
         )

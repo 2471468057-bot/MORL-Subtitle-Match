@@ -157,18 +157,35 @@ def _locate_model_folder(
     model_root: Path,
     required: tuple[str, ...] = (),
 ) -> tuple[Path, str]:
+    from .runtime_paths import scan_memo
     name = model_folder_name(spec_path)
-    preferred = (model_root / name).resolve()
-    if model_files_present(preferred, required):
+    preferred_path = model_root / name
+    preferred = scan_memo(("resolve", str(preferred_path)), preferred_path.resolve)
+    from .model_associations import is_model_detached
+    if not is_model_detached(preferred) and model_files_present(preferred, required):
         return preferred, "model_root"
     if os.environ.get('TWOBYTEASR_TEST_ROOT'):
+        if is_model_detached(preferred):
+            from .runtime_paths import user_data_root
+            return user_data_root() / 'Models' / name, 'detached'
+        for candidate in iter_model_dir_candidates(name, install_root=install_root):
+            if model_files_present(candidate, required):
+                return candidate, 'model_root' if candidate == preferred else 'legacy_discovery'
         return preferred, 'model_root'
-    install_relative = (install_root / spec_path).resolve()
-    candidates = [preferred, install_relative, *iter_model_dir_candidates(name, install_root=install_root)]
+    install_relative_path = install_root / spec_path
+    install_relative = scan_memo(("resolve", str(install_relative_path)), install_relative_path.resolve)
+    candidates = [p for p in [preferred, install_relative, *iter_model_dir_candidates(name, install_root=install_root)]
+                  if not is_model_detached(p)]
     for candidate in candidates:
         if model_files_present(candidate, required):
             return candidate, 'model_root' if candidate == preferred else 'legacy_discovery'
-    return next(((p, 'model_root' if p == preferred else 'legacy_discovery') for p in candidates if p.is_dir()), (preferred, 'model_root'))
+    if not candidates:
+        # Never resolve a detached external model as an installed fallback.
+        from .runtime_paths import user_data_root
+        return user_data_root() / 'Models' / name, 'detached'
+    fallback = candidates[0]
+    return next(((p, 'model_root' if p == preferred else 'legacy_discovery') for p in candidates if p.is_dir()),
+                (fallback, 'model_root' if fallback == preferred else 'legacy_discovery'))
 
 
 def scan_model_registry(
@@ -178,6 +195,21 @@ def scan_model_registry(
     paths: RuntimePaths | None = None,
     verify_hashes: bool = False,
     measure_size: bool = False,
+) -> ModelRegistry:
+    from .runtime_paths import single_scan
+
+    with single_scan():
+        return _scan_model_registry(install_root=install_root, model_root=model_root, paths=paths,
+                                    verify_hashes=verify_hashes, measure_size=measure_size)
+
+
+def _scan_model_registry(
+    *,
+    install_root: Path | None,
+    model_root: Path | None,
+    paths: RuntimePaths | None,
+    verify_hashes: bool,
+    measure_size: bool,
 ) -> ModelRegistry:
     runtime = paths or get_runtime_paths()
     install = Path(install_root) if install_root is not None else runtime.install_root

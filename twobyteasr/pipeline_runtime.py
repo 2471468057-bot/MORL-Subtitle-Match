@@ -108,10 +108,21 @@ def finalize_cues(    cues,
     audio_seconds,
     timeline_fps,
     legacy,
+    *,
+    _streaming_partition=False,
 ):
     """Finalize display timing, then recheck content and numeric events."""
+    if not _streaming_partition and any(str(getattr(s,'primary_source','')).startswith('vibevoice_') for s in segments):
+        from .optional_timing import finalize_streaming
+        return finalize_streaming(cues,segments,firered_tokens,speech_regions,audio_seconds,timeline_fps,legacy,finalize_cues)
     import copy
     grouped_cues = copy.deepcopy(cues)
+    def boundary_phase(name, rows):
+        legacy.record_run_event('display_boundary_phase', phase=name, fps=timeline_fps,
+            frame_ms=1000 / max(1, float(timeline_fps or 30)), half_open=True,
+            cues=[dict(id=c.cue_id, speaker=c.speaker, text=c.text,
+                       start_ms=round(c.start*1000), end_ms=round(c.end*1000)) for c in rows])
+    boundary_phase('grouped_before_display', grouped_cues)
     # 语气词防拆：成片前把“哎 呦”等白名单拆分形态合并回“哎呦”
     # （与人工校对稿一致；组合不在白名单的保持原样）
     cues = merge_split_interjections_in_cues(cues)
@@ -160,16 +171,19 @@ def finalize_cues(    cues,
         speech_regions,
         timeline_fps,
     )
+    boundary_phase('normalized_and_vad_onsets', finalized)
     finalized = legacy.extend_cue_tails_by_speaker(
         finalized,
         audio_seconds,
         timeline_fps,
     )
+    boundary_phase('speaker_reading_tail', finalized)
     finalized = legacy.bridge_short_display_gaps(
         finalized,
         audio_seconds,
         timeline_fps,
     )
+    boundary_phase('short_gap_bridge', finalized)
     finalized = legacy.validate_final_cues(
         finalized,
         segments,
@@ -183,12 +197,15 @@ def finalize_cues(    cues,
         firered_tokens,
     )
     from .display_timing import protect_runtime_display_tails
-    protect_runtime_display_tails(finalized, segments)
     from .subtitle_fidelity import recover_final_content
     finalized = recover_final_content(finalized, grouped_cues, segments, firered_tokens, legacy)
+    boundary_phase('validated_and_content_recovered', finalized)
+    overlap_audit = protect_runtime_display_tails(finalized, segments)
+    legacy.record_run_event('display_overlap_protection', policy_version=4, pairs=overlap_audit)
     if segments:
         finalized.sort(key=lambda c:(c.start,c.end,c.speaker))
         for index,cue in enumerate(finalized,1):cue.cue_id=index
+    boundary_phase('final_half_open_display', finalized)
     return finalized
 
 
@@ -234,6 +251,12 @@ def complete_media_run(
                 active_report = getattr(legacy.task_reporting, "_active_report", None) or {}
                 media_path = str(active_report.get("media", {}).get("path") or "")
             if media_path:
+                from .recognition_result import media_identity_for_task
+                input_sources = {source: media_identity_for_task(source, runtime_context)
+                    for source in (runtime_context.recognition_snapshot.get("sources") or {media_path: {}})}
+                token = getattr(runtime_context, "cancellation_token", None)
+                if token is not None:
+                    token.raise_if_cancelled()
                 report_json_path, _report_text_path = legacy.task_reporting.report_paths_for_media(
                     media_path
                 )
@@ -246,6 +269,9 @@ def complete_media_run(
                         report_path=report_json_path,
                         segments=segments,
                         generation_metadata={
+                            "job_id": runtime_context.job_id,
+                            "media_identity": dict(runtime_context.media_identity),
+                            "input_source_identities": input_sources,
                             "models": {**dict((runtime_context.asr_settings_snapshot or getattr(legacy, "RUNTIME_SETTINGS", {})).get("models", {})),
                                        "speaker_source": runtime_context.speaker_source},
                             "model_statuses": dict(model_statuses or {}),
@@ -257,14 +283,20 @@ def complete_media_run(
                             "speaker_recovery": dict(getattr(runtime_context, "speaker_recovery", {}) or {}),
                             "terminology_status": dict(getattr(runtime_context,"terminology_status",{}) or {}),
                             "polishing_summary": dict(getattr(runtime_context,"polishing_summary",{}) or {}),
+                            "terminology_snapshot": (runtime_context.glossary_snapshot.to_dict()
+                                if getattr(runtime_context, "glossary_snapshot", None) is not None else {}),
                         },
                         glossary_ids=getattr(runtime_context, "enabled_glossary_ids", ()),
                         target_project_path=str(
                             getattr(runtime_context, "studio_project_path", "") or ""
                         ),
                         recognition_snapshot=getattr(runtime_context, "recognition_snapshot", None),
+                        decoded_audio_seconds=audio_seconds,
                     )
                 )
+                if token is not None:
+                    token.raise_if_cancelled()
+                runtime_context.committed_result_ref = __import__("json").loads(output_details.get("result_ref_json") or "{}")
                 print(f"   [Subtitle Studio] {output_details['project']}")
                 provisional = list(getattr(runtime_context, "asr_provisional_cues", ()) or ())
                 if provisional:
@@ -296,6 +328,9 @@ def complete_media_run(
                         ),
                     )
         except Exception as exc:
+            token = getattr(runtime_context, "cancellation_token", None)
+            if token is not None:
+                token.raise_if_cancelled()
             print(f"   [警告] 识别结果工程保存失败，识别缓存与报告可用于恢复：{exc}")
             output_details['project_error'] = str(exc)
             output_details['project'] = ''
@@ -307,7 +342,8 @@ def complete_media_run(
         if not output_details.get("project"):
             raise RuntimeError("识别结果工程保存失败：" + str(output_details.get("project_error") or "unknown"))
         if output_details.get("project"):
-            legacy.record_run_event("studio_project_saved", project_path=output_details["project"], cue_count=len(cues))
+            legacy.record_run_event("studio_project_saved", project_path=output_details["project"], cue_count=len(cues),
+                **{k: v for k, v in runtime_context.committed_result_ref.items() if k not in {"path", "cue_count"}})
 
     legacy.run_timed_stage(
         stage_index,
@@ -333,6 +369,7 @@ def complete_media_run(
         review_classification=dict(review_classification or {}),
         real_three_source_cues=list(real_three_source_cues or ()),
         cache_owners=dict(cache_owners or {}),
+        optional_models=dict(runtime_context.media_identity.get('optional_models',{})),
         outputs={**output_details},
     )
     print(

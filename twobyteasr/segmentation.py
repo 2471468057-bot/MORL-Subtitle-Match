@@ -441,6 +441,10 @@ def lexical_boundary_terms():
     )
     if runtime_context.enable_domain_terms:
         terms.update(content_exact(term) for term in active_profile_terms())
+        from .terminology import runtime_snapshot
+        for library in runtime_snapshot().libraries:
+            for entry in library.terms:
+                terms.update(content_exact(x) for x in (entry.canonical, *entry.aliases) if content_exact(x))
     return sorted((term for term in terms if len(term) >= 2), key=len, reverse=True)
 
 
@@ -830,6 +834,9 @@ def repair_lexical_boundary_offsets(
         segment_batch
     )
     terms = lexical_boundary_terms()
+    # Reduplicated spoken tokens remain intact even when their entity spelling
+    # is absent from the selected glossary; this never guesses a canonical.
+    terms = sorted(set(terms) | {m.group() for m in re.finditer(r'([\u4e00-\u9fff])\1+', source)}, key=len, reverse=True)
     repaired = list(offsets)
     extra_boundaries = set()
     for index in range(len(repaired) - 1):
@@ -1303,6 +1310,16 @@ def starts_with_dependent_le(text):
     return right.startswith("了") and not right.startswith(LEXICAL_LE_PREFIXES)
 
 
+def inside_repeat_run(text, offset):
+    """``offset`` separates two identical adjacent Chinese units (1-4 chars)."""
+    source = content_exact(text)
+    for size in (1, 2, 3, 4):
+        left, right = source[max(0, offset - size):offset], source[offset:offset + size]
+        if len(left) == size and left == right and all("一" <= char <= "鿿" for char in left):
+            return True
+    return False
+
+
 def semantically_awkward_boundary(text, offset):
     source = content_exact(text)
     left = source[:offset]
@@ -1646,6 +1663,19 @@ def repair_mid_word_adjacent_cues(cues, segments=(), firered_tokens=()):
         ):
             index += 1
             continue
+        # 2026-10-10: a cut that is an ASR utterance boundary with a real
+        # pause is speech evidence, not a word interior. jieba reading
+        # "叠上|任任泽" as 上任 must not move 任 across a 0.83 s pause.
+        if gap >= 0.30 and any(abs(float(segment.end) - left.end) <= .06 for segment in segments) and any(
+                abs(float(segment.start) - right.start) <= .06 for segment in segments):
+            index += 1
+            continue
+        options = [option for option in options
+                   if not (0 < option[4] < len(joined) and joined[option[4] - 1] == joined[option[4]]
+                           and "一" <= joined[option[4]] <= "鿿")]
+        if not options:
+            index += 1
+            continue
         options.sort()
         applied = False
         window_start = min(left.start, right.start)
@@ -1757,6 +1787,9 @@ def locally_repair_resegmented_cue(
                 if end_index in preferred_boundaries:
                     cost -= 8.0
                 if semantically_awkward_boundary(text, end_index):
+                    cost += 48.0
+                # A run of one repeated call (影袭影袭|影袭) is one unit.
+                if inside_repeat_run(text, end_index):
                     cost += 48.0
                 left_piece = content_exact(text)[start_index:end_index]
                 right_piece = content_exact(text)[end_index:count]

@@ -152,14 +152,35 @@ def _export_workspace_qss(theme: ThemeDefinition) -> str:
         QGroupBox {{ background: {theme.surface}; border: 1px solid {theme.border};
             border-radius: 10px; margin-top: 10px; padding-top: 8px; color: {theme.text}; }}
         QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {theme.text}; }}
+        QGroupBox[exportCard="true"] {{ background: {theme.surface}; border: 1px solid {theme.border};
+            border-radius: 12px; margin-top: 0; padding: 0; }}
+        QGroupBox[exportCard="true"][nested="true"] {{ background: transparent; border: 0;
+            border-top: 1px solid {theme.hairline}; border-radius: 0; }}
+        QFrame#exportPreviewPanel {{ background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 12px; }}
+        QFrame#exportPreviewPanel QGroupBox[exportCard="true"] {{ background: transparent; border: 0;
+            border-top: 1px solid {theme.hairline}; border-radius: 0; }}
+        QFrame#exportPreviewCard, QFrame#exportRangeCard, QFrame#exportFooter {{
+            background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 12px; }}
+        QWidget#exportCardHeader {{ background: transparent; }}
+        QLabel#exportCardTitle {{ color: {theme.text}; font-size: 15px; font-weight: 600; background: transparent; }}
+        QLabel#exportCardIcon {{ background: {theme.accent_tint}; border-radius: 8px; }}
+        QLabel#exportFieldLabel {{ color: {theme.text_secondary}; font-size: 13px; font-weight: 500; background: transparent; }}
+        QLabel#exportPageContext {{ color: {theme.text_muted}; font-size: 13px; font-weight: 500; }}
+        QLabel#exportOutputPath {{ color: {theme.text_secondary}; font-size: 13px; }}
+        QPushButton#exportBackButton {{ background: transparent; color: {theme.text_secondary};
+            border: 1px solid {theme.border}; border-radius: 8px; padding: 4px 12px; font-weight: 500; }}
+        QPushButton#exportBackButton:hover {{ background: {theme.selected}; color: {theme.text}; border-color: {theme.border_strong}; }}
+        QPushButton#exportPlayButton {{ background: {theme.accent_tint}; color: {theme.accent_text};
+            border: 1px solid transparent; border-radius: 8px; padding: 5px 14px; font-weight: 600; }}
+        QPushButton#exportPlayButton:hover {{ background: {theme.accent}; color: {theme.text_on_accent}; }}
         QLabel#exportPageTitle, QLabel#exportFailureTitle {{ color: {theme.text}; font-family: {TITLE_FONT_STACK}; font-weight: {WEIGHT_SCALE['heavy']}; }}
-        QLabel#exportSummaryBody {{ color: {theme.text_secondary}; font-size: 13px; font-variant-numeric: tabular-nums; }}
+        QLabel#exportSummaryBody {{ color: {theme.text}; font-size: 14px; font-variant-numeric: tabular-nums; }}
         QLabel#exportRendererBadge {{
-            background: {theme.accent_soft}; color: {theme.success}; border: 1px solid {theme.border};
-            border-radius: 11px; padding: 3px 10px; font-weight: 750;
+            background: {theme.success_soft}; color: {theme.success}; border: 0;
+            border-radius: 7px; padding: 3px 10px; font-weight: 600;
         }}
         QLabel#exportRendererBadge[rendererKind="advanced"] {{
-            background: {theme.selected}; color: {theme.focus}; border-color: {theme.border_strong};
+            background: {theme.info_soft}; color: {theme.info};
         }}
         QToolButton#exportAdvancedToggle {{
             background: transparent; color: {theme.text_secondary};
@@ -170,11 +191,11 @@ def _export_workspace_qss(theme: ThemeDefinition) -> str:
         QPushButton#exportQueueButton {{ font-size: 14px; font-weight: {WEIGHT_SCALE['medium']}; }}
         QPushButton#exportStartButton {{ font-size: 16px; font-weight: {WEIGHT_SCALE['bold']}; color: {theme.text_on_accent}; }}
         QFrame#exportPreviewHost, QFrame#renderPreviewHost {{
-            background: {theme.media}; border: 1px solid {theme.border_strong};
+            background: {theme.media}; border: 1px solid {theme.border}; border-radius: 10px;
         }}
         QLabel#exportPreviewFallback, QLabel#renderPreviewFallback {{ color: {theme.text}; }}
         QLabel#exportPreviewTime {{ color: {theme.text_muted}; font-variant-numeric: tabular-nums; }}
-        QLabel#exportRangeLabel {{ color: {theme.success}; font-variant-numeric: tabular-nums; }}
+        QLabel#exportRangeLabel {{ color: {theme.text_secondary}; font-size: 13px; font-variant-numeric: tabular-nums; }}
         QFrame#exportRunningHeader {{ background: {theme.panel}; border: 1px solid {theme.border}; border-radius: 12px; }}
         QLabel#exportPercentBadge {{
             color: {theme.text}; background: {theme.selected}; border: 1px solid {theme.border_strong};
@@ -182,11 +203,11 @@ def _export_workspace_qss(theme: ThemeDefinition) -> str:
         }}
         QLabel[exportStage="true"] {{ border-radius: 10px; padding: 9px; font-weight: 700; }}
         QLabel[stageState="waiting"] {{ background: {theme.panel}; color: {theme.text_muted}; border: 1px solid {theme.border}; }}
-        QLabel[stageState="running"] {{ background: {theme.warning_soft}; color: {theme.warning}; border: 2px solid {theme.warning}; }}
-        QLabel[stageState="complete"] {{ background: {theme.accent_soft}; color: {theme.success}; border: 1px solid {theme.success}; }}
+        QLabel[stageState="running"] {{ background: {theme.accent_tint}; color: {theme.accent_text}; border: 1px solid {theme.accent_text}; }}
+        QLabel[stageState="complete"] {{ background: {theme.success_soft}; color: {theme.success}; border: 1px solid {theme.success}; }}
         QLabel#exportCurrentStage {{
-            font-weight: 800; color: {theme.warning}; background: {theme.warning_soft};
-            border: 1px solid {theme.warning}; border-radius: 8px; padding: 8px;
+            font-weight: 600; color: {theme.accent_text}; background: {theme.accent_tint};
+            border: 1px solid {theme.accent_text}; border-radius: 8px; padding: 8px;
         }}
         QLabel#exportProcessingInfo {{ color: {theme.text_muted}; font-variant-numeric: tabular-nums; }}
         QToolButton#exportRunningDetails {{
@@ -218,23 +239,34 @@ def _export_workspace_qss(theme: ThemeDefinition) -> str:
         QLabel#exportSuccessIcon {{ color: {theme.success}; background: {theme.surface}; border-radius: 8px; font-size:22px; }}
         QLabel#exportSuccessMeta {{ color: {theme.text_muted}; font-variant-numeric: tabular-nums; }}
         QFrame#exportResultCard {{
-            background: {theme.surface_elevated}; border: 1px solid {theme.border};
-            border-radius: 16px;
+            background: {theme.surface}; border: 1px solid {theme.border};
+            border-radius: 14px;
         }}
+        QWidget#exportResultInfo {{ background: transparent; }}
+        QLabel#exportSectionLabel {{ color: {theme.text_secondary}; font-size: 17px; font-weight: 700; }}
+        QLabel#exportResultPath {{ color: {theme.text}; font-size: 16px; }}
+        QWidget#exportResultInfo QLabel#exportSuccessMeta {{ font-size: 16px; }}
+        QFrame#exportResultRule {{ background: {theme.border}; border: 0; }}
+        QPushButton#exportSuccessNav {{
+            background: {theme.surface}; color: {theme.text}; border: 1px solid {theme.border_strong};
+            border-radius: 8px; font-size: 15px; font-weight: 600; padding: 0 18px;
+        }}
+        QPushButton#exportSuccessNav:hover {{ background: {theme.selected}; border-color: {theme.accent}; }}
         QWidget#exportSuccessBody, QWidget#exportSuccessPage QScrollArea {{ background:{theme.app_background}; border:0; }}
         QLabel#exportFailureTitle {{ color: {theme.danger}; }}
         QLabel#exportSuccessTitle {{ font-family: {TITLE_FONT_STACK}; font-size: 28px; font-weight: {WEIGHT_SCALE['heavy']}; color: {theme.text}; }}
-        QLabel#exportSuccessName {{ font-size: 16px; font-weight: 650; color: {theme.text}; }}
-        QLabel#exportResultValue {{ font-size:15px; font-weight:600; color:{theme.text}; }}
-        QPushButton#exportResultPreview {{ background:{theme.surface}; border:1px solid {theme.border}; border-radius:8px; }}
+        QLabel#exportSuccessName {{ font-size: 15px; font-weight: 600; color: {theme.text_secondary}; }}
+        QLabel#exportResultValue {{ font-size:26px; font-weight:700; color:{theme.text}; }}
+        QPushButton#exportResultPreview {{ background:{theme.panel}; border:1px solid {theme.border}; border-radius:12px; }}
+        QPushButton#exportResultPreview:hover {{ border-color:{theme.accent}; }}
         QPushButton#successOpenVideo {{
             background: {theme.accent}; color: {theme.text_on_accent}; border: 1px solid {theme.accent_pressed};
-            border-radius: 8px; font-size: 15px; font-weight: 650; padding: 0 22px; min-height: 58px; max-height: 58px;
+            border-radius: 8px; font-size: 16px; font-weight: 700; padding: 0 22px; min-height: 58px; max-height: 58px;
         }}
         QPushButton#successOpenVideo:hover {{ background: {theme.accent_hover}; }}
         QPushButton#successOpenFolder {{
             background: {theme.surface_elevated}; color: {theme.text}; border: 1px solid {theme.border_strong};
-            border-radius: 8px; font-size: 15px; font-weight: 600; padding: 0 20px; min-height: 58px; max-height: 58px;
+            border-radius: 8px; font-size: 16px; font-weight: 600; padding: 0 20px; min-height: 48px; max-height: 48px;
         }}
         QPushButton#successOpenFolder:hover {{ background: {theme.selected}; border-color: {theme.accent}; }}
         QPushButton#exportSuccessTertiary {{
@@ -487,6 +519,7 @@ class StudioExportWorkspace(QWidget):
         self.project, self.ass_path = project, str(ass_path)
         self.project_path = Path(project_path).resolve() if project_path else None
         self.ffmpeg = ffmpeg_tool()
+        self._updating_export_controls = False
         self._settings = QSettings("2ByteASR", "2ByteASR")
         try:
             self._saved_export_preferences = json.loads(str(self._settings.value('render/preferences_v1', '{}')))
@@ -550,6 +583,8 @@ class StudioExportWorkspace(QWidget):
 
     def refresh_theme_palette(self) -> None:
         self._apply_workspace_theme()
+        if hasattr(self, "preview_panel"):
+            self._refresh_card_icons()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -579,8 +614,8 @@ class StudioExportWorkspace(QWidget):
             self.preview_scroll.setMinimumWidth(520)
             self.preview_host.setMinimumSize(520, 292)
             self.preview_host.setMaximumSize(820, 410)
-            self.queue_button.setFixedSize(170, 58)
-            self.export_button.setFixedSize(220, 58)
+            self.queue_button.setFixedSize(170, 50)
+            self.export_button.setFixedSize(220, 50)
             self.splitter.setSizes([560, 980])
 
     def _export_trace(self, event: str, value: object = None, **fields: object) -> None:
@@ -639,8 +674,14 @@ class StudioExportWorkspace(QWidget):
         title = QLabel("导出字幕视频")
         title.setObjectName("exportPageTitle")
         title.setStyleSheet(f"font-size:23px;font-weight:{WEIGHT_SCALE['heavy']}")
+        header.addSpacing(6)
         header.addWidget(title)
-        header.addStretch(1)
+        from .elided_label import ElidedLabel
+        self.export_context = ElidedLabel(
+            f"{Path(self.project.media.path).name} · {_clock(self._duration_ms(), True)}", minimum=60)
+        self.export_context.setObjectName("exportPageContext")
+        header.addSpacing(12)
+        header.addWidget(self.export_context, 1, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(header)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -672,16 +713,84 @@ class StudioExportWorkspace(QWidget):
         self.splitter.setStretchFactor(1, 64)
         self.splitter.setSizes([560, 980])
         root.addWidget(self.splitter, 1)
-        footer = QHBoxLayout()
+        footer_bar = QFrame()
+        footer_bar.setObjectName("exportFooter")
+        footer = QHBoxLayout(footer_bar)
+        footer.setContentsMargins(18, 10, 12, 10)
+        footer.setSpacing(12)
         self.status = QLabel()
+        self.status.setObjectName("exportOutputPath")
         self.status.setWordWrap(True)
         self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         footer.addWidget(self.status, 1)
         # Export actions stay reachable even when either column must scroll.
         footer.addLayout(self._export_actions)
-        root.addLayout(footer)
+        root.addWidget(footer_bar)
+        self._polish_export_cards(settings)
         QTimer.singleShot(0, self._restore_export_preferences)
         return page
+
+    # Section icon per settings card (titles stay the translated group titles).
+    _CARD_ICONS = {
+        "文件": "fa5s.file-video", "字幕文件": "fa5s.closed-captioning", "视频": "fa5s.film",
+        "音频": "fa5s.volume-up", "质量控制": "fa5s.sliders-h", "兼容性与关键帧": "fa5s.microchip",
+        "输出摘要": "fa5s.clipboard-list",
+    }
+
+    def _polish_export_cards(self, settings: QWidget) -> None:
+        """Group boxes become titled cards: icon + title inside, aligned field labels."""
+        groups = [*settings.findChildren(QGroupBox), *self.preview_panel.findChildren(QGroupBox)]
+        for group in groups:
+            title = group.title()
+            if not title or group.property("exportCard"):
+                continue
+            group.setTitle("")
+            group.setProperty("exportCard", True)
+            nested = group is getattr(self, "expert_panel", None) or self.preview_panel.isAncestorOf(group)
+            group.setProperty("nested", nested)
+            header = QWidget(group)
+            header.setObjectName("exportCardHeader")
+            row = QHBoxLayout(header)
+            row.setContentsMargins(0, 0, 0, 2)
+            row.setSpacing(10)
+            icon = QLabel(header)
+            icon.setObjectName("exportCardIcon")
+            icon.setFixedSize(28, 28)
+            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon.setProperty("iconName", self._CARD_ICONS.get(title, "fa5s.circle"))
+            caption = QLabel(title, header)
+            caption.setObjectName("exportCardTitle")
+            row.addWidget(icon)
+            row.addWidget(caption)
+            row.addStretch(1)
+            layout = group.layout()
+            if isinstance(layout, QFormLayout):
+                layout.insertRow(0, header)
+                layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                layout.setHorizontalSpacing(16)
+                layout.setVerticalSpacing(10)
+                for index in range(layout.rowCount()):
+                    item = layout.itemAt(index, QFormLayout.ItemRole.LabelRole)
+                    label = item.widget() if item is not None else None
+                    if isinstance(label, QLabel) and not label.objectName():
+                        label.setObjectName("exportFieldLabel")
+            elif layout is not None:
+                layout.insertWidget(0, header)
+                layout.setSpacing(max(layout.spacing(), 10))
+                for label in group.findChildren(QLabel):
+                    if label.parentWidget() is group and not label.objectName() and label.text() in {"格式", "说话人"}:
+                        label.setObjectName("exportFieldLabel")
+            if layout is not None:
+                layout.setContentsMargins(*((0, 10, 0, 0) if nested else (18, 16, 18, 18)))
+        # The setup page is not parented to the workspace yet; paint from it.
+        self._refresh_card_icons(self.splitter)
+
+    def _refresh_card_icons(self, root: QWidget | None = None) -> None:
+        import qtawesome as qta
+        theme = _workspace_theme()
+        for icon in (root or self).findChildren(QLabel, "exportCardIcon"):
+            icon.setPixmap(qta.icon(str(icon.property("iconName") or "fa5s.circle"),
+                                    color=theme.accent_text).pixmap(QSize(15, 15)))
 
     def _file_settings(self, layout: QVBoxLayout) -> None:
         group, form = QGroupBox("文件"), QFormLayout()
@@ -1068,6 +1177,8 @@ class StudioExportWorkspace(QWidget):
         field_width(self.max_bitrate, "numeric", size="compact")
         self.max_bitrate_label = QLabel("最大码率")
         form.addRow(self.max_bitrate_label, self.max_bitrate)
+        for widget in (self.quality_value, self.bitrate, self.max_bitrate):
+            widget.valueChanged.connect(self._manual_encoding_changed)
         self.encoder_preset = self._combo((("最快", "fastest"), ("快速", "fast"), ("均衡（推荐）", "balanced"),
                                            ("高质量", "quality"), ("最高质量", "best")))
         self.encoder_preset.setCurrentIndex(self.encoder_preset.findData("balanced"))
@@ -1104,6 +1215,7 @@ class StudioExportWorkspace(QWidget):
     def _summary_box(self, layout: QVBoxLayout) -> None:
         group, box = QGroupBox("输出摘要"), QVBoxLayout()
         group.setLayout(box)
+        box.setSpacing(8)
         group.setMinimumHeight(132)
         self.renderer_badge = QLabel()
         self.renderer_badge.setObjectName("exportRendererBadge")
@@ -1111,6 +1223,7 @@ class StudioExportWorkspace(QWidget):
         self.summary = QLabel(); self.summary.setWordWrap(True)
         self.summary.setObjectName("exportSummaryBody")
         self.estimated_size = QLabel(); self.estimated_size.setObjectName("cardMeta")
+        self.estimated_size.setWordWrap(True)
         box.addWidget(self.renderer_badge); box.addWidget(self.summary); box.addWidget(self.estimated_size)
         layout.addWidget(group)
 
@@ -1120,7 +1233,7 @@ class StudioExportWorkspace(QWidget):
         panel.setObjectName("exportPreviewPanel")
         panel.setLayout(layout); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(10)
         panel.setMinimumHeight(620)
-        title = QLabel("导出预览"); title.setStyleSheet("font-size:16px;font-weight:700"); layout.addWidget(title)
+        title = QLabel("导出预览"); title.setObjectName("exportCardTitle"); layout.addWidget(title)
         self.preview_host = QFrame(); self.preview_host.setObjectName("exportPreviewHost")
         self.preview_host.setMinimumSize(520, 292); self.preview_host.setMaximumSize(820, 410)
         self.preview_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -1137,6 +1250,7 @@ class StudioExportWorkspace(QWidget):
         layout.addWidget(self.preview_host, 0, Qt.AlignmentFlag.AlignHCenter)
         controls = QHBoxLayout()
         self.preview_play_button = QPushButton("▶ 播放"); self.preview_play_button.clicked.connect(self._toggle_preview)
+        self.preview_play_button.setObjectName("exportPlayButton")
         self.preview_time = QLabel(_clock(0, True)); self.preview_time.setObjectName("exportPreviewTime")
         self.preview_scrub = ExportTimelineSlider(); self.preview_scrub.setRange(0, self._duration_ms())
         self.preview_scrub.seek_requested.connect(self._seek_preview)
@@ -1149,6 +1263,10 @@ class StudioExportWorkspace(QWidget):
         set_in, set_out, clear = QPushButton("设置入点  I"), QPushButton("设置出点  O"), QPushButton("清除范围")
         set_in.clicked.connect(self._set_in); set_out.clicked.connect(self._set_out); clear.clicked.connect(self._clear_range)
         actions.addWidget(set_in); actions.addWidget(set_out); actions.addStretch(1); actions.addWidget(clear); layout.addLayout(actions)
+        # The shared project range bar below already offers mark in/out, jump
+        # and clear (I/O shortcuts stay bound); keep one visible range control.
+        for duplicate in (set_in, set_out, clear):
+            duplicate.hide()
         self.range_label = QLabel(); self.range_label.setObjectName("exportRangeLabel")
         self.range_label.setWordWrap(True)
         layout.addWidget(self.range_label)
@@ -1162,12 +1280,12 @@ class StudioExportWorkspace(QWidget):
         cta = QHBoxLayout(); cta.addStretch(1)
         self.queue_button = QPushButton("加入队列")
         self.queue_button.setObjectName("exportQueueButton")
-        self.queue_button.setFixedSize(170, 58)
+        self.queue_button.setFixedSize(170, 50)
         self.queue_button.clicked.connect(self._enqueue)
         cta.addWidget(self.queue_button)
         self.export_button = QPushButton("开始导出")
         self.export_button.setObjectName("exportStartButton")
-        self.export_button.setFixedSize(220, 58)
+        self.export_button.setFixedSize(220, 50)
         self.export_button.setProperty("studioPrimary", True)
         button_role(self.export_button, "primary", size="large")
         self.export_button.clicked.connect(self._start)
@@ -1423,6 +1541,8 @@ class StudioExportWorkspace(QWidget):
     def _rate_control_changed(self, *_args) -> None:
         if not hasattr(self, "rate_control"):
             return
+        if _args:
+            self._mark_custom_export()
         mode = str(self.rate_control.currentData() or "crf")
         quality_visible = mode in {"crf", "cq"}
         bitrate_visible = mode in {"target", "limited", "vbr", "cbr"}
@@ -1433,6 +1553,28 @@ class StudioExportWorkspace(QWidget):
         self.bitrate_label.setVisible(bitrate_visible); self.bitrate.setVisible(bitrate_visible)
         self.max_bitrate_label.setVisible(max_visible); self.max_bitrate.setVisible(max_visible)
         self._target_changed()
+
+    def _mark_custom_export(self) -> None:
+        if self._updating_export_controls:
+            return
+        if hasattr(self, 'quality'):
+            self.quality.setCurrentIndex(max(0, self.quality.findData('custom')))
+        if hasattr(self, 'preset'):
+            previous = self.preset.blockSignals(True)
+            self.preset.setCurrentIndex(max(0, self.preset.findData('custom')))
+            self.preset.blockSignals(previous)
+
+    def _manual_encoding_changed(self, *_args) -> None:
+        self._mark_custom_export()
+        self._target_changed()
+
+    def _commit_export_fields(self) -> None:
+        # QSpinBox's editor can hold a newer value than value() until focus leaves.
+        for name in ('quality_value', 'bitrate', 'max_bitrate', 'custom_resolution_width',
+                     'custom_resolution_height', 'custom_fps', 'gop'):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.interpretText()
 
     def _apply_codec_capabilities(self) -> None:
         try: cached = load_encoder_capabilities(self.ffmpeg)
@@ -1485,6 +1627,7 @@ class StudioExportWorkspace(QWidget):
         return next((item for item in self._preset_catalog() if str(item.get("id")) == preset_id), None)
 
     def _capture_export_preset(self, preset_id: str, label: str) -> dict:
+        self._commit_export_fields()
         resolution = self.resolution.currentData() or (0, 0)
         return {
             "id": preset_id,
@@ -1496,6 +1639,9 @@ class StudioExportWorkspace(QWidget):
             "quality": int(self.quality_value.value()),
             "bitrate_kbps": int(self.bitrate.value()),
             "max_bitrate_kbps": int(self.max_bitrate.value()),
+            "custom_resolution_width": self.custom_resolution_width.value(),
+            "custom_resolution_height": self.custom_resolution_height.value(),
+            "custom_fps": self.custom_fps.value(),
             "preset_speed": str(self.encoder_preset.currentData() or "balanced"),
             "resolution": list(resolution) if isinstance(resolution, (list, tuple)) else [0, 0],
             "fps": float(self.fps.currentData() or 0.0),
@@ -1507,12 +1653,20 @@ class StudioExportWorkspace(QWidget):
     def _apply_preset_payload(self, payload: dict) -> None:
         if not hasattr(self, "encoder"):
             return
+        self._updating_export_controls = True
+        try:
+            self._apply_preset_controls(payload)
+        finally:
+            self._updating_export_controls = False
+        self._target_changed()
+
+    def _apply_preset_controls(self, payload: dict) -> None:
         self.extension.setCurrentIndex(max(0, self.extension.findData(payload.get("container", "mp4"))))
         self.codec.setCurrentIndex(max(0, self.codec.findData(payload.get("codec", "h264"))))
         self._populate_encoders()
         encoder = str(payload.get("encoder") or "auto")
         self.encoder.setCurrentIndex(max(0, self.encoder.findData(encoder)))
-        quality = int(payload.get("quality") or 20)
+        quality = int(payload['quality']) if payload.get('quality') is not None else 20
         if quality <= 17:
             self.quality.setCurrentIndex(max(0, self.quality.findData("high")))
         elif quality >= 26:
@@ -1522,8 +1676,28 @@ class StudioExportWorkspace(QWidget):
         if str(payload.get("id")) == "custom" or payload.get("user"):
             self.quality.setCurrentIndex(max(0, self.quality.findData("custom")))
         self.quality_value.setValue(quality)
+        mode = str(payload.get('quality_mode') or 'cq')
+        if self._resolved_encoder().startswith('lib') and mode == 'cq':
+            mode = 'crf'
+        index = self.rate_control.findData(mode)
+        if index >= 0:
+            self.rate_control.setCurrentIndex(index)
         if payload.get("bitrate_kbps"):
             self.bitrate.setValue(int(payload["bitrate_kbps"]))
+        if payload.get('max_bitrate_kbps'):
+            self.max_bitrate.setValue(int(payload['max_bitrate_kbps']))
+        resolution = tuple(payload.get('resolution') or (0, 0))
+        resolution_index = next((i for i in range(self.resolution.count())
+            if tuple(self.resolution.itemData(i) or ()) == resolution), -1)
+        if resolution_index < 0 and len(resolution) == 2 and min(resolution) > 0:
+            resolution_index = next(i for i in range(self.resolution.count())
+                if tuple(self.resolution.itemData(i) or ()) == (-1, -1))
+            self.custom_resolution_width.setValue(int(resolution[0]))
+            self.custom_resolution_height.setValue(int(resolution[1]))
+        self.resolution.setCurrentIndex(max(0, resolution_index))
+        for name in ('custom_resolution_width', 'custom_resolution_height', 'custom_fps'):
+            if name in payload:
+                getattr(self, name).setValue(int(payload[name]))
         speed = str(payload.get("preset_speed") or "balanced")
         self.encoder_preset.setCurrentIndex(max(0, self.encoder_preset.findData(speed)))
         fps = float(payload.get("fps") or 0.0)
@@ -1574,7 +1748,16 @@ class StudioExportWorkspace(QWidget):
         self._preset_changed()
 
     def _quality_changed(self, *_args) -> None:
-        custom = str(self.quality.currentData() or "recommended") == "custom"
+        selected = str(self.quality.currentData() or 'recommended')
+        custom = selected == "custom"
+        if not custom and hasattr(self, 'rate_control') and not self._updating_export_controls:
+            self._updating_export_controls = True
+            try:
+                mode = 'target' if selected == 'size' else ('crf' if self._resolved_encoder().startswith('lib') else 'cq')
+                self.rate_control.setCurrentIndex(max(0, self.rate_control.findData(mode)))
+                self.quality_value.setValue({'very_high':16, 'high':18, 'recommended':20, 'size':28}[selected])
+            finally:
+                self._updating_export_controls = False
         if custom:
             self.advanced_button.setChecked(True)
             QTimer.singleShot(0, lambda: self.settings_scroll.ensureWidgetVisible(self.advanced_panel, 0, 24))
@@ -1588,6 +1771,8 @@ class StudioExportWorkspace(QWidget):
         if resolution[0] < 0: resolution = (self.custom_resolution_width.value(), self.custom_resolution_height.value())
         resolution_text = f"{resolution[0]} × {resolution[1]}" if resolution[0] > 0 else (f"{self.project.media.width} × {self.project.media.height}" if self.project.media.width else "跟随源视频")
         fps_text = f"{self.custom_fps.value()} fps" if float(self.fps.currentData() or 0.0) < 0 else self.fps.currentText()
+        effective = self._render_settings(commit=False)
+        self._effective_export_settings = effective
         from .export_timeline import export_project_snapshot
         advanced = project_requires_advanced(export_project_snapshot(self.project),
             start_ms=self.in_ms, end_ms=self.out_ms)
@@ -1596,9 +1781,15 @@ class StudioExportWorkspace(QWidget):
         self.renderer_badge.style().unpolish(self.renderer_badge)
         self.renderer_badge.style().polish(self.renderer_badge)
         self.renderer_badge.setText(route)
-        bind_text(self.summary, '{resolution_text} · {fps_text}\n{value2} · {value3} · {value4}\n{value5} · 字幕烧录 · 范围 {value6}', resolution_text=tr(resolution_text), fps_text=tr(fps_text), value2=self.codec.currentText(), value3=tr(self.encoder.currentText()), value4=tr(self.quality.currentText()), value5=tr(self.audio.currentText()), value6=_clock(duration))
+        mode_text = (f'{effective.quality_mode.upper()} {effective.quality}' if effective.quality_mode in {'crf', 'cq'}
+                     else f'{tr(self.rate_control.currentText())} {effective.bitrate_kbps} kbps')
+        bind_text(self.summary, '{resolution_text} · {fps_text}\n{value2} · {value3} · {value4}\n{value5} · 字幕烧录 · 范围 {value6}', resolution_text=tr(resolution_text), fps_text=tr(fps_text), value2=self.codec.currentText(), value3=effective.encoder, value4=mode_text, value5=tr(self.audio.currentText()), value6=_clock(duration))
         audio_rate = int(self.audio_bitrate.currentData() or 0) if self.audio.currentData() == "aac" else 0
-        bind_text(self.estimated_size, '预计文件大小：~{value0} MB', value0=max(1, round((self.bitrate.value() + audio_rate) * duration / 8000000)))
+        if effective.quality_mode in {'crf', 'cq'}:
+            bind_text(self.estimated_size, '恒定质量模式：文件大小随画面复杂度变化')
+        else:
+            bind_text(self.estimated_size, '预计文件大小：~{value0} MB（十进制，音频复制及封装另计）',
+                value0=max(1, round((effective.bitrate_kbps + audio_rate) * duration / 8000000)))
         hints = {"recommended":"推荐：适合普通上传", "high":"高质量：更高码率，文件较大", "very_high":"极高质量：适合存档", "size":"体积优先：更小文件", "custom":"自定义：使用高级参数"}
         bind_text(self.quality_hint, hints.get(str(self.quality.currentData()), ""))
 
@@ -1612,6 +1803,14 @@ class StudioExportWorkspace(QWidget):
         return ExportTarget(directory, base, str(self.extension.currentData() or "mp4"))
 
     def _restore_export_preferences(self):
+        self._updating_export_controls = True
+        try:
+            self._restore_export_controls()
+        finally:
+            self._updating_export_controls = False
+        self._target_changed()
+
+    def _restore_export_controls(self):
         values = self._saved_export_preferences
         if not values:
             self._preset_changed()
@@ -1624,6 +1823,9 @@ class StudioExportWorkspace(QWidget):
             widget = getattr(self, name)
             value = tuple(values[name]) if name == 'resolution' else values[name]
             index = widget.findData(value)
+            if name == 'resolution':
+                index = next((i for i in range(widget.count())
+                    if tuple(widget.itemData(i) or ()) == tuple(value)), -1)
             if index >= 0:
                 blocked = widget.blockSignals(name == 'preset')
                 widget.setCurrentIndex(index)
@@ -1636,6 +1838,7 @@ class StudioExportWorkspace(QWidget):
         self._target_changed()
 
     def _confirm_export_preferences(self):
+        self._commit_export_fields()
         self._confirm_affixes()
         values = {name: getattr(self,name).currentData() for name in (
             'extension','codec','encoder','quality','rate_control','resolution','fps','audio','audio_bitrate',
@@ -1668,16 +1871,13 @@ class StudioExportWorkspace(QWidget):
         path = QFileDialog.getExistingDirectory(self, tr('选择导出目录'), self.directory.text())
         if path: self.directory.setText(path)
 
-    def _render_settings(self) -> RenderSettings:
+    def _render_settings(self, *, commit=True) -> RenderSettings:
+        if commit:
+            self._commit_export_fields()
         codec, encoder = str(self.codec.currentData() or "h264"), self._resolved_encoder()
-        mode = str(self.quality.currentData() or "recommended")
-        quality = {"very_high":16, "high":18, "recommended":20, "size":28}.get(mode, self.quality_value.value())
-        if mode == "custom":
-            rate_mode = str(self.rate_control.currentData() or ("crf" if encoder.startswith("lib") else "cq"))
-        elif mode == "size":
-            rate_mode = "target"
-        else:
-            rate_mode = "crf" if encoder.startswith("lib") else "cq"
+        # Presets update visible controls; the visible mode owns execution.
+        quality = self.quality_value.value()
+        rate_mode = str(self.rate_control.currentData() or ('crf' if encoder.startswith('lib') else 'cq'))
         resolution = self.resolution.currentData() or (0, 0)
         width, height = (self.custom_resolution_width.value(), self.custom_resolution_height.value()) if resolution[0] < 0 else resolution
         fps_value = float(self.custom_fps.value()) if float(self.fps.currentData() or 0.0) < 0 else float(self.fps.currentData() or 0.0)
@@ -1692,7 +1892,7 @@ class StudioExportWorkspace(QWidget):
             encoder_preset = {"fastest":"ultrafast", "fast":"fast", "balanced":"medium", "quality":"slow", "best":"slower"}[speed]
         return RenderSettings(container=str(self.extension.currentData()), codec=codec, encoder=encoder,
             quality_mode=rate_mode, quality=quality,
-            bitrate_kbps=self.bitrate.value(), max_bitrate_kbps=max(self.bitrate.value(), self.max_bitrate.value()),
+            bitrate_kbps=self.bitrate.value(), max_bitrate_kbps=self.max_bitrate.value(),
             width=int(width), height=int(height), fps=max(0.0, fps_value),
             audio_codec=str(self.audio.currentData()), audio_bitrate_kbps=int(self.audio_bitrate.currentData() or 192),
             preset=encoder_preset, profile=str(self.profile.currentData()), level=str(self.level.currentData()),
@@ -1704,7 +1904,7 @@ class StudioExportWorkspace(QWidget):
         duration = (end-start)/1000.0
         return start/1000.0,duration,duration
 
-    def _job(self, output: Path) -> RenderJob:
+    def _job(self, output: Path, settings=None) -> RenderJob:
         from .video_export import capture_video_graph
         start, duration, effective = self._range_seconds()
         sequence = sequence_of(self.project)
@@ -1718,14 +1918,22 @@ class StudioExportWorkspace(QWidget):
         cover_dir = studio_data_root()/'cache/export-completion'
         cover_dir.mkdir(parents=True, exist_ok=True)
         from .export_timeline import write_export_ass
-        settings = self._render_settings()
+        from dataclasses import asdict, replace
+        import hashlib
+        settings = replace(settings or self._render_settings())
         export_ass = cover_dir / (uuid.uuid4().hex + '.ass')
         self._export_project = write_export_ass(self.project, export_ass, fps=settings.fps or None)
+        project_data = self._export_project.to_dict()
+        revision = hashlib.sha256(json.dumps(project_data, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
         return RenderJob(
             self.project.media.path, str(export_ass), str(output), settings,
             start_seconds=start, duration_seconds=effective, edit_segments=slices,
             video_graph=capture_video_graph(self.project),
-            export_project_data=self._export_project.to_dict(),
+            export_project_data=project_data,
+            export_context=dict(job_id=uuid.uuid4().hex, project_revision='sha256:' + revision,
+                project_path=str(self.project_path or ''), requested_encoder=str(self.encoder.currentData() or 'auto'),
+                requested_settings=asdict(settings)),
             completion_preview_path=str(cover_dir/(uuid.uuid4().hex+'.jpg')),
             preview_callback=self._receive_export_preview,
         )
@@ -1762,7 +1970,8 @@ class StudioExportWorkspace(QWidget):
                 start_ms = None if start is None else round(float(start) * 1000)
                 duration_ms = None if duration is None else round(float(effective_duration) * 1000)
                 slices = tuple(export_source_slices(sequence, start_ms, duration_ms))
-            job = self._job(output)
+            job = self._job(output, settings=settings)
+            settings = job.settings
             validate_export_config(job)
             self._advanced_route = project_requires_advanced(self._export_project,
                 start_ms=round((start or 0)*1000), end_ms=round(((start or 0)+effective_duration)*1000))
@@ -2014,8 +2223,14 @@ class StudioExportWorkspace(QWidget):
         # A delayed callback must never display metadata from another output.
         if receipt.get('output_path') != str(output.resolve()):
             receipt={}
-        from .export_success import elapsed_text
-        bind_text(self.success_meta, '压制耗时  {value0}', value0=elapsed_text(receipt.get('elapsed_seconds')))
+        from .export_validation import positive_number
+        elapsed = positive_number(receipt.get('elapsed_seconds'))
+        elapsed_display = '—'
+        if elapsed is not None:
+            minutes, tenths = divmod(round(elapsed * 10), 600)
+            elapsed_display = (tr('{minutes} 分 {seconds} 秒', minutes=minutes, seconds=f'{tenths / 10:.1f}')
+                if minutes else tr('{seconds} 秒', seconds=f'{tenths / 10:.1f}'))
+        bind_text(self.success_meta, '压制耗时  {value0}', value0=elapsed_display)
         stream=next((s for s in receipt.get('streams',[]) if s.get('codec_type')=='video'),{})
         resolution_text=f"{stream['width']} × {stream['height']}" if stream.get('width') and stream.get('height') else '—'
         fps=stream.get('avg_frame_rate')
@@ -2038,7 +2253,19 @@ class StudioExportWorkspace(QWidget):
             panel.preview.image=QPixmap(thumbnail);panel.preview.update()
             Path(thumbnail).unlink(missing_ok=True)
         panel.preview.update()
-        panel.error.hide()
+        request = receipt.get('requested_video_bitrate_bps')
+        measured = (receipt.get('video_bitrate') or {}).get('average_bitrate_bps')
+        if request:
+            actual = f'{measured / 1000:.0f} kbps' if measured is not None else tr('无法可靠测量')
+            mode = str(receipt.get('actual_rate_control') or getattr(getattr(job, 'settings', None), 'quality_mode', ''))
+            bind_text(self.success_meta, '压制耗时 {elapsed}\n请求视频码率 {requested} kbps · 实测平均视频码率 {actual} · 实际模式 {mode}',
+                elapsed=elapsed_display, requested=f'{request / 1000:g}', actual=actual, mode=mode)
+        if request and receipt.get('bitrate_target_met') is False:
+            bind_text(panel.error, '导出完成，但码率目标未达到。成片与诊断信息已保留。'); panel.error.show()
+        elif request and receipt.get('bitrate_target_met') is None:
+            bind_text(panel.error, '导出完成，视频码率无法可靠测量。成片与诊断信息已保留。'); panel.error.show()
+        else:
+            panel.error.hide()
         self._success_output = output
         self.pages.setCurrentWidget(self.success_page)
         panel.play.setFocus()
@@ -2077,7 +2304,11 @@ class StudioExportWorkspace(QWidget):
         detail = detail.split('（cue.style_id=',1)[0]
         bind_text(self.failure_reason, '失败阶段：{phase}\n{value1}\n请返回设置修正后重试；完整诊断可在“查看详情”中查看。', phase=tr(phase), value1=tr(detail[:220]))
         self.install_renderer_button.setVisible("高级字幕渲染环境尚未安装" in str(message))
-        self.details.setPlainText(str(message)); self.details.hide(); self.details_button.setChecked(False); self.pages.setCurrentWidget(self.failure_page)
+        diagnostics = (getattr(getattr(self, '_last_job', None), 'export_context', {}) or {}).get('diagnostics_path')
+        details = str(message)
+        if diagnostics:
+            details += '\n\n' + tr('导出诊断目录：{path}', path=diagnostics)
+        self.details.setPlainText(details); self.details.hide(); self.details_button.setChecked(False); self.pages.setCurrentWidget(self.failure_page)
 
     def _install_renderer_environment(self) -> None:
         self.install_renderer_button.setEnabled(False)
@@ -2103,7 +2334,13 @@ class StudioExportWorkspace(QWidget):
         self.details.setPlainText(detail)
 
     def _show_cancelled(self) -> None:
-        self._running = False; self._move_preview_to_setup(); bind_text(self.status, '导出已取消，未生成可交付文件。'); self.pages.setCurrentWidget(self.setup_page)
+        self._running = False; self._move_preview_to_setup()
+        diagnostics = (getattr(getattr(self, '_last_job', None), 'export_context', {}) or {}).get('diagnostics_path')
+        if diagnostics:
+            bind_text(self.status, '导出已取消，未生成可交付文件。诊断目录：{path}', path=diagnostics)
+        else:
+            bind_text(self.status, '导出已取消，未生成可交付文件。')
+        self.pages.setCurrentWidget(self.setup_page)
 
     def _cancel_export(self) -> None:
         if self._running: self._cancelled.set(); bind_text(self.processing_info, '正在取消导出…')

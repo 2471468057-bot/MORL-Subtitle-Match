@@ -18,3 +18,10 @@ GSAP3.15.0的[条款](materials/gsap/3.15.0/standard-license.txt)允许AI产码�
 Qt各模块按真实许可路径履行，LGPL替换/调试条件保留。GIMP桥接仍为GPL3-or-later。素材授权须覆盖原文件随商业软件/修改版再分发，不能仅凭演示合作许可。未查明部分保持未查明。
 
 补充源码与校验：[supplement-20261001.json](source-materials/supplement-20261001.json)。fdk-aac-free实读原NOTICE仍有Fraunhofer限制，不能因构建脚本绕过nonfree检查就按GPL放行。
+## 2026-10-07授权回复与实际依赖更新
+
+Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**；Rust/FFmpeg按各自许可。原请求的准确原生构建材料未提供，额外组合权利未提供，两项**分别未解决**；没有将所有项写成拒绝或已获许可。个人免费资格、非商用声明、Company订阅及独立进程不能代替这些权利。
+
+当前生产高级字幕仍保留；直接/传递npm包、真实API、compositor/Rust/媒体DLL、Chromium、自动npm安装/备用CLI、两个独立onedir及配对B内部材料已分别核对。现有HTML档案可独立求值，正常Studio宿主仍调用Remotion；最小纯CDP验证不会偷偷替换全部AI功能。原封存Setup/候选/A/B/C声明与自有GPL-3.0-only、0.2.6-test.3分界保持。
+
+[组件、实际材料及发布门](REMOTION_DEPENDENCY_AUDIT.md)。新统一候选保留既有实现并继续标公开发布阻塞；纯源码C不代替内部B及原生对应材料。

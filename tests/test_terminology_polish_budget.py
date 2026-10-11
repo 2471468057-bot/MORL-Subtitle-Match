@@ -181,7 +181,9 @@ def test_completion_summary_exposes_partial_success_and_retry():
     from twobyteasr.main_ui_helpers import polishing_completion_details
     lines,retry=polishing_completion_details({'polishing_summary':{'success_batches':4,'success_cues':80,
         'fallback_batches':2,'fallback_cues':40,'failure_categories':{'transport_length':40}},
-        'terminology_summary':{'status':'partial','verified_count':60,'unverified_count':20}})
+        'terminology_summary':{'status':'partial','verified_count':60,'unverified_count':20,
+            'capability_available':True,'retryable':True,'evidence_verified':True,
+            'search_evidence':[{'tool':'web_search','urls':['https://example.test/terms']}]}})
     assert retry and '4 批 / 80 条' in lines[0] and '2 批 / 40 条' in lines[0]
     assert any('联网核验部分完成' in line for line in lines)
 

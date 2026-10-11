@@ -6,12 +6,14 @@ from tests.theme_fixture import bind_ready_draft
 from twobyteasr.studio_edit_sequence import sequence_of, projected_cues
 from twobyteasr.studio_project import save_project,load_project
 
-def test_projected_request_and_delete_before_return_terminate_current_only(tmp_path,monkeypatch):
+def test_independent_request_and_delete_before_return_terminate_current_only(tmp_path,monkeypatch):
     app,page=_page(tmp_path,monkeypatch)
     try:
+        baseline=copy.deepcopy(projected_cues(page.project))
         sequence_of(page.project).segments[0].source_in_ms=100
         cue=projected_cues(page.project)[0]
-        assert '#' in cue.id
+        assert cue==baseline[0] and cue.id=='a'
+        assert page.project.render_settings['_cue_domain']=='timeline'
         page.selected_cue_id=cue.id
         drafts=page._theme_drafts();page._ai_request_generation+=1
         drafts.begin(page._ai_request_generation,cue.id)

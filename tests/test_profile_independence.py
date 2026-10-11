@@ -28,13 +28,14 @@ def _ensure_app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
+# Current supported pair avoids unrelated legacy retirement during restoration.
 A_CONFIG = {
     "primary_asr_backend": "moss",
     "qwen_asr_backend": "off",
     "qwen_asr_model": "Qwen/Qwen3-ASR-1.7B",
-    "qwen_asr_api_provider": "dashscope",
-    "qwen_asr_api_protocol": "dashscope_multimodal",
-    "qwen_asr_api_model": "qwen3-asr-flash",
+    "qwen_asr_api_provider": "qwen31_filetrans",
+    "qwen_asr_api_protocol": "dashscope_filetrans",
+    "qwen_asr_api_model": "qwen3.1-asr-flash",
     "qwen_asr_api_url": "https://dashscope.example/api",
     "firered_asr_backend": "local",
     "api_transcribe_style": "clean",
@@ -43,6 +44,7 @@ A_CONFIG = {
 B_CONFIG = {
     **A_CONFIG,
     "qwen_asr_api_provider": "groq",
+    "qwen_asr_api_protocol": "openai_transcription",
     "qwen_asr_api_model": "whisper-large-v3-turbo",
     "qwen_asr_api_url": "https://api.groq.com/openai/v1",
     "api_transcribe_style": "verbatim",  # 嵌套参数差异
@@ -63,7 +65,7 @@ def test_asr_config_snapshots_are_independent(tmp_path):
     store.update_asr_config(b.id, {**B_CONFIG, "qwen_asr_api_model": "changed-model"})
     a_reloaded = store.get(a.id)
     b_reloaded = store.get(b.id)
-    assert a_reloaded.asr_config["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert a_reloaded.asr_config["qwen_asr_api_model"] == "qwen3.1-asr-flash"
     assert b_reloaded.asr_config["qwen_asr_api_model"] == "changed-model"
     assert a_reloaded.asr_config["api_transcribe_style"] == "clean"
     assert b_reloaded.asr_config["api_transcribe_style"] == "verbatim"
@@ -74,11 +76,11 @@ def test_asr_config_dicts_are_not_shared_with_caller(tmp_path):
     payload = copy.deepcopy(A_CONFIG)
     profile = store.create("A", asr_config=payload)
     payload["qwen_asr_api_model"] = "mutated-after-create"
-    assert store.get(profile.id).asr_config["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert store.get(profile.id).asr_config["qwen_asr_api_model"] == "qwen3.1-asr-flash"
 
     got = store.get(profile.id)
     got.asr_config["qwen_asr_api_model"] = "mutated-after-get"
-    assert store.get(profile.id).asr_config["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert store.get(profile.id).asr_config["qwen_asr_api_model"] == "qwen3.1-asr-flash"
 
 
 def test_normalize_asr_config_drops_unknown_keys_and_coerces():
@@ -212,11 +214,11 @@ def test_profile_apply_restores_snapshot_and_switch_keeps_independence(isolated_
 
     # 应用 A：全局槽与 UI 控件都恢复 A 的快照
     window._apply_project_profile(store.get(a.id), mark_used=False)
-    assert _models(legacy)["qwen_asr_api_provider"] == "dashscope"
-    assert _models(legacy)["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert _models(legacy)["qwen_asr_api_provider"] == "qwen31_filetrans"
+    assert _models(legacy)["qwen_asr_api_model"] == "qwen3.1-asr-flash"
     assert _models(legacy)["api_transcribe_style"] == "clean"
-    assert window.qwen_asr_api_provider.currentData() == "dashscope"
-    assert window.qwen_asr_api_model.text() == "qwen3-asr-flash"
+    assert window.qwen_asr_api_provider.currentData() == "qwen31_filetrans"
+    assert window.qwen_asr_api_model.text() == "qwen3.1-asr-flash"
 
     # 切到 B：B 生效，A 的痕迹消失（此前全局单槽会保留 A 的值）
     window._apply_project_profile(store.get(b.id), mark_used=False)
@@ -229,13 +231,13 @@ def test_profile_apply_restores_snapshot_and_switch_keeps_independence(isolated_
 
     # 切回 A：A 完全保持原值（核心回归断言）
     window._apply_project_profile(store.get(a.id), mark_used=False)
-    assert _models(legacy)["qwen_asr_api_provider"] == "dashscope"
-    assert _models(legacy)["qwen_asr_api_model"] == "qwen3-asr-flash"
+    assert _models(legacy)["qwen_asr_api_provider"] == "qwen31_filetrans"
+    assert _models(legacy)["qwen_asr_api_model"] == "qwen3.1-asr-flash"
     assert _models(legacy)["api_transcribe_style"] == "clean"
-    assert window.qwen_asr_api_model.text() == "qwen3-asr-flash"
+    assert window.qwen_asr_api_model.text() == "qwen3.1-asr-flash"
     assert window.ai_grouping.isChecked() is False
     # 存储层 A 仍未被 B 的编辑污染
-    assert store.get(a.id).asr_config["qwen_asr_api_provider"] == "dashscope"
+    assert store.get(a.id).asr_config["qwen_asr_api_provider"] == "qwen31_filetrans"
     assert store.get(b.id).asr_config["qwen_asr_api_provider"] == "groq"
 
 
@@ -253,7 +255,7 @@ def test_implicit_save_syncs_only_active_profile(isolated_main_window):
     reloaded_b = store.get(b.id)
     reloaded_a = store.get(a.id)
     assert reloaded_b.asr_config["qwen_asr_api_model"] == "groq-new-model"
-    assert reloaded_a.asr_config["qwen_asr_api_model"] == "qwen3-asr-flash", "A 不得被 B 的隐式保存波及"
+    assert reloaded_a.asr_config["qwen_asr_api_model"] == "qwen3.1-asr-flash", "A 不得被 B 的隐式保存波及"
     assert window._asr_config_dirty is False
 
 
@@ -291,7 +293,7 @@ def test_switch_prompt_flow_save_discard_cancel(isolated_main_window, monkeypatc
     assert window.current_project_profile.id == b.id
     assert window._asr_config_dirty is False
     # A 的存储已被"保存并切换"更新为当时界面值（默认 dashscope 快照）
-    assert store.get(a.id).asr_config["qwen_asr_api_provider"] == "dashscope"
+    assert store.get(a.id).asr_config["qwen_asr_api_provider"] == "qwen31_filetrans"
 
     # 3) 放弃修改：直接切，不写回 A
     a_index = combo.findData(a.id)
@@ -304,8 +306,8 @@ def test_switch_prompt_flow_save_discard_cancel(isolated_main_window, monkeypatc
     combo.setCurrentIndex(a_index)
     assert window.current_project_profile.id == a.id
     # 放弃=未提交编辑不进 A 的存储；界面已被 A 快照恢复
-    assert store.get(a.id).asr_config["qwen_asr_api_model"] == "qwen3-asr-flash"
-    assert window.qwen_asr_api_model.text() == "qwen3-asr-flash"
+    assert store.get(a.id).asr_config["qwen_asr_api_model"] == "qwen3.1-asr-flash"
+    assert window.qwen_asr_api_model.text() == "qwen3.1-asr-flash"
 
 
 def test_clean_switch_does_not_prompt(isolated_main_window, monkeypatch):

@@ -129,8 +129,44 @@ def test_model_agreement_normalizes_current_and_suppresses_low_confidence_priori
     assert "suspected_word" not in issue_types
     assert "low_confidence" not in issue_types
     assert len(candidates) == 1
-    assert {"Current", "主识别", "MOSS", "FireRed", "Qwen"} <= set(candidates[0].sources)
+    assert {"Current", "MOSS", "FireRed", "Qwen"} == set(candidates[0].sources)
     assert normalize_candidate_text("Ａ， B") == normalize_candidate_text("A, B")
+
+
+def test_confidence_availability_metadata_and_alignment_scores_are_not_asr_scores():
+    from twobyteasr.studio_qc import _confidence_values
+    cue = StudioCue('metadata', 0, 2000, '先撤', evidence_refs=['r'])
+    p = _project([cue], evidence={'r': dict(confidence=.62,
+        qwen_confidence=0., qwen_confidence_available=False,
+        confidence_available=False, confidence_version='0',
+        confidence_explanation='0', firered_alignment_confidence=0.)})
+    assert _confidence_values(p, cue) == [.62]
+    issues = SubtitleQCEngine().analyze(p).for_cue(cue.id)
+    low = [issue for issue in issues if issue.issue_type == 'low_confidence']
+    assert len(low) == 1 and low[0].evidence[0].confidence == .62
+
+
+def test_explicitly_available_qwen_zero_and_low_scores_remain_real_qc_evidence():
+    from twobyteasr.studio_qc import _confidence_values
+    for score in (0., .25):
+        cue = StudioCue('qwen', 0, 2000, '先撤', evidence_refs=['r'])
+        p = _project([cue], evidence={'r': dict(start_ms=0, end_ms=2000,
+            qwen_asr_text='先撤', qwen_confidence=score, qwen_confidence_available=True)})
+        assert _confidence_values(p, cue) == [score]
+        low = [issue for issue in SubtitleQCEngine().analyze(p).for_cue(cue.id)
+            if issue.issue_type == 'low_confidence']
+        assert len(low) == 1 and low[0].evidence[0].confidence == score
+
+
+def test_explicit_generic_zero_and_low_scores_are_not_treated_as_qwen_placeholders():
+    from twobyteasr.studio_qc import _confidence_values
+    for score in (0., .31):
+        cue = StudioCue('primary', 0, 2000, '先撤', evidence_refs=['r'])
+        p = _project([cue], evidence={'r': dict(start_ms=0, end_ms=2000,
+            moss_text='先撤', confidence=score, confidence_available=True)})
+        assert _confidence_values(p, cue) == [score]
+        assert any(issue.issue_type == 'low_confidence' and issue.evidence[0].confidence == score
+            for issue in SubtitleQCEngine().analyze(p).for_cue(cue.id))
 
 
 def test_review_candidates_group_unique_text_and_keep_current_adoptable():

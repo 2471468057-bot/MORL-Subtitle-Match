@@ -23,24 +23,23 @@ def pair():
     return project
 
 
-def test_real_handoff_uses_next_cue_frame_boundary_without_claiming_mono_vad_is_overlap():
+def test_short_source_overlap_is_retained_for_review_without_independent_speakers():
     project=pair()
     ends,audit=project_display_tail_plan(project)
-    assert ends=={'out':34033}
+    assert ends=={}
     record=audit['pairs_before'][0]
-    assert record['classification']=='handoff_boundary_error'
+    assert record['classification']=='source_overlap_unverified'
     assert not record['independently_verified']
-    assert record['boundary_source']=='incoming_cue_frame_boundary'
-    assert record['nearby_vad_boundaries']==[]
+    assert record['review_required']
     assert record['raw_labels']==['S03','S02'] and record['display_labels']==['S02','S01']
 
 
-def test_word_end_before_incoming_onset_is_preferred_to_guessing():
+def test_a_single_word_end_does_not_override_unverified_source_overlap():
     project=pair()
     project.asr_evidence['a']['words']=[dict(word='体质',start_ms=33900,end_ms=34000)]
     ends,audit=project_display_tail_plan(project)
-    assert ends['out']==34000
-    assert audit['pairs_before'][0]['boundary_source']=='word_end'
+    assert ends=={}
+    assert audit['pairs_before'][0]['classification']=='source_overlap_unverified'
 
 
 def test_independently_verified_simultaneous_speech_remains():
@@ -55,6 +54,8 @@ def test_independently_verified_simultaneous_speech_remains():
 def test_repair_undo_redo_save_and_autosave_keep_content_and_raw_evidence(tmp_path):
     app=QApplication.instance() or QApplication([])
     project=pair();evidence=copy.deepcopy(project.asr_evidence)
+    project.asr_evidence['a']['moss_end']=34.0
+    evidence=copy.deepcopy(project.asr_evidence)
     before=[(c.text,c.style_id,c.speaker_id) for c in project.cues]
     ends,audit=project_display_tail_plan(project)
     stack=QUndoStack();stack.push(RepairDisplayHandoffsCommand(project,ends,audit))

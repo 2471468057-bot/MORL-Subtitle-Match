@@ -7,8 +7,8 @@ from .playback_probe import measured
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QTextLayout
 from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem, QStyledItemDelegate
 
 from .studio_helpers import _format_ms
@@ -75,14 +75,16 @@ def _cue_status(project: SubtitleProject | None, cue: StudioCue) -> str:
     return "done" if cue.text != cue.original_text else "pending"
 
 
-def _cue_review_level(project: SubtitleProject | None, cue: StudioCue) -> str:
-    risks = cached_review_risks(project)
+def _cue_review_level(project: SubtitleProject | None, cue: StudioCue, risks: dict | None = None) -> str:
+    # Loops over every cue pass ``risks`` once: building it copies the whole
+    # risk table, so a per-cue call made a full-list pass O(n^2).
+    risks = cached_review_risks(project) if risks is None else risks
     row = risks.get(_source_key(cue), {}) if isinstance(risks, dict) else {}
     return str(row.get("level", "confident")) if isinstance(row, dict) else "confident"
 
 
-def _cue_review_score(project: SubtitleProject | None, cue: StudioCue) -> int:
-    risks = cached_review_risks(project)
+def _cue_review_score(project: SubtitleProject | None, cue: StudioCue, risks: dict | None = None) -> int:
+    risks = cached_review_risks(project) if risks is None else risks
     row = risks.get(_source_key(cue), {}) if isinstance(risks, dict) else {}
     try:
         return int(row.get("score", 0)) if isinstance(row, dict) else 0
@@ -126,6 +128,7 @@ class CueTableModel(QAbstractTableModel):
         self._view_cues = view
         needle = self.query.casefold().strip()
         scope = set(self.scope_ids) if self.scope_ids is not None else None
+        risks = cached_review_risks(self.project) if self.filter_status == "priority" else None
         for row, cue in enumerate(view):
             if scope is not None:
                 if cue.id not in scope:
@@ -135,7 +138,7 @@ class CueTableModel(QAbstractTableModel):
             status = _cue_status(self.project, cue)
             speaker = _speaker_name(self.project, cue.speaker_id)
             if self.filter_status == "priority":
-                if _cue_explicitly_confirmed(self.project, cue) or _cue_review_level(self.project, cue) == "confident":
+                if _cue_explicitly_confirmed(self.project, cue) or _cue_review_level(self.project, cue, risks) == "confident":
                     continue
             elif self.filter_status == "critical":
                 issues = cached_qc_result(self.project).for_cue(_source_key(cue))
@@ -207,10 +210,10 @@ class CueTableModel(QAbstractTableModel):
         for cue_id in changed:
             row = self.row_for_cue_id(cue_id)
             if row >= 0:
-                # Only the number-cell playback marker; no row selection,
-                # scrolling, reset, status/QC calculation or editor signal.
-                index = self.index(row, 0)
-                self.dataChanged.emit(index, index, [self.ActiveCueRole])
+                # Only the playback marker (number cell, or the reading cell
+                # in the two-line view); no row selection, scrolling,
+                # reset, status/QC calculation or editor signal.
+                self.dataChanged.emit(self.index(row, 0), self.index(row, 3), [self.ActiveCueRole])
 
     def refresh(self) -> None:
         self.beginResetModel()
@@ -323,14 +326,21 @@ class CueBadgeDelegate(QStyledItemDelegate):
             color = _speaker_color(index.model().project, cue.speaker_id)
             # 主题色描边药丸：彩色细边框 + 极淡彩底 + accent 协调对比色文字
             # （不用纯黑——亮 accent 配深化色、暗 accent 配提亮色，颜色更凸显）。
+            # 2026-10-07: text must contrast with the row, not with the
+            # speaker colour — dark themes get the (lifted) speaker colour on
+            # a visible wash, light themes a deepened one.
+            dark = timeline_palette().dark
             fill = QColor(color)
-            fill.setAlpha(46)
+            fill.setAlpha(62 if dark else 46)
             luminance = (
                 color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
             ) / 255.0
-            foreground = color.darker(168) if luminance > 0.5 else color.lighter(178)
+            if dark:
+                foreground = QColor(color) if luminance >= 0.55 else color.lighter(150)
+            else:
+                foreground = color.darker(160)
             border = QColor(color)
-            border.setAlpha(225)
+            border.setAlpha(200 if dark else 225)
             width = min(option.rect.width() - 8, max(52, QFontMetrics(option.font).horizontalAdvance(text) + 22))
         else:
             cue = index.model().cue_at(index.row())
@@ -380,3 +390,163 @@ class CueIndexDelegate(QStyledItemDelegate):
             painter.save()
             painter.fillRect(option.rect.left(), option.rect.top(), 3, option.rect.height(), QColor(GREEN))
             painter.restore()
+
+
+class CueReadingDelegate(QStyledItemDelegate):
+    """Two-line subtitle row (2026-10-09, M16, user: the list reads the
+    sentence first). Line one: start time, speaker, status; below it the
+    sentence itself, wrapped over up to ``LINES`` lines. Painted in the text
+    column; the model, selection and editing are the table's own."""
+
+    LINES = 2
+    PAD_X = 12
+    PAD_Y = 5
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout_cache: dict[tuple, list[str]] = {}
+
+    @staticmethod
+    def meta_font(base: QFont) -> QFont:
+        font = QFont(base)
+        font.setPixelSize(12)
+        return font
+
+    @staticmethod
+    def text_font(base: QFont) -> QFont:
+        font = QFont(base)
+        font.setPixelSize(15)
+        return font
+
+    @classmethod
+    def row_height(cls, base: QFont) -> int:
+        meta = QFontMetrics(cls.meta_font(base)).height()
+        text = QFontMetrics(cls.text_font(base)).lineSpacing()
+        return cls.PAD_Y * 2 + max(22, meta + 6) + 4 + cls.LINES * text
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(option.rect.width(), self.row_height(option.font))
+
+    def _text_rect(self, option) -> QRect:
+        meta = max(22, QFontMetrics(self.meta_font(option.font)).height() + 6)
+        rect = option.rect.adjusted(self.PAD_X, self.PAD_Y + meta + 4, -self.PAD_X, -self.PAD_Y)
+        return rect
+
+    def updateEditorGeometry(self, editor, option, index) -> None:
+        # Edit over the sentence lines, not over the whole two-line cell.
+        editor.setGeometry(self._text_rect(option))
+
+    def _wrapped(self, text: str, font: QFont, width: int) -> list[str]:
+        key = (text, font.key(), width)
+        lines = self._layout_cache.get(key)
+        if lines is not None:
+            return lines
+        metrics = QFontMetrics(font)
+        layout = QTextLayout(text, font)
+        layout.beginLayout()
+        lines = []
+        while True:
+            line = layout.createLine()
+            if not line.isValid():
+                break
+            line.setLineWidth(width)
+            lines.append(text[line.textStart():line.textStart() + line.textLength()])
+        layout.endLayout()
+        if len(lines) > self.LINES:
+            rest = "".join(lines[self.LINES - 1:])
+            lines = lines[:self.LINES - 1] + [metrics.elidedText(rest, Qt.TextElideMode.ElideRight, width)]
+        if len(self._layout_cache) > 4000:
+            self._layout_cache.clear()
+        self._layout_cache[key] = lines
+        return lines
+
+    def paint(self, painter, option, index) -> None:
+        model = index.model()
+        prepared = QStyleOptionViewItem(option)
+        self.initStyleOption(prepared, index)
+        prepared.text = ""
+        style = prepared.widget.style() if prepared.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, prepared, painter, prepared.widget)
+        cue = model.cue_at(index.row())
+        project = model.project
+        palette = timeline_palette()
+        rect = option.rect
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        if selected:
+            painter.fillRect(rect.left(), rect.top(), 3, rect.height(), QColor(GREEN))
+        meta_font = self.meta_font(option.font)
+        meta_metrics = QFontMetrics(meta_font)
+        top = rect.top() + self.PAD_Y
+        line_h = max(22, meta_metrics.height() + 6)
+        x = rect.left() + self.PAD_X
+        from .theme_manager import theme_key
+        from .ui_theme import theme_definition
+        theme = theme_definition(theme_key())
+        text_color = QColor(theme.text)
+        muted = QColor(theme.text_muted)
+        # start time
+        painter.setFont(meta_font)
+        painter.setPen(muted)
+        stamp = _format_ms(cue.start_ms)
+        painter.drawText(QRectF(x, top, meta_metrics.horizontalAdvance(stamp) + 2, line_h),
+                         int(Qt.AlignmentFlag.AlignVCenter), stamp)
+        x += meta_metrics.horizontalAdvance(stamp) + 10
+        # speaker chip (display name of the stable identity)
+        name = _speaker_name(project, cue.speaker_id)
+        color = _speaker_color(project, cue.speaker_id)
+        dark = palette.dark
+        chip_w = meta_metrics.horizontalAdvance(name) + 16
+        chip = QRectF(x, top + 2, chip_w, line_h - 4)
+        fill = QColor(color)
+        fill.setAlpha(62 if dark else 46)
+        border = QColor(color)
+        border.setAlpha(200 if dark else 225)
+        luminance = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114) / 255.0
+        foreground = (QColor(color) if luminance >= 0.55 else color.lighter(150)) if dark else color.darker(160)
+        painter.setPen(QPen(border, 1.2))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(chip, 5, 5)
+        painter.setPen(foreground)
+        painter.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), name)
+        x += chip_w + 8
+        # status (or review level in the priority filters)
+        status_colors = studio_status_colors()
+        if model.filter_status in {"priority", "critical"}:
+            high = _cue_review_level(project, cue) == "high"
+            fill_color, status_color = status_colors["issue" if high else "pending"]
+            label = tr({"high": "需要检查", "suggested": "建议确认"}.get(_cue_review_level(project, cue), "待确认"))
+        else:
+            status = _cue_status(project, cue)
+            fill_color, status_color = status_colors[status]
+            label = tr({"pending": "待确认", "issue": "有问题", "done": "已完成"}[status])
+        status_w = meta_metrics.horizontalAdvance(label) + 14
+        badge = QRectF(x, top + 2, status_w, line_h - 4)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(fill_color))
+        painter.drawRoundedRect(badge, 5, 5)
+        painter.setPen(QColor(status_color))
+        painter.drawText(badge, int(Qt.AlignmentFlag.AlignCenter), label)
+        # cue number and playback marker on the right of line one
+        number = str(model.source_row(index.row()) + 1)
+        right = rect.right() - self.PAD_X
+        painter.setPen(muted)
+        number_w = meta_metrics.horizontalAdvance(number) + 2
+        painter.drawText(QRectF(right - number_w, top, number_w, line_h),
+                         int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight), number)
+        if index.data(CueTableModel.ActiveCueRole):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(palette.playhead))
+            painter.drawEllipse(QRectF(right - number_w - 12, top + line_h / 2 - 3, 6, 6))
+        # the sentence, wrapped; elided only past the visible lines
+        text_font = self.text_font(option.font)
+        text_rect = self._text_rect(option)
+        painter.setFont(text_font)
+        painter.setPen(text_color)
+        spacing = QFontMetrics(text_font).lineSpacing()
+        for number_line, line in enumerate(self._wrapped(" ".join(str(cue.text).split()), text_font,
+                                                         max(40, text_rect.width()))):
+            painter.drawText(QRectF(text_rect.left(), text_rect.top() + number_line * spacing, text_rect.width(), spacing),
+                             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), line)
+        painter.restore()

@@ -54,7 +54,8 @@ from twobyteasr.i18n import apply_ui_language, current_language, translate
 from twobyteasr.llm_config import resolve_api_key
 from twobyteasr.model_storage import ModelStorageDialog
 from twobyteasr.processes import popen_hidden_subprocess, run_hidden_subprocess
-from twobyteasr.ui_navigation import NAVIGATION_QSS, WorkspaceNavigation
+from twobyteasr.ui_navigation import (NAVIGATION_QSS, WorkspaceNavigation, style_workspace_page_title,
+                                      style_workspace_sidebar_heading)
 from twobyteasr.ui_theme import WORKSHOP_TOKENS
 from twobyteasr.themed_icons import install_themed_icon
 from twobyteasr.ui_widgets import CategoryChip, PillLabel, StatusBadge
@@ -268,6 +269,7 @@ class WorkshopModel:
     icon_name: str = "fa5s.wave-square"
     icon_color: str = "#577d4d"
     icon_background: str = "#e4ebdd"
+    variants: tuple[str, ...] = ()
     # P1-10: explicit supported languages for badges (concise, user-facing)
     languages: tuple[str, ...] = ()  # e.g. ("中文",) or ("多语言", "中文", "English")
     # P1-11: soft "recommended for role" marker (subtle green border + small tag)
@@ -283,23 +285,12 @@ class WorkshopModel:
 
 
 MODELS = (
-    WorkshopModel('nemotron','speaker','Nemotron 3 Diarization','N3',
-        '独立说话人活动分析 · 可与本地或 API 主 ASR 组合','可选独立 Python 3.12 环境','约 397 MB 权重',
-        '最多 8 通道；本机实际模型验证待完成',
-        'nvidia/Nemotron-3-Diarization：统一 16kHz 分析音频，持续身份缓存与重叠活动。不会生成文字或干净音轨；匿名通道需要人工选择主播。Windows 实际推理及性能尚待验证。',(),
-        install_keys=('nemotron',),download_key='nemotron',runtime_roles=('speaker',),
-        asr_capabilities=('DIARIZATION',),adapter_bindings=(('speaker','nemotron'),),model_type='diarization'),
     WorkshopModel('spark_asr_v2','api','Spark-ASR-2.0','S2',
         '讯飞原生 WSS · 中英听写 V2','在线 · AppID + APIKey + APISecret','不占本地空间',
         '协议接入；真实服务验证待完成',
-        '单会话不超过 60 秒，长音频连续切块，动态修订替换。没有原生说话人能力；时间证据不足时由所选对齐模型补充。可组合 Nemotron。',(),
+        '单会话不超过 60 秒，长音频连续切块，动态修订替换。没有原生说话人能力；时间证据不足时由所选对齐模型补充。可保留已有字幕的说话人标签。',(),
         api_preset='spark_asr_v2',asr_capabilities=('ASR_TEXT',),adapter_bindings=(('primary','api'),('review','api'))),
-    WorkshopModel('qwen31_flash','api','Qwen Audio 3.1 ASR Flash','Q3',
-        '短音频 HTTP / SSE · 可选原生说话人','在线 · 百炼 Key','不占本地空间',
-        '协议接入；真实服务验证待完成',
-        'qwen-audio-3.1-asr-flash：每请求不超过 5 分钟，按 sentence_id 替换修订。固定词时间戳才用于对齐。跨请求说话人编号独立，选择 Nemotron 时不同时调用原生分离。',(),
-        api_preset='qwen31_flash',asr_capabilities=('ASR_TEXT','TIMESTAMP','DIARIZATION'),adapter_bindings=(('primary','api'),('review','api'))),
-    WorkshopModel('qwen31_filetrans','api','Qwen Audio 3.1 ASR Filetrans','QF',
+    WorkshopModel('qwen31_filetrans','api','Qwen Audio 3.1｜长音频转写','QF',
         '长文件异步 · 保存 task_id 后继续查询','在线 · 百炼 Key + 用户 OSS','不占本地空间',
         '协议接入；真实服务验证待完成',
         'qwen-audio-3.1-asr-flash-filetrans：单文件不超过 12 小时；原生分离按官方建议限 2 小时单声道。临时对象与签名链接由你的 OSS 提供，结果成功持久化后清理。超时不会自动重新付费提交。',(),
@@ -470,45 +461,6 @@ MODELS = (
         asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
     ),
     WorkshopModel(
-        "qwen_api",
-        "api",
-        "Qwen ASR API",
-        "API",
-        "无需下载 · 配置密钥后使用",
-        "在线 · 按量计费",
-        "不占本地空间",
-        "速度快 · 占用低",
-        "无需安装本地模型，适合希望快速开始的用户；需要联网、账户额度与自行配置 API Key。",
-        (("启动速度", 96), ("本地占用", 98), ("文字精度", 76)),
-        api_preset="dashscope",
-        logo_asset="qwen.png",
-        icon_name="fa5s.cloud",
-        icon_color="#ffffff",
-        icon_background="#59839a",
-        asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
-        adapter_bindings=(("primary", "api"), ("review", "api")),
-    ),
-    WorkshopModel(
-        "qwen_audio_asr_flash",
-        "api",
-        "Qwen-Audio-3.0-ASR-Flash",
-        "QA",
-        "阿里云 DashScope · 免下载即用",
-        "在线 · 需阿里云 API Key",
-        "不占本地空间",
-        "新一代 Qwen-Audio 转写 · 中文强",
-        "阿里云 Qwen-Audio 3.0 ASR Flash 在线转写：免本地安装，配置 DashScope API Key 即可使用，适合中文游戏实况的快速转写与复核。",
-        (("启动速度", 96), ("本地占用", 98), ("中文精度", 88)),
-        api_preset="dashscope_qwen_audio",
-        logo_asset="qwen.png",
-        icon_name="fa5s.cloud",
-        icon_color="#ffffff",
-        icon_background="#59839a",
-        languages=("中文", "多语言"),
-        asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
-        adapter_bindings=(("primary", "api"), ("review", "api")),
-    ),
-    WorkshopModel(
         "groq_api",
         "api",
         "Groq Whisper API",
@@ -549,44 +501,22 @@ MODELS = (
     WorkshopModel(
         # 三十七轮：OpenRouter JSON input_audio + timestamp_granularities(word)
         # 字级时间戳通道（三十八轮起是 OpenRouter 唯一通道，旧 multipart 已删）。
-        "mai_transcribe_2_word",
+        "mai_latest",
         "api",
-        "MAI-Transcribe-2",
+        "MAI 2.1｜待服务商验证",
         "MA",
-        "OpenRouter 字级时间戳 · 说话人分离",
+        "OpenRouter · 新版映射需验证",
         "在线 · 需 OpenRouter Key",
         "不占本地空间",
-        "字级时间戳 · 说话人分离",
-        "MAI-Transcribe-2 在线转写：请求片段和词时间戳及 Azure 说话人分离。说话人标签来自片段级判断，词标签继承所在片段；短应答和抢话仍需复核。每次请求的编号独立，跨请求身份需确认。也可选择完整 MOSS 时间轴提供说话人。",
-        (("启动速度", 95), ("时间戳精度", 98), ("通用性", 87)),
+        "模型与原生能力待当前服务商验证",
+        "MAI 2.1 的当前 OpenRouter 模型 ID 尚未获得服务商确认。旧 microsoft/mai-transcribe-2 不会冒充新版；请在配置中填写服务商确认的新版 ID。实际通道是否提供词时间戳、说话人和原样转写须逐项验证。",
+        (),
         api_preset="openrouter_word",
         logo_asset=None,
         icon_name="fa5b.microsoft",
         icon_color="#ffffff",
         icon_background="#0078d4",
         languages=("多语言",),
-        asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
-        adapter_bindings=(("primary", "api"), ("review", "api")),
-    ),
-    WorkshopModel(
-        # 四十轮：Qwen 录音文件识别（异步 filetrans）——整段上传用户 OSS
-        # 临时对象，预签名 HTTPS URL 提交；词级时间戳 + speaker_id。
-        "qwen_audio_filetrans",
-        "api",
-        "Qwen-Audio 3.0 Filetrans",
-        "QF",
-        "阿里云录音文件识别 · 字级时间戳 · 说话人分离",
-        "在线 · 需百炼 Key + 用户 OSS",
-        "不占本地空间",
-        "词级时间戳 · 说话人分离",
-        "Qwen-Audio-3.0-ASR-Flash-Filetrans：整段音频经你的 OSS 临时存储提交异步转写。单声道必须显式开启 diarization_enabled 才请求说话人分离；speaker_id 仅在本次请求内有效，缺失标签需确认。普通 Flash 的 channel_id 是音频通道，不代表说话人。结束后按设置清理临时对象。",
-        (("中文识别", 93), ("时间戳精度", 92), ("长音频", 97)),
-        api_preset="qwen_filetrans",
-        logo_asset=None,
-        icon_name="fa5s.cloud-upload-alt",
-        icon_color="#ffffff",
-        icon_background="#c46a2b",
-        languages=("中文", "English", "多语言"),
         asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
         adapter_bindings=(("primary", "api"), ("review", "api")),
     ),
@@ -772,7 +702,6 @@ def _browser_groups(model: WorkshopModel) -> tuple[str, ...]:
     produced the "api" role (三十二轮用户实录）。
     """
 
-    if model.key=='nemotron':return ('speaker',)
     if model.api_preset:
         return ("api",)
     return _model_roles(model)
@@ -784,7 +713,7 @@ def _api_combo_label(models: dict) -> tuple[str, bool]:
     from .ui import ASR_API_PRESETS
     from .llm_config import read_asr_api_key
 
-    provider = str(models.get("qwen_asr_api_provider", "dashscope") or "dashscope")
+    provider = str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans")
     model_id = str(models.get("qwen_asr_api_model", "") or "")
     preset = ASR_API_PRESETS.get(provider, {})
     # 组合卡窄列：短服务商名 + 模型 id 最后一段（microsoft/mai-transcribe-2 →
@@ -811,7 +740,7 @@ def _stars(score: int) -> str:
 
 
 CANONICAL_MODEL_ORDER = (
-    'nemotron','spark_asr_v2','qwen31_flash','qwen31_filetrans',
+    'spark_asr_v2','qwen31_filetrans',
     "moss",
     "firered",
     "qwen_local",
@@ -824,12 +753,9 @@ CANONICAL_MODEL_ORDER = (
     "whisper",
     "funasr_nano",
     "qwen_aligner",
-    "qwen_api",
-    "qwen_audio_asr_flash",
     "groq_api",
     "openai_api",
-    "mai_transcribe_2_word",
-    "qwen_audio_filetrans",
+    "mai_latest",
     "custom_asr_api",
 )
 
@@ -1609,76 +1535,20 @@ def installed_model_keys(root: Path) -> set[str]:
 
 
 def cleanup_orphan_download_temps(root: Path, active_download_keys: set[str] | None = None) -> int:
-    """P1-9: Background safe cleanup of orphan download temps.
-
-    - Never deletes anything belonging to keys currently being downloaded.
-    - Keeps resumable partials that have sidecar metadata (.download.json) or belong to known models.
-    - Only removes obvious orphans: zero-byte or very old stray .part / .tmp / .download.json
-      that do not map to any known model and have no resume metadata.
-    - Runs on a timer in the workshop; also called once at startup.
-    Returns number of files removed.
-    """
-    removed = 0
-    active = set(active_download_keys or set())
-    try:
-        lock = _load_lock(root)
-        known = set(lock.get("models", {}).keys())
-    except Exception:
-        known = set()
-
-    import time as _time
-    now = _time.time()
-    MAX_AGE = 24 * 3600  # keep fresh unknowns briefly; old pure orphans may go
-
-    # Only application-owned download staging; never scan arbitrary checkout
-    # tmp or installed model directories as though they were disposable caches.
+    """Maintain receipted staging only when enabled, idle and past policy TTL."""
+    # Receipt/state and OS lock establish ownership. Legacy unknown files are
+    # inventoried for manual review, rather than guessed from a .part suffix.
     from .runtime_paths import get_runtime_paths
-    mdir = get_runtime_paths().model_root / '.downloads'
-    roots = [mdir] if mdir.is_dir() else []
-
-    for base in roots:
-        for p in list(base.rglob("*")):
-            if not p.is_file():
-                continue
-            n = p.name.lower()
-            if not (n.endswith(".part") or ".part." in n or n.endswith(".tmp") or n.endswith(".download.json")):
-                continue
-            # Determine owning model key from path under models/
-            model_key = ""
-            try:
-                rel = p.relative_to(mdir)
-                if rel.parts:
-                    top = rel.parts[0]
-                    if top in known:
-                        model_key = top
-            except Exception:
-                pass
-
-            if model_key and model_key in active:
-                continue  # do not touch active download tree
-
-            # If it has resume sidecar metadata next to it, keep (explicit resumable)
-            has_meta = any(x.is_file() for x in p.parent.glob("*.download.json"))
-            if has_meta:
-                continue
-
-            # Known model partials are precious for later resume even if not active now
-            if model_key and model_key in known:
-                continue
-
-            # Orphan heuristics: zero size, or unknown + old
-            try:
-                size = p.stat().st_size
-                age = now - p.stat().st_mtime
-            except Exception:
-                size, age = 0, 0
-
-            if size == 0 or (not model_key and age > MAX_AGE):
-                try:
-                    p.unlink()
-                    removed += 1
-                except Exception:
-                    pass
+    from .model_download_cache import scan_download_transactions, cleanup_download_transaction
+    from .storage_service import StorageService
+    policy = StorageService().policy()
+    if not policy['enabled']: return 0
+    staging = get_runtime_paths().model_root / '.downloads'
+    removed = 0
+    for transaction in scan_download_transactions(staging):
+        result = cleanup_download_transaction(transaction, staging_root=staging,
+            active_keys=set(active_download_keys or ()), expired_only=True, resume_days=policy['resume_days'])
+        removed += len(result['removed'])
     return removed
 
 
@@ -1695,23 +1565,6 @@ def model_install_path(root: Path, download_key: str) -> Path | None:
     return record.installation_path if record.installation_path.is_dir() else None
 
 
-def move_model_to_trash(root: Path, download_key: str) -> Path:
-    """Recoverably uninstall one locked model without touching unrelated files."""
-    source = model_install_path(root, download_key)
-    if source is None or not source.exists():
-        raise RuntimeError("模型目录不存在或不在项目 models 目录内。")
-    trash_root = (root / "model_trash").resolve()
-    trash_root.mkdir(parents=True, exist_ok=True)
-    destination = trash_root / f"{download_key}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    shutil.move(str(source), str(destination))
-    manifest_path = root / "models" / ".twobyteasr-models.json"
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-        payload.get("models", {}).pop(str(download_key), None)
-        manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except (OSError, ValueError, TypeError):
-        pass
-    return destination
 
 
 WORKSHOP_QSS = NAVIGATION_QSS + """
@@ -2353,7 +2206,7 @@ QFrame#workshopModelCard[selected="true"]:hover {{
 }}
 QPushButton#workshopNav {{ color: {theme.text_secondary}; }}
 QPushButton#workshopNav:hover {{ background: {theme.control_hover}; color: {theme.text}; }}
-QPushButton#workshopNav:checked {{ background: {theme.control_checked}; color: {theme.accent}; }}
+QPushButton#workshopNav:checked {{ background: {theme.accent_tint}; color: {theme.text}; }}
 QPushButton#workshopTab,
 QPushButton#workshopAction,
 QPushButton#workshopSecondary {{
@@ -2362,9 +2215,11 @@ QPushButton#workshopSecondary {{
 QPushButton#workshopTab:hover,
 QPushButton#workshopAction:hover,
 QPushButton#workshopSecondary:hover {{
-    background: {theme.control_hover}; border-color: {theme.accent};
+    background: {theme.control_hover}; border-color: {theme.border_strong};
 }}
-QPushButton#workshopTab:checked,
+QPushButton#workshopTab:checked {{
+    background: {theme.accent_tint}; color: {theme.text}; border-color: {theme.accent};
+}}
 QPushButton#workshopPrimary {{
     background: {theme.accent}; color: {theme.text_on_accent}; border-color: {theme.accent};
 }}
@@ -2427,6 +2282,7 @@ def build_workshop_qss(theme=None) -> str:
 class ModelCard(QFrame):
     selected = Signal(str)
     action_requested = Signal(str)
+    download_requested = Signal(str)
     uninstall_requested = Signal(str)
     api_configure_requested = Signal(str)
 
@@ -2454,14 +2310,7 @@ class ModelCard(QFrame):
         self.monogram.setFixedSize(52, 52)
         self.monogram.setToolTip(model.name)
         logo_size = QSize(44, 44) if model.logo_asset else QSize(28, 28)
-        self.monogram.setPixmap(_model_logo(model, logo_size).pixmap(logo_size))
-        if not model.logo_asset:
-            # 品牌图标卡（如 MAI 的 fa5b.microsoft）需要实心底色块；
-            # QSS 的 workshopMonogram 默认透明，白线框在深色主题下发空
-            #（三十三轮 agy）。
-            self.monogram.setStyleSheet(
-                f"background: {model.icon_background}; border-radius: 10px;"
-            )
+        self._paint_monogram(logo_size)
         self._row.addWidget(self.monogram, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.info_host = QWidget(self)
@@ -2480,6 +2329,8 @@ class ModelCard(QFrame):
             self.title_label.setToolTip(model.name)
         else:
             self.title_label = ElideLabel(model.name)
+        bind_text(self.title_label, model.name)
+        bind_text(self.title_label, model.name, property='toolTip')
         self.title_label.setObjectName("workshopModelTitle")
         title_row.addWidget(self.title_label, 1)
         self.recommendation_badge = None
@@ -2491,7 +2342,6 @@ class ModelCard(QFrame):
                 self.recommendation_badge, 0, Qt.AlignmentFlag.AlignVCenter
             )
         text.addLayout(title_row)
-
         summary_row = QHBoxLayout()
         summary_row.setContentsMargins(0, 0, 0, 0)
         summary_row.setSpacing(7)
@@ -2587,9 +2437,14 @@ class ModelCard(QFrame):
         self.action.setMinimumWidth(82)
         self.action.clicked.connect(lambda: self.action_requested.emit(model.key))
         action_controls.addWidget(self.action)
+        self.download = bind_text(QPushButton(), "下载")
+        self.download.setObjectName("workshopAction")
+        self.download.clicked.connect(lambda: self.download_requested.emit(model.key))
+        self.download.setVisible(bool(model.variants))
+        action_controls.addWidget(self.download)
         self.uninstall = QPushButton("卸载")
         self.uninstall.setObjectName("workshopCardUninstall")
-        bind_text(self.uninstall, '把模型文件移入可恢复的 model_trash 目录', property='toolTip')
+        bind_text(self.uninstall, '永久删除已确认归属的模型文件；再次使用需要下载', property='toolTip')
         self.uninstall.clicked.connect(lambda: self.uninstall_requested.emit(model.key))
         self.uninstall.hide()
         action_controls.addWidget(self.uninstall)
@@ -2609,14 +2464,22 @@ class ModelCard(QFrame):
         action_box.addWidget(self.action_controls, 1)
         self._row.addWidget(self.action_host, 0)
         self._root.addWidget(self.metrics_host)
+        # Unavailable evidence never acquires a synthetic score. The shared
+        # card layout still owns the right-side controls for every model.
+        self.metrics_host.setVisible(any(
+            bool(_metric_evidence(model, kind).get("available"))
+            for kind in ("accuracy", "speed")
+        ))
+        self.info_host.setMinimumWidth(0)
+        self.info_host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         available_width = self.width()
         ancestor = self.parentWidget()
         while ancestor is not None:
-            if ancestor.objectName() == "qt_scrollarea_viewport":
-                available_width = min(available_width, ancestor.width())
+            if isinstance(ancestor,QScrollArea):
+                available_width = min(available_width, ancestor.viewport().width())
                 break
             ancestor = ancestor.parentWidget()
         self._apply_compact_layout(available_width < 760)
@@ -2639,10 +2502,6 @@ class ModelCard(QFrame):
             self.action_host.setMinimumWidth(108)
             self.action_host.setMaximumWidth(138)
             self.action.setMinimumWidth(92)
-        if self.model.key == 'nemotron':
-            # Both responsive branches must reserve room for the scope badge.
-            self.action_host.setMinimumWidth(175)
-            self.action_host.setMaximumWidth(190)
         self.accuracy_bar.apply_compact(compact)
         self.speed_bar.apply_compact(compact)
         self.updateGeometry()
@@ -2671,6 +2530,33 @@ class ModelCard(QFrame):
         if self.uninstall.isEnabled() != enabled:
             self.uninstall.setEnabled(enabled)
 
+    def _paint_monogram(self, logo_size=None):
+        """Vendor logos keep their own look; the generic placeholder (models
+        without a logo or a vendor colour) follows the active theme instead of
+        a light-green tile that glares on dark themes (2026-10-07)."""
+        model = self.model
+        logo_size = logo_size or (QSize(44, 44) if model.logo_asset else QSize(28, 28))
+        generic = not model.logo_asset and model.icon_background == WorkshopModel.icon_background
+        if generic:
+            from .theme_manager import theme_key
+            from .ui_theme import theme_definition
+            theme = theme_definition(theme_key())
+            self.monogram.setPixmap(_icon(model.icon_name, theme.accent_text).pixmap(logo_size))
+            self.monogram.setStyleSheet(
+                f"background: {theme.surface_elevated}; border: 1px solid {theme.border}; border-radius: 10px;")
+            return
+        self.monogram.setPixmap(_model_logo(model, logo_size).pixmap(logo_size))
+        if not model.logo_asset:
+            # 品牌图标卡（如 MAI 的 fa5b.microsoft）需要实心底色块；
+            # QSS 的 workshopMonogram 默认透明，白线框在深色主题下发空
+            #（三十三轮 agy）。
+            self.monogram.setStyleSheet(
+                f"background: {model.icon_background}; border-radius: 10px;"
+            )
+
+    def refresh_theme_palette(self):
+        self._paint_monogram()
+
     def set_state_badge(self, text: str, tone: str = "muted"):
         label = str(text or "").strip()
         normalized_tone = tone if tone in {"ready", "missing", "muted"} else "muted"
@@ -2696,6 +2582,14 @@ class ModelCard(QFrame):
         self.speed_bar.set_evidence(
             _metric_evidence(self.model, "speed", role, scene, api_model)
         )
+
+
+
+
+
+
+
+
 
 
 class _DownloadTitleBar(QFrame):
@@ -2830,16 +2724,6 @@ class ModelDownloadDialog(QDialog):
         source_row.addWidget(self.source_combo)
         source_row.addStretch(1)
         layout.addLayout(source_row)
-        self.nemotron_sample = ''
-        if self.download_keys == ('nemotron',):
-            sample_row = QHBoxLayout()
-            self.sample_button = QPushButton('选择本地人声验证样本')
-            self.sample_button.clicked.connect(self._choose_nemotron_sample)
-            sample_row.addWidget(self.sample_button)
-            self.sample_label = QLabel('可选：1–60 秒、16 kHz 单声道 WAV；仅本地处理')
-            self.sample_label.setWordWrap(True)
-            sample_row.addWidget(self.sample_label, 1)
-            layout.addLayout(sample_row)
         self.progress = QProgressBar()
         self.progress.setObjectName("workshopCapability")
         self.progress.setRange(0, 100)
@@ -2899,19 +2783,21 @@ class ModelDownloadDialog(QDialog):
         layout.addLayout(actions)
         apply_ui_language(self, language)
 
-    def _choose_nemotron_sample(self):
-        from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(self, tr('选择短人声 WAV（仅本机验证）'), '', 'WAV (*.wav)')
-        if path:
-            self.nemotron_sample = path
-            self.sample_label.setText(Path(path).name)
-            self.sample_label.setToolTip(path)
 
     def start(self):
         if self._finished_ok:
             self.close()
             return
         if self.process.state() != QProcess.ProcessState.NotRunning:
+            return
+        from .runtime_paths import get_runtime_paths, model_folder_name
+        from .model_associations import is_model_detached
+        paths = get_runtime_paths()
+        lock = _load_lock(self.root)
+        detached = [key for key in self.download_keys if is_model_detached(
+            paths.model_root / model_folder_name(str((lock.get('models', {}).get(key) or {}).get('path', key))))]
+        if detached:
+            self._finish_with_error(tr('模型外部目录已解除关联。请在模型存储管理中选择受管存储位置，或重新关联原目录后再下载；不会覆盖已解除关联的外部文件。'))
             return
         if sys.platform == 'darwin':
             if self.download_keys != ('sensevoice',):
@@ -2974,8 +2860,6 @@ class ModelDownloadDialog(QDialog):
         environment = QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONUTF8", "1")
         environment.insert("PYTHONIOENCODING", "utf-8")
-        if self.nemotron_sample:
-            environment.insert('TWOBYTEASR_NEMOTRON_SAMPLE', self.nemotron_sample)
         try:
             from twobyteasr.runtime_paths import MODEL_ROOT_ENV, get_runtime_paths
 
@@ -3126,9 +3010,15 @@ class ModelDownloadDialog(QDialog):
                 "runtime_ready": "Runtime 已就绪，正在验证 Adapter…",
                 "adapter_verifying": "Adapter 验证中…",
                 "ready": "模型已安装 · 可使用",
+                "downloading": "正在下载模型权重…",
+                "environment": "正在安装所选模型的独立依赖…",
+                "loading": "权重已校验，正在实际加载模型…",
+                "completed": "模型已安装 · 可使用" if payload.get('inference_success') else "权重完整 · 推理待验证",
             }.get(phase)
             if label:
                 self.progress_status.setText(label)
+            if phase in {'environment','loading'}:self.progress.setRange(0,0)
+            if phase=='completed' and payload.get('inference_success'):self._phase='ready'
             if payload.get('file'):
                 done, total = int(payload.get('downloaded', 0)), int(payload.get('total', 0))
                 speed = float(payload.get('bytes_per_second', 0)) / (1024**2)
@@ -3607,7 +3497,9 @@ class ModelTechnicalDialog(QWidget):
             langs = ", ".join(langs)
         elif not langs:
             langs = "—"
-        if model_is_online(self.model):
+        if profile.get("model_type"):
+            mtype = translate(str(profile["model_type"]), language)
+        elif model_is_online(self.model):
             mtype = translate("在线 ASR", language)
         elif self.model.key == "moss":
             mtype = translate("ASR · 说话人", language)
@@ -3669,18 +3561,17 @@ class ModelTechnicalDialog(QWidget):
         language_items = off.get("languages") or []
         if isinstance(language_items, str):
             language_items = [language_items]
-        language_lines = [
-            f"{translate('语言摘要', language)}: {off.get('language_summary') or '—'}",
-            f"{translate('语言列表', language)}: {', '.join(map(str, language_items)) or '—'}",
-            f"{translate('方言与口音', language)}: {off.get('dialects') or '—'}",
-            f"{translate('代码切换', language)}: {off.get('code_switching') or '—'}",
-            f"{translate('歌唱支持', language)}: {off.get('singing_support') or '—'}",
-            f"{translate('枚举状态', language)}: " + translate(
-                "官方已完整枚举" if off.get("languages_fully_enumerated") else "官方仅提供摘要或未完整枚举",
-                language,
-            ),
-            f"{tr('来源')}: {off.get('language_source') or off.get('repo') or '—'}",
-        ]
+        language_lines = [f"{translate(label, language)}: {value}" for label, value in (
+            ('语言摘要', off.get('language_summary')),
+            ('语言列表', ', '.join(map(str, language_items))),
+            ('方言与口音', off.get('dialects')),
+            ('代码切换', off.get('code_switching')),
+            ('歌唱支持', off.get('singing_support')),
+            ('来源', off.get('language_source') or off.get('repo')),
+        ) if value]
+        if "languages_fully_enumerated" in off:
+            language_lines.append(f"{translate('枚举状态', language)}: " + translate(
+                "官方已完整枚举" if off["languages_fully_enumerated"] else "官方仅提供摘要或未完整枚举", language))
         self._add_section(
             body,
             translate("支持语言与方言", language),
@@ -3736,7 +3627,8 @@ class ModelTechnicalDialog(QWidget):
         condition_text = "\n".join(condition_lines)
         if not condition_text:
             condition_text = translate("官方未单独提供可核对的测试条件。", language)
-        self._add_section(body, translate("Benchmark 测试条件", language), condition_text)
+        condition_heading = "Benchmark 测试条件"
+        self._add_section(body, translate(condition_heading, language), condition_text)
 
         principles = str(profile.get("principles") or "").strip()
         if principles:
@@ -3755,6 +3647,20 @@ class ModelTechnicalDialog(QWidget):
         resources = str(profile.get("resources") or "").strip()
         if resources:
             self._add_section(body, translate("硬件 / Runtime", language), resources)
+
+        for section in profile.get("sections") or []:
+            if isinstance(section, dict):
+                self._add_section(body, translate(str(section.get("heading") or ""), language),
+                                  str(section.get("body") or ""))
+
+        for document in profile.get("license_documents") or []:
+            if not isinstance(document, dict) or not document.get("path"):
+                continue
+            button = QPushButton("↗ " + translate(str(document.get("title") or "许可原文"), language))
+            button.setObjectName("workshopSecondary")
+            from .license_documents import show_document
+            button.clicked.connect(lambda _=False, path=str(document["path"]): show_document(self, path))
+            body.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
 
         # Keep product recommendation separate from official evidence. Unlike
         # datasets, metrics and hardware are never normalized into a score.
@@ -3776,13 +3682,7 @@ class ModelTechnicalDialog(QWidget):
             "\n" + translate("推荐理由", language) + "：" +
             str(reason or translate("2ByteASR 工作流选型评价，并非官方统一跑分。", language))
         )
-        self._add_section(
-            body,
-            translate("2ByteASR 评价", language),
-            eval_text,
-            tone="evaluation",
-        )
-
+        self._add_section(body, translate("2ByteASR 评价", language), eval_text, tone="evaluation")
         self._add_reference_index_section(body, language)
         self._add_scoring_basis_section(body, language)
 
@@ -3803,6 +3703,9 @@ class ModelTechnicalDialog(QWidget):
             urls.append(("ModelScope", str(profile.get("modelscope"))))
         if profile.get("paper"):
             urls.append((tr("论文"), str(profile.get("paper"))))
+        if profile.get("sources"):
+            urls = [(translate(str(item.get("title") or item.get("label") or "官方资料"), language), str(item["url"]))
+                    for item in profile["sources"] if isinstance(item, dict) and item.get("url")]
 
         if urls:
             self._add_links_section(
@@ -3867,6 +3770,8 @@ class ModelTechnicalDialog(QWidget):
 
     @staticmethod
     def _add_capability_section(layout: QVBoxLayout, heading: str, capabilities: list[str]):
+        if not capabilities:
+            return
         section = QWidget()
         section.setObjectName("technicalSection")
         box = QVBoxLayout(section)
@@ -4084,6 +3989,8 @@ class ModelTechnicalDialog(QWidget):
         heading: str,
         facts: list[tuple[str, str]],
     ):
+        if not facts:
+            return
         section = QWidget()
         section.setObjectName("technicalSection")
         box = QVBoxLayout(section)
@@ -4123,16 +4030,17 @@ class ModelTechnicalDialog(QWidget):
         label = QLabel(heading)
         label.setObjectName("technicalDetailsHeading")
         box.addWidget(label)
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        for text, url in urls:
-            button = QPushButton(f"↗ {text}")
-            button.setObjectName("workshopSecondary")
-            button.clicked.connect(lambda _=None, value=url: opener(value))
-            row.addWidget(button, 0)
-        row.addStretch(1)
-        box.addLayout(row)
+        for start in range(0, len(urls), 2):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            for text, url in urls[start:start + 2]:
+                button = QPushButton(f"↗ {text}")
+                button.setObjectName("workshopSecondary")
+                button.clicked.connect(lambda _=None, value=url: opener(value))
+                row.addWidget(button, 0)
+            row.addStretch(1)
+            box.addLayout(row)
         layout.addWidget(section)
 
     @staticmethod
@@ -4143,6 +4051,8 @@ class ModelTechnicalDialog(QWidget):
         *,
         tone: str = "plain",
     ):
+        if not str(heading or "").strip() or not str(text or "").strip():
+            return
         section = QFrame() if tone == "evaluation" else QWidget()
         section.setObjectName(
             "technicalEvaluation" if tone == "evaluation" else "technicalSection"
@@ -4177,7 +4087,8 @@ class ModelWorkshopPage(QWidget):
     api_preset_requested = Signal(str)
     api_configure_requested = Signal(str)
     models_refreshed = Signal()
-    optional_runtime_checked = Signal(object)
+    removal_finished = Signal(object)
+    removal_planned = Signal(object)
     mac_cpu_runtime_checked = Signal(object)
 
     def __init__(self, root: Path, runtime_settings: dict, parent=None):
@@ -4186,13 +4097,13 @@ class ModelWorkshopPage(QWidget):
         self.runtime_settings = runtime_settings
         self._installed: set[str] = set()
         self._cards: dict[str, ModelCard] = {}
+        self._removing: set[str] = set()
+        self.removal_finished.connect(self._removal_finished)
+        self.removal_planned.connect(self._confirm_model_removal)
         self._download_dialogs: list[ModelDownloadDialog] = []
         self._technical_cache: dict[str, ModelTechnicalDialog] = {}
         self._density_comfortable = None
         self._filter_signature = None
-        self._nemotron_probe_running=False
-        self._nemotron_probe_result=None
-        self.optional_runtime_checked.connect(self._optional_runtime_checked)
         self._mac_cpu_probe_running = False
         self._mac_cpu_probe_result = None
         self.mac_cpu_runtime_checked.connect(self._mac_cpu_runtime_checked)
@@ -4230,9 +4141,6 @@ class ModelWorkshopPage(QWidget):
     def refresh_theme_palette(self) -> None:
         self.setStyleSheet(build_workshop_qss())
 
-    def _optional_runtime_checked(self,result):
-        self._nemotron_probe_running=False;self._nemotron_probe_result=result
-        self.refresh()
 
     def _mac_cpu_runtime_checked(self, result):
         self._mac_cpu_probe_running = False
@@ -4351,6 +4259,7 @@ class ModelWorkshopPage(QWidget):
 
         sidebar_heading = QLabel("工作台")
         sidebar_heading.setObjectName("workshopMuted")
+        style_workspace_sidebar_heading(sidebar_heading)
         layout.addWidget(sidebar_heading)
         layout.addSpacing(4)
 
@@ -4377,7 +4286,7 @@ class ModelWorkshopPage(QWidget):
         title_row.addWidget(self.combo_title)
         title_row.addStretch(1)
         badge = QLabel("推荐")
-        badge.setObjectName("workshopBadge")
+        badge.setObjectName("workshopRecommendationBadge")
         title_row.addWidget(badge)
         combo_layout.addLayout(title_row)
         rule = QFrame()
@@ -4390,7 +4299,6 @@ class ModelWorkshopPage(QWidget):
             ("primary", "主力转写", "MOSS"),
             ("timeline", "字幕时间轴", "FireRed"),
             ("review", "文字复核", "Qwen3-ASR"),
-            ("speaker", "说话人区分", "已关闭"),
         ):
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -4453,7 +4361,9 @@ class ModelWorkshopPage(QWidget):
             "paraformer": "paraformer",
             "funasr_nano": "funasr_nano",
             "glm_asr_nano": "glm_asr_nano",
-            "api": "qwen_api",
+            "api": next((m.key for m in MODELS if m.api_preset ==
+                         self.runtime_settings.get("models", {}).get("qwen_asr_api_provider", "qwen31_filetrans")),
+                        "custom_asr_api"),
         }.get(str(backend))
         self._set_role("api" if backend == "api" else "primary")
         if key in self._cards:
@@ -4471,6 +4381,7 @@ class ModelWorkshopPage(QWidget):
         title_box = QVBoxLayout()
         title = QLabel("模型工坊")
         title.setObjectName("workshopPageTitle")
+        style_workspace_page_title(title)
         self.page_title = title
         title_box.addWidget(title)
         self.role_subtitle = QLabel("按角色组合识别能力；每个角色都可替换、关闭或改用在线 API。")
@@ -4523,7 +4434,7 @@ class ModelWorkshopPage(QWidget):
         tabs.setSpacing(7)
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
-        for text, role in (("主力转写", "primary"), ("字幕时间轴", "timeline"), ("文字复核", "review"), ("说话人", "speaker"), ("在线 API", "api")):
+        for text, role in (("主力转写", "primary"), ("字幕时间轴", "timeline"), ("文字复核", "review"), ("在线 API", "api")):
             button = QPushButton(text)
             button.setObjectName("workshopTab")
             button.setCheckable(True)
@@ -4650,6 +4561,7 @@ class ModelWorkshopPage(QWidget):
             card = ModelCard(model)
             card.selected.connect(self._select_model)
             card.action_requested.connect(self._perform_action)
+            card.download_requested.connect(self._download_card)
             card.uninstall_requested.connect(self._uninstall_model)
             card.api_configure_requested.connect(self.api_configure_requested.emit)
             self._cards[model.key] = card
@@ -4776,7 +4688,7 @@ class ModelWorkshopPage(QWidget):
         self.detail_repair.setObjectName("workshopSecondary")
         self.detail_repair.clicked.connect(self._repair_selected)
         manage_row.addWidget(self.detail_repair)
-        self.detail_uninstall = QPushButton("卸载模型")
+        self.detail_uninstall = QPushButton("永久删除模型文件")
         self.detail_uninstall.setObjectName("workshopSecondary")
         self.detail_uninstall.clicked.connect(self._uninstall_selected)
         manage_row.addWidget(self.detail_uninstall)
@@ -4888,12 +4800,8 @@ class ModelWorkshopPage(QWidget):
             card.action.setText(translate(text, language))
             card.action.setEnabled(enabled)
             card.set_selected(state == "selected")
-            manageable = bool(
-                model.download_key
-                and model.download_key in self._installed
-                and state in {"downloaded", "installed", "selected"}
-            )
-            card.set_uninstall_available(manageable, state != "selected")
+            manageable = self._has_managed_local_files(model)
+            card.set_uninstall_available(manageable, not self._model_is_current(model) and key not in self._removing)
             if model.api_preset:
                 ready = state in {"configured", "selected"}
                 card.set_state_badge(
@@ -4916,7 +4824,7 @@ class ModelWorkshopPage(QWidget):
                 if state=='load_failed':badge_text='文件已校验 · 加载未通过'
                 if state=='partial':badge_text='权重不完整'
                 if state=='unreadable':badge_text='目录无法读取'
-                if model.key=='nemotron' and state=='selected':badge_text='当前方案已启用 ✓'
+                if state=='platform_unverified':badge_text='当前平台未验证'
                 card.set_state_badge(
                     translate(badge_text, language),
                     "ready"
@@ -4927,6 +4835,17 @@ class ModelWorkshopPage(QWidget):
         self._refresh_detail()
         self.models_refreshed.emit()
 
+
+    def _model_is_current(self, model: WorkshopModel) -> bool:
+        return model.key in self._current_model_keys()
+
+    def _download_card(self, key: str):
+        if key in self._cards:
+            self._view_model(key)
+            self._download(self._cards[key].model)
+
+
+
     def set_health(self, installed_count: int, total_count: int):
         missing = max(0, int(total_count) - int(installed_count))
         (bind_text(self.health_summary, f'Installed {installed_count} · Not installed {missing}') if current_language() == 'en' else bind_text(self.health_summary, '已安装 {value0} · 未安装 {value1}', value0=installed_count, value1=missing))
@@ -4934,9 +4853,6 @@ class ModelWorkshopPage(QWidget):
     def _current_model_keys(self) -> set[str]:
         models = self.runtime_settings.get("models", {})
         current: set[str] = set()
-        from .speaker_strategy import resolve
-        if resolve(self.runtime_settings) == 'nemotron':
-            current.add('nemotron')
         selected = {
             "primary": str(models.get("primary_asr_backend", "moss")),
             "timeline": str(models.get("firered_asr_backend", "local")),
@@ -4964,10 +4880,16 @@ class ModelWorkshopPage(QWidget):
 
     def _available_count(self) -> int:
         return sum(
-            self._model_state(model) in {"installed", "selected", "configured"}
+            self._model_state(self._cards[model.key].model) in {"installed", "selected", "configured"}
             for model in MODELS
             if model.available and model.runtime_available
         )
+
+    def _has_managed_local_files(self, model: WorkshopModel) -> bool:
+        if not model.download_key:return False
+        record=self._registry.record(model.download_key) if self._registry else None
+        return bool(model.download_key in self._installed or
+                    (record and record.installation_path.exists()))
 
     def _model_state(self, model: WorkshopModel, role: str | None = None) -> str:
         role = role or self.browser_role
@@ -4986,32 +4908,10 @@ class ModelWorkshopPage(QWidget):
             return 'unreadable'
         if any(record and record.health.value in {'PARTIAL', 'CORRUPT'} for record in records):
             return 'partial'
-        if model.key=='nemotron':
-            if 'nemotron' not in self._installed:return 'missing'
-            from .environment import fast_preflight
-            check=fast_preflight('nemotron')
-            if check is None:
-                if self._nemotron_probe_result is not None:check=self._nemotron_probe_result
-                elif not self._nemotron_probe_running:
-                    self._nemotron_probe_running=True
-                    def probe():
-                        from .environment import preflight
-                        result=preflight('nemotron')
-                        try:self.optional_runtime_checked.emit(result)
-                        except RuntimeError:pass
-                    threading.Thread(target=probe,daemon=True,name='nemotron-runtime-check').start()
-                if check is None:return 'checking'
-            if not check.ok:return 'runtime_missing'
-            from .runtime_registry import resolve_runtime_python
-            try:
-                ready=json.loads((Path(resolve_runtime_python('nemotron')).parent.parent/'nemotron-readiness.json').read_text('utf8'))
-            except (OSError,ValueError):ready={}
-            if not ready.get('model_loaded') or not ready.get('forward_verified'):return 'runtime_missing'
-            if not ready.get('inference_verified'):return 'inference_pending'
-            from .speaker_strategy import resolve
-            return 'selected' if resolve(self.runtime_settings)=='nemotron' else 'installed'
         if model.api_preset:
             from .llm_config import read_asr_api_key
+            if model.key == 'mai_latest' and self._api_model_for(model) in {'', 'microsoft/mai-transcribe-2'}:
+                return 'configure'
 
             configured = bool(
                 read_asr_api_key(
@@ -5039,7 +4939,7 @@ class ModelWorkshopPage(QWidget):
                 role_backend = models.get("qwen_asr_backend")
             active = (
                 role_backend == "api"
-                and models.get("qwen_asr_api_provider", "dashscope") == model.api_preset
+                and models.get("qwen_asr_api_provider", "qwen31_filetrans") == model.api_preset
             )
             if active and configured:
                 return "selected"
@@ -5093,15 +4993,13 @@ class ModelWorkshopPage(QWidget):
         )
 
     def _action_text(self, model: WorkshopModel, state: str) -> tuple[str, bool]:
+        if state=='platform_unverified':return '当前平台未验证',False
+        if model.key in self._removing: return '正在永久删除…', False
         if state == 'platform_unavailable':
             from .platform_macos import macos_copy
             return macos_copy('尚未适配 macOS', 'Not yet adapted to macOS', 'macOS 未対応'), False
         if state == 'partial': return '补齐缺失文件', True
         if state == 'unreadable': return '请检查目录权限', False
-        if model.key=='nemotron':
-            from .speaker_strategy import resolve
-            if resolve(self.runtime_settings)=='nemotron':return '停用',True
-            if state=='installed':return '用于当前方案',True
         if state=='checking':return '检查独立环境…',False
         if state=='runtime_missing':return '安装 / 修复独立环境',True
         if state=='inference_pending':return '选择样本验证推理',True
@@ -5205,7 +5103,6 @@ class ModelWorkshopPage(QWidget):
             "已安装" if primary_ready else "未安装",
             primary_ready,
         )
-
         if qwen_backend == "local":
             qwen_ready = "qwen_asr" in self._installed
             combo_values["review"] = ("Qwen3-ASR", "已安装" if qwen_ready else "未安装", qwen_ready)
@@ -5231,10 +5128,6 @@ class ModelWorkshopPage(QWidget):
             from .i18n import translate as _iw_translate, current_language as _iw_lang
             combo_values["review"] = ("Qwen3-ASR", _iw_translate("已关闭", _iw_lang()), False)
 
-        from .speaker_strategy import resolve, LABELS
-        speaker=resolve(self.runtime_settings)
-        speaker_ready = speaker != 'nemotron' or self._model_state(next(m for m in MODELS if m.key=='nemotron')) in {'selected','installed'}
-        combo_values['speaker']=(LABELS[speaker], '已关闭' if speaker=='single' else '已启用' if speaker_ready else '已选 · 需修复环境', speaker!='single' and speaker_ready)
         for key, (model_name, status, ready) in combo_values.items():
             self.combo_model_labels[key].setText(model_name)
             status_label = self.combo_status_labels[key]
@@ -5311,10 +5204,10 @@ class ModelWorkshopPage(QWidget):
         from .ui import ASR_API_PRESETS
         from .llm_config import read_asr_api_key
 
-        provider = str(models.get("qwen_asr_api_provider", "dashscope") or "dashscope")
+        provider = str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans")
         preset = ASR_API_PRESETS.get(provider, {})
         model_id = str(models.get("qwen_asr_api_model", "") or "")
-        (bind_text(label, '当前使用：{value0} · {value1}', value0=preset.get('label', provider), value1=model_id) if model_id else bind_text(label, '当前使用：{value0}', value0=preset.get('label', provider)))
+        (bind_text(label, '当前使用：{value0} · {value1}', value0=tr(preset.get('label', provider)), value1=model_id) if model_id else bind_text(label, '当前使用：{value0}', value0=tr(preset.get('label', provider))))
         del read_asr_api_key
 
     def _toggle_sort_filter(self):
@@ -5376,7 +5269,7 @@ class ModelWorkshopPage(QWidget):
         self._apply_filter()
 
     def _ordered_models(self):
-        models = list(MODELS)
+        models = [self._cards[m.key].model if m.key in self._cards else m for m in MODELS]
         if self._sort_mode == "size":
             models.sort(key=lambda item: (item.size, CANONICAL_MODEL_ORDER.index(item.key) if item.key in CANONICAL_MODEL_ORDER else 99))
         else:
@@ -5446,9 +5339,6 @@ class ModelWorkshopPage(QWidget):
         self._view_model(key)
         model = self._cards[key].model
         effective_role = role or self.browser_role
-        if model.key=='nemotron':
-            # Selecting a card is only detail focus. Its explicit action toggles.
-            return
         state = self._model_state(model, effective_role)
         if state in {"selected", "installed", "configured"}:
             self._request_model_selection(model, state, role=effective_role)
@@ -5475,21 +5365,18 @@ class ModelWorkshopPage(QWidget):
             "inference_pending": "模型已加载 · 人声推理待验证",
             "load_failed": "文件与运行库已准备 · 加载或设备验证未通过",
             "platform_unavailable": "尚未适配 macOS",
+            "platform_unverified": "当前平台未验证",
         }[state]
         if state == 'platform_unavailable':
             badge = self._action_text(model,state)[0]
         self.detail_badge.setText(translate(badge, language))
-        if model.key=='nemotron':
-            from .speaker_strategy import resolve
-            if resolve(self.runtime_settings)=='nemotron':
-                (bind_text(self.detail_badge, '当前方案已启用 ✓') if state == 'selected' else bind_text(self.detail_badge, '当前方案已选 · 需修复环境'))
         badge_tone = "ready" if state in {"selected", "installed", "configured"} else "missing"
         if state in {"downloaded", "downloading", "planned"}:
             badge_tone = "muted"
         self.detail_badge.setProperty("tone", badge_tone)
         self.detail_badge.style().unpolish(self.detail_badge)
         self.detail_badge.style().polish(self.detail_badge)
-        self.detail_title.setText(model.name)
+        bind_text(self.detail_title, model.name)
         is_online = model_is_online(model)
         size_heading = "本地磁盘占用" if is_online else "本地磁盘占用（预计）"
         size_value = "无需本地下载" if is_online else _install_size_label(model.size)
@@ -5498,8 +5385,6 @@ class ModelWorkshopPage(QWidget):
             f"{translate(size_value, language)}"
         )
         self.detail_description.setText(model_scene(model))
-        if model.key=='nemotron':
-            bind_text(self.detail_description, '将在下一次识别中分析谁在什么时候说话，不负责转写文字，也不会自动修改已有字幕。\n修改范围：当前方案；在途任务继续使用启动快照。')
         self.detail_task.setText(" · ".join(model_task_badges(model)))
         self.detail_workflow.setText(model_workflow(model))
         is_rec = bool(getattr(model, "recommended", False))
@@ -5535,7 +5420,17 @@ class ModelWorkshopPage(QWidget):
         self.detail_install.setText(compatibility)
         registry = getattr(self, '_registry', None)
         records = [registry.record(key) for key in model.install_keys] if registry else []
-        issues = [f'{r.installation_path}：' + '、'.join(r.missing_files) for r in records if r and r.missing_files]
+        issues = []
+        complete_issues = []
+        for record in records:
+            if not record or not record.missing_files: continue
+            missing = record.missing_files
+            summary = '、'.join(missing[:8])
+            if len(missing) > 8:
+                summary += str(tr('…另有 {count} 项（悬停查看完整路径与清单）', count=len(missing)-8))
+            issues.append(f'{record.installation_path}：' + summary)
+            complete_issues.append(str(record.installation_path)+'\n'+'\n'.join(missing))
+        self.detail_install.setToolTip('\n\n'.join(complete_issues))
         if issues:
             self.detail_install.setText(compatibility + '\n' + '\n'.join(issues))
         if registry and registry.error:
@@ -5550,15 +5445,11 @@ class ModelWorkshopPage(QWidget):
         self.detail_action.style().unpolish(self.detail_action)
         self.detail_action.style().polish(self.detail_action)
         self.detail_action.setEnabled(enabled)
-        manageable = bool(
-            model.download_key
-            and model.download_key in self._installed
-            and state in {"downloaded", "installed", "selected"}
-        )
+        manageable = self._has_managed_local_files(model)
         self.detail_repair.setVisible(bool(model.download_key))
-        self.detail_repair.setEnabled(manageable and state != "downloading")
+        self.detail_repair.setEnabled(manageable and state != "downloading" and model.key not in self._removing)
         self.detail_uninstall.setVisible(bool(model.download_key))
-        self.detail_uninstall.setEnabled(manageable and state != "selected")
+        self.detail_uninstall.setEnabled(manageable and not self._model_is_current(model) and model.key not in self._removing)
 
     def _perform_action(self, key: str, *, role: str | None = None):
         if key not in self._cards:
@@ -5572,11 +5463,6 @@ class ModelWorkshopPage(QWidget):
             # "使用/取消使用"都没有任何反应（三十四轮用户实录）。
             effective_role = "primary"
         state = self._model_state(model, effective_role)
-        if model.key=='nemotron':
-            from .speaker_strategy import resolve
-            if resolve(self.runtime_settings)=='nemotron' or state=='installed':
-                self.backend_requested.emit('speaker','single' if resolve(self.runtime_settings)=='nemotron' else 'nemotron')
-                return
         if state == "planned":
             return
         if state == "downloading":
@@ -5614,7 +5500,7 @@ class ModelWorkshopPage(QWidget):
             "review": "qwen_asr_backend",
         }[role]
         selected_backend = str(models.get(setting_key, ""))
-        selected_provider = str(models.get("qwen_asr_api_provider", "dashscope"))
+        selected_provider = str(models.get("qwen_asr_api_provider", "qwen31_filetrans"))
         for candidate in MODELS:
             if _adapter_backend(candidate, role) != selected_backend:
                 continue
@@ -5683,6 +5569,9 @@ class ModelWorkshopPage(QWidget):
         keys = tuple(dict.fromkeys(str(key) for key in download_keys if key))
         if not keys:
             return None
+        if any(card.model.download_key in keys for key, card in self._cards.items() if key in self._removing):
+            QMessageBox.information(self, tr('模型正在处理'), tr('请等待当前删除范围扫描或删除完成，再下载或修复。'))
+            return None
         for existing in self._download_dialogs:
             same_keys = (existing.download_keys == keys)
             running = (existing.process.state() != QProcess.ProcessState.NotRunning)
@@ -5741,32 +5630,158 @@ class ModelWorkshopPage(QWidget):
         model = self._cards[key].model
         if not model.download_key:
             return
-        if model.key in self._current_model_keys():
+        main = self._find_main_window()
+        if main and (getattr(main, '_run_in_progress', False) or
+                     (getattr(main, 'worker', None) is not None and main.worker.isRunning())):
+            QMessageBox.information(self, tr('任务正在运行'), tr('请先等待任务结束或正常取消任务，再永久删除模型。'))
+            return
+        if key in self._removing or self._active_download_dialog(model.download_key):
+            QMessageBox.information(self, tr('模型正在处理'), tr('请等待当前下载或删除完成。'))
+            return
+        if self._model_is_current(model):
             QMessageBox.information(
                 self,
                 tr('正在使用这个模型'),
                 tr('请先为当前角色选择另一个模型，再卸载。'),
             )
             return
-        answer = QMessageBox.question(
-            self,
-            tr('卸载模型'),
-            tr('确定卸载 {value0} 吗？\n\n文件会移动到项目的 model_trash 目录，可手动恢复。', value0=model.name),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
+        from .model_removal import plan_model_removal
+        self._removing.add(key)
+        self._cards[key].action.setEnabled(False)
+        self._cards[key].action.setText(tr('正在扫描删除范围…'))
+        def scan():
+            try: payload = (key, plan_model_removal(self.root, model.download_key), '')
+            except Exception as exc: payload = (key, None, str(exc))
+            try: self.removal_planned.emit(payload)
+            except RuntimeError: pass
+        threading.Thread(target=scan, daemon=True, name='model-removal-plan').start()
+
+    def _model_removal_busy(self, download_key):
+        main = self._find_main_window()
+        return bool((main and (getattr(main, '_run_in_progress', False) or
+                    (getattr(main, 'worker', None) is not None and main.worker.isRunning()))) or
+                    self._active_download_dialog(download_key))
+
+    def _confirm_model_removal(self, payload):
+        key, plan, error = payload
+        self._removing.discard(key)
+        self.refresh()
+        model = self._cards[key].model
+        from .model_removal import plan_model_removal, execute_removal
+        from .model_storage import format_bytes
+        if error:
+            QMessageBox.warning(self, tr('无法确定删除范围'), error)
+            return
+        if self._model_removal_busy(model.download_key) or self._model_is_current(model):
+            QMessageBox.information(self, tr('任务正在运行'), tr('请先等待任务结束或正常取消任务，再永久删除模型。'))
+            return
+        if plan.model_key != model.download_key:
+            QMessageBox.information(self, tr('模型选择已变化'), tr('请重新选择需要卸载的版本，再查看删除范围。'))
+            return
+        preview = '\n'.join(str(p.relative_to(plan.root)) if p != plan.root else tr('模型目录链接自身') for p in plan.paths[:8])
+        if len(plan.paths) > 8:
+            preview += '\n' + tr('…另有 {count} 项', count=len(plan.paths) - 8)
+        retained = '\n' + tr('保留 {count} 项共享或未登记文件。', count=len(plan.retained)) if plan.retained else ''
+        prompt = tr('永久删除 {name}？\n\n{path}\n\n相对此目录的清单：\n{preview}\n\n'
+                    '模型文件总逻辑大小 {actual}。\n'
+                    '删除清单：{count} 项，逻辑大小 {logical}。\n'
+                    '其中独占文件 {exclusive}；硬链接的实际空间由其他引用决定。{retained}\n\n'
+                    '不会移入回收站或备份目录。',
+                    name=model.name, path=str(plan.root), preview=preview, count=len(plan.paths), actual=format_bytes(plan.installed_bytes),
+                    logical=format_bytes(plan.logical_bytes), exclusive=format_bytes(plan.exclusive_bytes), retained=retained)
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowTitle(tr('永久删除模型文件'))
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(str(prompt) + '\n' + tr('再次使用需要下载。字幕工程、个人词库、配置和其他模型保持；共享运行环境不删除。'))
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.button(QMessageBox.StandardButton.Yes).setText(tr('永久删除模型文件'))
+        dialog.button(QMessageBox.StandardButton.No).setText(tr('取消'))
+        delete_external = None
+        if plan.mode == 'detach':
+            dialog.setWindowTitle(tr('解除外部模型关联'))
+            dialog.setText(tr('此模型来自手动关联的外部目录：\n{name}\n{path}\n模型逻辑大小 {size}。\n\n默认只解除关联，文件保留，预计释放 0 B。\n如要删除外部文件，请选择单独的永久删除操作并再次确认。',
+                              name=model.name, path=str(plan.root), size=format_bytes(plan.installed_bytes)))
+            dialog.button(QMessageBox.StandardButton.Yes).setText(tr('仅解除关联'))
+            delete_external = dialog.addButton(tr('永久删除外部模型文件…'), QMessageBox.ButtonRole.DestructiveRole)
+        elif plan.mode == 'unlink':
+            dialog.setText(tr('模型目录是链接：\n{name}\n{path}\n\n只移除链接，外部权重文件保持。预计释放 0 B；共享运行环境不删除。',
+                              name=model.name, path=str(plan.root)))
+            dialog.button(QMessageBox.StandardButton.Yes).setText(tr('仅解除关联'))
+        answer = dialog.exec()
+        if delete_external is not None and dialog.clickedButton() == delete_external:
+            try: explicit = plan_model_removal(self.root, model.download_key, allow_external_delete=True)
+            except Exception as exc:
+                QMessageBox.warning(self, tr('无法确定删除范围'), str(exc)); return
+            confirm = QMessageBox(self)
+            confirm.setWindowTitle(tr('永久删除外部模型文件'))
+            confirm.setTextFormat(Qt.TextFormat.PlainText)
+            confirm.setText(tr('永久删除外部模型 {name}？\n实际路径：{path}\n删除 {count} 项，逻辑大小 {logical}，预计独占大小 {exclusive}。\n保留 {retained} 项共享或未登记文件。\n删除后需要重新下载；不会删除字幕工程、词库、配置或共享运行环境。',
+                               name=model.name, path=str(explicit.root), count=len(explicit.paths),
+                               logical=format_bytes(explicit.logical_bytes), exclusive=format_bytes(explicit.exclusive_bytes), retained=len(explicit.retained)))
+            confirm.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            confirm.setDefaultButton(QMessageBox.StandardButton.No)
+            confirm.button(QMessageBox.StandardButton.Yes).setText(tr('永久删除外部模型文件'))
+            confirm.button(QMessageBox.StandardButton.No).setText(tr('取消'))
+            answer = confirm.exec()
+            plan = explicit
         if answer != QMessageBox.StandardButton.Yes:
             return
-        try:
-            destination = move_model_to_trash(self.root, model.download_key)
-        except Exception as exc:
-            QMessageBox.warning(self, tr('卸载失败'), str(exc))
+        if self._model_is_current(model):
+            QMessageBox.information(self, tr('正在使用这个模型'), tr('请先为当前角色选择另一个模型，再卸载。'))
             return
+        self._removing.add(key)
+        self._cards[key].action.setEnabled(False)
+        self._cards[key].action.setText(tr('正在永久删除…'))
+        def remove():
+            try:
+                from .asr import end_local_asr_session
+                result = execute_removal(plan, release=lambda: end_local_asr_session(force=True),
+                                         busy_check=lambda: self._model_removal_busy(model.download_key) or self._model_is_current(model))
+                payload = (key, result, '')
+            except Exception as exc:
+                payload = (key, None, str(exc))
+            try: self.removal_finished.emit(payload)
+            except RuntimeError: pass
+        threading.Thread(target=remove, daemon=False, name='model-permanent-removal').start()
+
+    def _removal_finished(self, payload):
+        from .model_storage import format_bytes
+        key, result, error = payload
+        self._removing.discard(key)
         self.refresh()
-        QMessageBox.information(self, tr('模型已卸载'), tr('已移动到：\n{value0}', value0=destination))
+        self.models_refreshed.emit()
+        if error:
+            QMessageBox.warning(self, tr('永久删除失败'), error)
+            return
+        if result.detached:
+            QMessageBox.information(self, tr('关联已解除'), tr('已解除此模型的关联，外部文件保持，释放 0 B。\n{path}', path='\n'.join(result.detached)))
+            return
+        message = str(tr('已永久删除 {count} 项，逻辑大小 {logical}。\n'
+                         '预计独占文件大小 {exclusive}（稀疏文件、共享或压缩文件可能更少）。\n'
+                         '本磁盘可用空间变化 {delta}（包含同期其他磁盘活动）。',
+                         count=len(result.removed), logical=format_bytes(result.logical_bytes),
+                         exclusive=format_bytes(result.exclusive_bytes), delta=(f'{result.disk_free_delta:+d} B' if result.disk_free_delta is not None else tr('未测量'))))
+        if result.failures:
+            message += '\n\n' + tr('未能删除：') + '\n' + '\n'.join(f'{p}: {why}' for p, why in result.failures.items())
+        if result.retained:
+            message += '\n\n' + tr('保留共享或未登记文件：') + '\n' + '\n'.join(result.retained[:15])
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Information if result.completed else QMessageBox.Icon.Warning)
+        dialog.setWindowTitle(tr('永久删除完成') if result.completed else tr('部分清理完成，仍有保留文件'))
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(message)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.button(QMessageBox.StandardButton.Ok).setText(tr('确定'))
+        retry = None
+        if result.failures:
+            retry = dialog.addButton(tr('重试未删除文件'), QMessageBox.ButtonRole.ActionRole)
+        dialog.exec()
+        if retry is not None and dialog.clickedButton() == retry:
+            QTimer.singleShot(0, lambda: self._uninstall_model(key))
 
     def _download_completed(self, dialog: ModelDownloadDialog, ok: bool, message: str):
-        self._nemotron_probe_result=None
         self._mac_cpu_probe_result=None
         from .environment import reset_preflight_cache
         from .runtime_registry import reset_runtime_registry_cache
@@ -5828,7 +5843,7 @@ class ModelWorkshopPage(QWidget):
                 host_parent = mw._modal_host.body
             except Exception:
                 host_parent = None
-        cache_key = (model.key, self.browser_role, self._benchmark_scene, self._api_model_for(model))
+        cache_key = (model.key, model.download_key, self.browser_role, self._benchmark_scene, self._api_model_for(model))
         content = self._technical_cache.get(cache_key)
         if content is None:
             content = ModelTechnicalDialog(
@@ -5948,7 +5963,7 @@ class ModelPickerPanel(QWidget):
         self.cards_layout = cards_layout
         cards_layout.setContentsMargins(0, 0, 0, 0)
         cards_layout.setSpacing(10)  # P0-2: consistent 8-12px spacing in picker too
-        by_key = {model.key: model for model in MODELS}
+        by_key = {key: card.model for key, card in self.controller._cards.items()}
         for key in CANONICAL_MODEL_ORDER:
             model = by_key.get(key)
             if model is None or self.role not in _model_roles(model):
@@ -5956,6 +5971,7 @@ class ModelPickerPanel(QWidget):
             card = ModelCard(model)
             card.selected.connect(self._select)
             card.action_requested.connect(self._perform_action)
+            card.download_requested.connect(self.controller._download_card)
             # 三十八轮：主页选择弹窗此前没接"配置"红链的信号——点了没有任何
             # 反应（工坊页有接，弹窗漏了）。转发给 controller 的同名信号，
             # 由 MainWindow 打开对应服务商的密钥窗口。
@@ -6013,13 +6029,17 @@ class ModelPickerPanel(QWidget):
                 )
             else:
                 ready = state in {"selected", "installed", "downloaded"}
+                badge_text = {'partial': '权重不完整', 'unreadable': '目录无法读取',
+                              'runtime_missing': '权重已安装 · 环境未就绪',
+                              'checking': '检查运行库', 'inference_pending': '推理待验证',
+                              'load_failed': '权重已校验 · 加载未通过'}.get(state, "已安装" if ready else "未安装")
                 card.set_state_badge(
-                    translate({'partial': '权重不完整', 'unreadable': '目录无法读取',
-                               'runtime_missing': '权重已安装 · 环境未就绪',
-                               'checking': '检查运行库', 'inference_pending': '推理待验证',
-                               'load_failed': '权重已校验 · 加载未通过'}.get(state, "已安装" if ready else "未安装"), language),
+                    translate(badge_text, language),
                     "ready" if ready else "missing",
                 )
+        selected_key = self.controller._selected_model_key_for_role(self.role)
+        if selected_key in self.cards:
+            selected_name = self.cards[selected_key].model.name
         (bind_text(self.current_badge, f'Current: {selected_name}') if language == 'en' else bind_text(self.current_badge, '当前：{value0}', value0=selected_name))
         # Pin for this opening. Canceling a model must not move the button
         # away under the pointer; begin_session restores catalog order.

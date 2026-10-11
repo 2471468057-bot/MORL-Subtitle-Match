@@ -90,8 +90,8 @@ def api_env(monkeypatch):
     monkeypatch.setattr(asr_mod, "CLOUD_BATCH_WORKERS", 1)
     monkeypatch.setattr(asr_mod,'_ASR_API_THROTTLE',asr_mod._AsrApiThrottle())
     monkeypatch.setattr(subtitle_core,'RUNTIME_SETTINGS',{'models':{
-        'qwen_asr_api_provider':'dashscope','qwen_asr_api_protocol':'dashscope_multimodal',
-        'qwen_asr_api_model':'qwen3-asr-flash','qwen_asr_api_url':'https://example.test/asr'}})
+        'qwen_asr_api_provider':'custom','qwen_asr_api_protocol':'dashscope_multimodal',
+        'qwen_asr_api_model':'fixture-unrelated-deployment','qwen_asr_api_url':'https://example.test/asr'}})
     monkeypatch.setattr('twobyteasr.llm_config.read_asr_api_key',lambda *_:('fixture','test fixture'))
 
 

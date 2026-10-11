@@ -16,15 +16,17 @@ DEFAULT_SETTINGS = {
         "primary_asr_backend": "moss",
         "qwen_asr_backend": "api",
         "qwen_asr_model": "Qwen/Qwen3-ASR-1.7B",
-        "qwen_asr_api_provider": "dashscope",
-        "qwen_asr_api_protocol": "dashscope_multimodal",
-        "qwen_asr_api_model": "qwen3-asr-flash",
-        "qwen_asr_api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        "qwen_asr_api_provider": "qwen31_filetrans",
+        "qwen_asr_api_protocol": "dashscope_filetrans",
+        "qwen_asr_api_model": "qwen-audio-3.1-asr-flash-filetrans",
+        "qwen_asr_api_url": "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
         # 三十九轮：转写风格。clean=去语气词（字幕/纪要，默认）；verbatim=
         # 逐字保留嗯/那个/口误（合规/质检）。API 侧映射 MAI transcribeStyle，
         # 本地侧门控孤立语气词省略。
         "api_transcribe_style": "clean",
-        "speaker_source": "single",
+        "speaker_source": "moss",
+        "asr_vocabulary_id": "",
+        "asr_vocabulary_model": "",
         # 四十轮：OSS 临时音频中转（Qwen filetrans 需要公网 URL）。
         # 区域提供示例；存储桶必须由每位用户填写自己的实例。
         # AccessKey ID/Secret 不在这里——走 DPAPI（llm_config.save_oss_credentials）。
@@ -41,12 +43,16 @@ DEFAULT_SETTINGS = {
         "polish_model": "qwen3.7-flash-2026-07-15",
         "polish_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "polish_capabilities": ["text", "structured_output"],
+        "polish_json_mode": True,
+        "polish_structured_output": True,
         "group_transport": "openai_compatible",
         "group_protocol": "auto",
         "group_provider": "bailian",
         "group_model": "qwen3.7-flash-2026-07-15",
         "group_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "group_capabilities": ["text", "structured_output"],
+        "group_json_mode": True,
+        "group_structured_output": True,
         "ai_design_timeout_seconds": 150,
         "ai_design_cli_timeout_seconds": 300,
         "ai_design_wait_mode": "long30",
@@ -86,7 +92,8 @@ DEFAULT_SETTINGS = {
         "parallel_cloud_batches": True,
         "cloud_batch_workers": 4,
         "parallel_cpu_vad": True,
-        "moss_parallel_workers": 2,
+        # Compatibility keys retained; MOSS scheduling ignores both legacy values.
+        "moss_parallel_workers": 1,
         "moss_parallel_min_vram_gb": 14,
         "qwen_asr_batch_size": 8,
         "parallel_gpu_asr": True,
@@ -135,18 +142,44 @@ def project_settings_path(project_root=None):
 
 
 def _migrate_settings_into_stable_root(path):
-    """One-time copy of a legacy settings file into the stable root."""
-    try:
-        if path.is_file():
+    """Idempotently import intact legacy bytes; retain the source as recovery.
+
+    A partial write (for example ENOSPC) must never become a settings file that
+    the next startup mistakes for an empty/default configuration.
+    """
+    if path.is_file():
+        return
+    stable_root = stable_settings_root()
+    for candidate in _legacy_settings_candidates():
+        if not candidate.is_file() or candidate.parent == stable_root:
+            continue
+        temporary = None
+        try:
+            raw = candidate.read_bytes()
+            if not isinstance(json.loads(raw.decode("utf-8-sig")), dict):
+                raise ValueError("settings file root must be a JSON object")
+            stable_root.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(
+                prefix=f".{path.name}.legacy-", suffix=".tmp", dir=path.parent,
+            )
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Another startup may have completed the same import meanwhile.
+            if not path.exists():
+                os.replace(temporary, path)
             return
-        stable_root = stable_settings_root()
-        stable_root.mkdir(parents=True, exist_ok=True)
-        for candidate in _legacy_settings_candidates():
-            if candidate.is_file() and candidate.parent != stable_root:
-                path.write_bytes(candidate.read_bytes())
-                return
-    except OSError:
-        pass
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise RuntimeError(
+                f"无法迁移旧设置 {candidate} 到 {path}：{exc}。旧设置保留；未写入默认值。"
+            ) from exc
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
 
 
 def _merge_known_settings(defaults, payload):
@@ -180,7 +213,7 @@ def _merge_known_settings(defaults, payload):
                     # 活动 Provider 服务 id：空表示尚未显式选择（按旧字段推导）。
                     result[section][key] = str(value or "").strip()
                 elif section == "models" and key in {
-                    "group_model", "group_base_url", "polish_model", "polish_base_url"
+                    "group_model", "group_base_url", "polish_model", "polish_base_url", "qwen_asr_api_model", "asr_vocabulary_id", "asr_vocabulary_model"
                 } and isinstance(value, str):
                     # Empty is an explicit endpoint choice (including the CLI's
                     # default model), not permission to resurrect an API default.
@@ -219,7 +252,7 @@ def _merge_known_settings(defaults, payload):
     # selected_glossary / content_name 派生单元素列表，保持旧用户行为不变。
     supplied_glossary = payload.get("glossary", {}) if isinstance(payload, dict) else {}
     if isinstance(supplied_glossary, dict):
-        if not result["glossary"]["enabled_glossary_ids"]:
+        if "enabled_glossary_ids" not in supplied_glossary:
             legacy_selection = str(supplied_glossary.get("selected_glossary", "") or "").strip()
             if not legacy_selection:
                 legacy_selection = str(supplied_glossary.get("content_name", "") or "").strip()
@@ -300,25 +333,34 @@ def _merge_known_settings(defaults, payload):
             "models.qwen_asr_api_provider openrouter was migrated to openrouter_word"
             " (word-level timestamps channel)"
         )
-    # 四十一轮：filetrans 预设地址迁到用户推荐的工作台域名；只迁移仍等于
-    # 旧默认值的存量（用户自定义地址绝不覆盖）。URL 与 ui.ASR_API_PRESETS
-    # ["qwen_filetrans"]["url"] 保持同步（settings 不反向 import ui）。
-    legacy_filetrans_url = (
-        "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
-    )
-    workspace_filetrans_url = (
-        "https://llm-v4zdjopess7u3ohb.cn-beijing.maas.aliyuncs.com"
-        "/api/v1/services/audio/asr/transcription"
-    )
-    if (
-        result["models"].get("qwen_asr_api_provider") == "qwen_filetrans"
-        and str(result["models"].get("qwen_asr_api_url") or "") == legacy_filetrans_url
-    ):
-        result["models"]["qwen_asr_api_url"] = workspace_filetrans_url
-        warnings.append(
-            "models.qwen_asr_api_url filetrans endpoint was migrated to the"
-            " workspace domain (InvalidParameter.ParseError on the legacy domain)"
-        )
+    # Retired choices migrate only the cloud-ASR role. Existing endpoint,
+    # workspace, OSS, main ASR choice and provider-owned credentials stay owned.
+    # Idempotent recognition policy migration. Old speaker_enabled/single/
+    # independent-backend values cannot overwrite newly returned ASR labels.
+    # The chosen ASR itself is never changed.
+    from .speaker_strategy import resolve
+    result["models"]["speaker_source"] = resolve(result)
+    cloud = result["models"]
+    retired_qwen = {"qwen_filetrans", "qwen31_flash", "dashscope_qwen_audio"}
+    # Only this former preset/model pair is automatically upgraded. A user
+    # supplied deployment or an unrelated provider is never renamed here.
+    legacy_short = (cloud.get("qwen_asr_api_provider") == "dashscope"
+                    and cloud.get("qwen_asr_api_model") == "qwen3-asr-flash")
+    if cloud.get("qwen_asr_api_provider") in retired_qwen or legacy_short:
+        old_provider = cloud["qwen_asr_api_provider"]
+        cloud["qwen_asr_api_provider"] = "qwen31_filetrans"
+        cloud["qwen_asr_api_protocol"] = "dashscope_filetrans"
+        cloud["qwen_asr_api_model"] = "qwen-audio-3.1-asr-flash-filetrans"
+        # A short-audio multimodal endpoint cannot accept asynchronous jobs.
+        # Keep the same service host/workspace and only change its protocol path.
+        url = str(cloud.get("qwen_asr_api_url") or "")
+        suffix = "/api/v1/services/aigc/multimodal-generation/generation"
+        if url.endswith(suffix):
+            cloud["qwen_asr_api_url"] = url[:-len(suffix)] + "/api/v1/services/audio/asr/transcription"
+        warnings.append(f"cloud ASR {old_provider} migrated to Qwen Audio 3.1 Filetrans; endpoint ownership retained")
+    if cloud.get("qwen_asr_api_provider") in {"openrouter_word", "azure"} and cloud.get("qwen_asr_api_model") == "microsoft/mai-transcribe-2":
+        cloud["qwen_asr_api_model"] = ""
+        warnings.append("MAI 2.1 requires a provider-confirmed model ID; former 2 ID is not claimed as latest")
     if result["models"]["qwen_asr_api_protocol"] not in allowed_api_protocols:
         result["models"]["qwen_asr_api_protocol"] = defaults["models"]["qwen_asr_api_protocol"]
         warnings.append(
@@ -382,7 +424,7 @@ def load_runtime_settings(project_root=None):
     if not path.is_file():
         return copy.deepcopy(DEFAULT_SETTINGS), str(path), ["settings file was not found; defaults were used"]
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         return copy.deepcopy(DEFAULT_SETTINGS), str(path), [f"settings file could not be read: {exc}"]
     settings, warnings = _merge_known_settings(DEFAULT_SETTINGS, payload)

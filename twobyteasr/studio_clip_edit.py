@@ -1,8 +1,9 @@
 """Atomic video-lane edits over the existing graph and primary sequence.
 
-Times are integer project milliseconds. Source cues are never rewritten;
-their existing instance/lineage projection follows the edited primary graph.
-Independent lanes do not participate in a lane-local ripple.
+Times are integer project milliseconds. Captions are independent project-time
+objects; their immutable source archive and acoustic receipts remain available.
+A ripple resolves one range and applies it once to eligible video, linked audio,
+and unlocked caption tracks in one undo transaction.
 """
 from __future__ import annotations
 
@@ -57,9 +58,11 @@ def video_track_locked(project, track):
                                 and sequence_of(project).video_track_locked))
 
 
-def _working_copy(project):
+def _working_copy(project, *, independent=True):
     working = copy.copy(project)
     working.studio_state = copy.deepcopy(project.studio_state)
+    working.cues = copy.deepcopy(project.cues)
+    working.render_settings = copy.deepcopy(project.render_settings)
     working.video_tracks, working.audio_tracks, working.av_track_groups, sequence = _snapshot(project)
     # Older hydration may have materialized a clip ID independently from the
     # captured edit-sequence ID. Prove ownership BEFORE changing geometry;
@@ -79,6 +82,9 @@ def _working_copy(project):
                     *sequence.segment_lineage.get(clip.id, []), origin,
                     *sequence.segment_lineage.get(origin, [])]))
     working._edit_sequence_runtime = EditSequenceRuntime(sequence)
+    from .studio_caption_timeline import ensure_independent_captions
+    if independent:
+        ensure_independent_captions(working)
     return working
 
 
@@ -96,6 +102,12 @@ def _finalize_edit(project, working, label, *, page=None, playhead_after=None,
     sequence.validate()
     working._edit_sequence_runtime.reindex()
     sync_linked_av_contract(working)
+    try:
+        from .studio_transitions import reconcile_transitions
+    except ImportError:
+        pass
+    else:
+        reconcile_transitions(working)
     for original in project.video_tracks:
         after = track_by_id(working, original.id)
         if original != after:
@@ -113,13 +125,10 @@ def _finalize_edit(project, working, label, *, page=None, playhead_after=None,
             setattr(sequence, name, min(max(0, value), duration))
     if sequence.in_point_ms is not None and sequence.out_point_ms is not None and sequence.out_point_ms <= sequence.in_point_ms:
         sequence.in_point_ms = sequence.out_point_ms = None
-    locked = set(locked_speakers) | (set(page.timeline.locked_speakers) if page else set())
-    if locked and _locked_caption_ranges(project, locked) != _locked_caption_ranges(working, locked):
-        raise ValueError('关联字幕轨道已锁定，请先解锁；此次编辑未提交')
     return ClipEditCommand(project, working, label, page, playhead_after, changed)
 
 
-def playhead_edit_command(project, action, time_ms, *, page=None, locked_speakers=()):
+def playhead_edit_command(project, action, time_ms, *, page=None, locked_speakers=(), target_track_id=''):
     """Keyboard scope is all unlocked video lanes, independent of UI selection."""
     point = int(time_ms)
     tracks = [t for t in project.video_tracks if not video_track_locked(project, t)]
@@ -129,7 +138,7 @@ def playhead_edit_command(project, action, time_ms, *, page=None, locked_speaker
                    if c.timeline_in_ms < point < c.timeline_out_ms]
         if not targets:
             raise ValueError('播放头没有可切开的未锁定视频片段，或已在剪辑边界')
-        working = _working_copy(project)
+        working = _working_copy(project, independent=False)
         for track_id, clip_id in targets:
             _editable(project, track_id)
             track = track_by_id(working, track_id)
@@ -139,15 +148,18 @@ def playhead_edit_command(project, action, time_ms, *, page=None, locked_speaker
                               locked_speakers=locked_speakers)
     if action not in {'ripple_start', 'ripple_end'}:
         raise ValueError('未知播放头编辑操作')
-    covered = any(c.timeline_in_ms <= point < c.timeline_out_ms or
-                  (action == 'ripple_start' and c.timeline_in_ms < point == c.timeline_out_ms) for c in clips)
-    if not covered:
+    target_track_id = target_track_id or (getattr(page.timeline, 'selected_video_track_id', '') if page else '')
+    def covering(track):
+        return [c for c in track.clips if c.timeline_in_ms <= point < c.timeline_out_ms
+                or (action == 'ripple_start' and c.timeline_in_ms < point == c.timeline_out_ms)]
+    target = next((t for t in tracks if t.id == target_track_id and covering(t)), None)
+    if target is None:
+        target = next((t for t in reversed(tracks) if covering(t)), None)
+    if target is None:
         raise ValueError('播放头没有可编辑的视频片段；锁定轨道保持原位')
-    boundaries = {v for c in clips for v in (c.timeline_in_ms, c.timeline_out_ms)}
-    if action == 'ripple_start':
-        start, end = max((v for v in boundaries if v < point), default=point), point
-    else:
-        start, end = point, min((v for v in boundaries if v > point), default=point)
+    _editable(project, target.id)
+    clip = covering(target)[-1]
+    start, end = (clip.timeline_in_ms, point) if action == 'ripple_start' else (point, clip.timeline_out_ms)
     if end <= start:
         raise ValueError('播放头已在剪辑边界')
     return ripple_ranges_command(project, [(start, end)], page=page,
@@ -165,7 +177,7 @@ def merge_ranges(ranges):
     return merged
 
 
-def ripple_ranges_command(project, ranges, *, page=None, locked_speakers=(), label='压缩口播停顿'):
+def ripple_ranges_command(project, ranges, *, page=None, locked_speakers=(), label='压缩口播停顿', empty_project_gap=False):
     ranges = merge_ranges(ranges)
     if not ranges:
         raise ValueError('没有可删除的有效区间')
@@ -175,8 +187,12 @@ def ripple_ranges_command(project, ranges, *, page=None, locked_speakers=(), lab
         raise ValueError('视频轨道均已锁定，请先解锁')
     point = int(page.timeline.playhead_ms) if page else None
     sequence = sequence_of(working)
+    from .studio_caption_timeline import ripple_caption_range, locked_caption_speakers
+    locked = locked_caption_speakers(project, page, locked_speakers)
+    skipped = set()
     # Descending original-time intervals keep every yet-to-apply timestamp valid.
     for a, b in reversed(ranges):
+        skipped.update(ripple_caption_range(working, a, b, locked=locked))
         for track_id in track_ids:
             track = track_by_id(working, track_id)
             if not any(c.timeline_out_ms > a for c in track.clips):
@@ -193,6 +209,11 @@ def ripple_ranges_command(project, ranges, *, page=None, locked_speakers=(), lab
                 if clip.timeline_in_ms >= b:
                     _shift(clip, a - b)
             track.clips.sort(key=lambda c: (c.timeline_in_ms, c.id))
+        if empty_project_gap:
+            for track in working.audio_tracks:
+                for clip in track.clips:
+                    if clip.timeline_in_ms >= b:
+                        _shift(clip, a-b)
         def close_time(value):
             return value if value < a else a if value < b else value - (b - a)
         if point is not None:
@@ -202,8 +223,10 @@ def ripple_ranges_command(project, ranges, *, page=None, locked_speakers=(), lab
                 value = getattr(sequence, name)
                 if value is not None:
                     setattr(sequence, name, close_time(value))
-    return _finalize_edit(project, working, label, page=page, playhead_after=point,
-                          locked_speakers=locked_speakers)
+    command = _finalize_edit(project, working, label, page=page, playhead_after=point,
+                             locked_speakers=locked_speakers)
+    command.skipped_caption_speakers = frozenset(skipped)
+    return command
 
 
 def reassign_clips_command(project, source_track_id, target_track_id, clip_ids, *,
@@ -220,7 +243,7 @@ def reassign_clips_command(project, source_track_id, target_track_id, clip_ids, 
         raise ValueError('片段不能移动到负时间')
     working = _working_copy(project)
     source, target = track_by_id(working, source_track_id), track_by_id(working, target_track_id)
-    if source_track_id == primary_video_track_id(project) and target_track_id != source_track_id:
+    if working.render_settings.get('_cue_domain') != 'timeline' and source_track_id == primary_video_track_id(project) and target_track_id != source_track_id:
         # Record proven instance ownership before it leaves the legacy V1 view.
         working.studio_state['caption_bound_clip_ids'] = sorted(set(
             working.studio_state.get('caption_bound_clip_ids', [])) | ids)
@@ -373,19 +396,26 @@ class ClipEditCommand(QUndoCommand):
         super().__init__(label)
         self.project, self.page, self.changed = project, page, changed
         self.before, self.after = _snapshot(project), _snapshot(after)
-        self.before_bindings = copy.deepcopy(project.studio_state.get('caption_bound_clip_ids'))
-        self.after_bindings = copy.deepcopy(after.studio_state.get('caption_bound_clip_ids'))
+        self.before_cues, self.after_cues = copy.deepcopy(project.cues), copy.deepcopy(after.cues)
+        self.before_settings = copy.deepcopy(project.render_settings)
+        self.after_settings = copy.deepcopy(after.render_settings)
+        self.state_keys = {key for key in project.studio_state.keys() | after.studio_state.keys()
+                           if project.studio_state.get(key) != after.studio_state.get(key)}
+        self.before_state = {key: copy.deepcopy(project.studio_state[key]) for key in self.state_keys if key in project.studio_state}
+        self.after_state = {key: copy.deepcopy(after.studio_state[key]) for key in self.state_keys if key in after.studio_state}
+        self.skipped_caption_speakers = frozenset()
         self.selection = {name: copy.deepcopy(getattr(page.timeline, name)) for name in (
             'selected_video_track_id', 'selected_video_clip_id', 'selected_segment_id', 'selected_segment_ids') } if page else {}
         self.playhead_before = int(page.timeline.playhead_ms) if page else None
         self.playhead_after = playhead_after
 
-    def _apply(self, snapshot, playhead, bindings):
+    def _apply(self, snapshot, playhead, cues, settings, edited_state):
         project = self.project
         before_sequence = copy.deepcopy(sequence_of(project))
         dirty = (D.VIDEO_TRACKS | D.AUDIO_TRACKS | D.MEDIA_TIMING | D.VIDEO_COMPOSITION |
                  D.SEQUENCE_STRUCTURE | D.TIMELINE_INDEX | D.TIMELINE_PIXELS |
-                 D.CUE_TIMING | D.NATIVE_SUBTITLE | D.ADVANCED_PREVIEW | D.AUTOSAVE)
+                 D.CUE_MODEL | D.CUE_CONTENT | D.CUE_TIMING | D.PROJECT_METADATA | D.QC |
+                 D.NATIVE_SUBTITLE | D.ADVANCED_PREVIEW | D.AUTOSAVE)
         page = self.page
         if page:
             page._defer_clip_edit_seek = True
@@ -393,10 +423,13 @@ class ClipEditCommand(QUndoCommand):
             with state_for(project).transaction(project, action_id=self.text(), dirty=dirty):
                 videos, audios, groups, sequence = copy.deepcopy(snapshot)
                 project.video_tracks, project.audio_tracks, project.av_track_groups = videos, audios, groups
-                if bindings is None:
-                    project.studio_state.pop('caption_bound_clip_ids', None)
-                else:
-                    project.studio_state['caption_bound_clip_ids'] = copy.deepcopy(bindings)
+                project.cues = copy.deepcopy(cues)
+                project.render_settings = copy.deepcopy(settings)
+                for key in self.state_keys:
+                    if key in edited_state:
+                        project.studio_state[key] = copy.deepcopy(edited_state[key])
+                    else:
+                        project.studio_state.pop(key, None)
                 replace_runtime_sequence(project, sequence)
             if not state_for(project).has_subscribers and self.changed:
                 self.changed(before_sequence, copy.deepcopy(sequence_of(project)))
@@ -425,95 +458,77 @@ class ClipEditCommand(QUndoCommand):
             # graph/clock must be resubmitted even when the project time stays.
             if self.text() != '拆分视频片段':
                 page._seek(target / 1000.0)
+            if self.skipped_caption_speakers and hasattr(page, 'save_state'):
+                from .i18n import tr
+                page.save_state.setText(tr('部分字幕轨已锁定或关闭波纹同步，保持原位'))
 
     def redo(self):
-        self._apply(self.after, self.playhead_after, self.after_bindings)
+        self._apply(self.after, self.playhead_after, self.after_cues, self.after_settings, self.after_state)
 
     def undo(self):
-        self._apply(self.before, self.playhead_before, self.before_bindings)
+        self._apply(self.before, self.playhead_before, self.before_cues, self.before_settings, self.before_state)
 
 
 def clip_edit_command(project, track_id, action, *, clip_id='', start=None, end=None,
                       time_ms=None, page=None, locked_speakers=(), changed=None, clip_ids=()):
     """Preflight all linked locks and collisions before publishing one change."""
     original_track = _editable(project, track_id)
-    working = copy.copy(project)
-    working.video_tracks, working.audio_tracks, working.av_track_groups, sequence = _snapshot(project)
-    working._edit_sequence_runtime = EditSequenceRuntime(sequence)
+    if action in {'ripple_start', 'ripple_end', 'gap'}:
+        if action == 'gap':
+            gap = lane_gap(project, track_id, int(start))
+            if gap != (int(start), int(end)):
+                raise ValueError('所选空白已改变，请重新选择')
+            removed = gap
+            # A lane hole is not permission to erase content in another lane.
+            # Project ripple is atomic: an affected locked lane blocks it.
+            a, b = gap
+            for tracks in (project.video_tracks, project.audio_tracks):
+                for other in tracks:
+                    if any(c.timeline_in_ms < b and c.timeline_out_ms > a for c in other.clips):
+                        raise ValueError(f'{other.name or other.id} 在所选空隙内有素材，不能删除这段工程时间')
+                    locked = video_track_locked(project, other) if tracks is project.video_tracks else other.locked
+                    if locked and any(c.timeline_out_ms > a for c in other.clips):
+                        raise ValueError(f'{other.name or other.id} 已锁定，不能同步闭合工程空隙')
+            from .studio_caption_timeline import locked_caption_speakers
+            locks = locked_caption_speakers(project, page, locked_speakers)
+            if any(c.end_ms > a and c.speaker_id in locks for c in project.cues):
+                raise ValueError('受影响的字幕轨道已锁定，不能同步闭合工程空隙')
+            disabled=set(project.studio_state.get('caption_ripple_disabled_speakers', ()))
+            if any(c.end_ms>a and c.speaker_id in disabled for c in project.cues):
+                raise ValueError('受影响的字幕轨关闭了波纹同步，不能同步闭合工程空隙')
+        else:
+            target = next((c for c in original_track.clips if c.id == clip_id), None)
+            if target is None:
+                raise ValueError('目标片段已不存在，请重新选择')
+            point = int(time_ms)
+            if not target.timeline_in_ms <= point <= target.timeline_out_ms:
+                raise ValueError('播放头不在目标片段内，未波纹裁切')
+            removed = (target.timeline_in_ms, point) if action == 'ripple_start' else (point, target.timeline_out_ms)
+        return ripple_ranges_command(project, [removed], page=page, locked_speakers=locked_speakers,
+                                     empty_project_gap=action == 'gap',
+                                     label='删除轨道间隙' if action == 'gap' else ('Q 波纹裁切片段前部' if action == 'ripple_start' else 'W 波纹裁切片段后部'))
+    working = _working_copy(project, independent=action != 'split')
+    sequence = sequence_of(working)
     track = track_by_id(working, track_id)
     clip = next((c for c in track.clips if c.id == clip_id), None)
-    removed = None
     playhead_after = int(page.timeline.playhead_ms) if page else None
-    if action == 'gap':
-        gap = lane_gap(working, track_id, int(start))
-        if gap != (int(start), int(end)):
-            raise ValueError('所选空白已改变，请重新选择')
-        removed = gap
-    else:
-        if clip is None:
-            raise ValueError('目标片段已不存在，请重新选择')
-        if action == 'move':
-            if int(start) < 0:
-                raise ValueError('片段不能移动到负时间')
-            delta = int(start) - clip.timeline_in_ms
-            for item in track.clips:
-                if item.id in set(clip_ids) | {clip.id}:
-                    _shift(item, delta)
-        elif action == 'trim':
-            _trim(clip, start, end, asset_by_id(working, clip.asset_id).duration_ms)
-        elif action == 'split':
-            _split(working, track, clip, int(time_ms))
-        elif action in {'ripple_start', 'ripple_end'}:
-            point = int(time_ms)
-            if not clip.timeline_in_ms <= point <= clip.timeline_out_ms:
-                raise ValueError('播放头不在目标片段内，未波纹裁切')
-            removed = (clip.timeline_in_ms, point) if action == 'ripple_start' else (point, clip.timeline_out_ms)
-            if removed[0] == removed[1]:
-                raise ValueError('播放头已在剪辑边界')
-            if removed == (clip.timeline_in_ms, clip.timeline_out_ms):
-                track.clips.remove(clip)
-            else:
-                a, b = (point, clip.timeline_out_ms) if action == 'ripple_start' else (clip.timeline_in_ms, point)
-                _trim(clip, a, b, asset_by_id(working, clip.asset_id).duration_ms)
-        else:
-            raise ValueError(f'未知编辑操作：{action}')
-    if removed:
-        a, b = removed
+    if clip is None:
+        raise ValueError('目标片段已不存在，请重新选择')
+    if action == 'move':
+        if int(start) < 0:
+            raise ValueError('片段不能移动到负时间')
+        delta = int(start) - clip.timeline_in_ms
+        ids = set(clip_ids) | {clip.id}
         for item in track.clips:
-            if item.timeline_in_ms >= b:
-                _shift(item, a - b)
-        def close_time(value):
-            return value if value < a else a if value < b else value - (b - a)
-        if playhead_after is not None:
-            playhead_after = close_time(playhead_after)
-        # Range markers are project-time values; adjust for the edited primary
-        # only. Secondary-lane ripple does not retime unrelated project marks.
-        if track_id == primary_video_track_id(working):
-            for name in ('in_point_ms', 'out_point_ms'):
-                value = getattr(sequence, name)
-                if value is not None:
-                    setattr(sequence, name, close_time(value))
+            if item.id in ids:
+                _shift(item, delta)
+    elif action == 'trim':
+        _trim(clip, start, end, asset_by_id(working, clip.asset_id).duration_ms)
+    elif action == 'split':
+        _split(working, track, clip, int(time_ms))
+    else:
+        raise ValueError(f'未知编辑操作：{action}')
     track.clips.sort(key=lambda c: (c.timeline_in_ms, c.id))
-    _check_collisions(original_track, track)
-    if track_id == primary_video_track_id(working):
-        sequence.segments = [VideoSegment(c.id, asset_by_id(working, c.asset_id).canonical_source,
-            c.source_in_ms, c.source_out_ms, c.timeline_in_ms, c.timeline_out_ms) for c in track.clips]
-        sequence.empty_timeline = not sequence.segments
-        sequence.video_track_locked = track.locked
-    sequence.validate()
-    working._edit_sequence_runtime.reindex()
-    sync_linked_av_contract(working)
-    from .studio_edit_sequence import timeline_duration_ms
-    duration = timeline_duration_ms(working)
-    for name in ('in_point_ms', 'out_point_ms'):
-        value = getattr(sequence, name)
-        if value is not None:
-            setattr(sequence, name, min(max(0, value), duration))
-    if sequence.in_point_ms is not None and sequence.out_point_ms is not None and sequence.out_point_ms <= sequence.in_point_ms:
-        sequence.in_point_ms = sequence.out_point_ms = None
-    locked = set(locked_speakers) | (set(page.timeline.locked_speakers) if page else set())
-    if locked and _locked_caption_ranges(project, locked) != _locked_caption_ranges(working, locked):
-        raise ValueError('关联字幕轨道已锁定，请先解锁；此次编辑未提交')
-    labels = {'move':'移动视频片段', 'trim':'裁切视频边缘', 'split':'拆分视频片段',
-              'ripple_start':'Q 波纹裁切片段前部', 'ripple_end':'W 波纹裁切片段后部', 'gap':'删除轨道间隙'}
-    return ClipEditCommand(project, working, labels[action], page, playhead_after, changed)
+    labels = {'move':'移动视频片段', 'trim':'裁切视频边缘', 'split':'拆分视频片段'}
+    return _finalize_edit(project, working, labels[action], page=page, playhead_after=playhead_after,
+                          locked_speakers=locked_speakers, changed=changed)

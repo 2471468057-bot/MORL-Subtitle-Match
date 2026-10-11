@@ -17,6 +17,28 @@ from typing import Iterable
 
 
 BUILD_METADATA_FILENAME = "2byteasr_build.json"
+
+# The delivery and its fingerprint share this exclusion boundary. Historical
+# license records stay included; retired executables, installers and vendors do not.
+_RETIRED_DELIVERY_FILES = frozenset({
+    'optional_model_worker.py',
+    'requirements-diarizen.in', 'requirements-diarizen.lock',
+    'requirements-vibevoice.in', 'requirements-vibevoice.lock',
+    'scripts/prepare_optional_models.py',
+    'twobyteasr/optional_models.py',
+    'twobyteasr/optional_model_process.py',
+    'twobyteasr/optional_model_details.py',
+    'twobyteasr/optional_models_audit.py',
+    'twobyteasr/optional_models_headed_audit.py',
+})
+_RETIRED_DELIVERY_ROOTS = ('third_party/DiariZen/', 'third_party/VibeVoice/')
+
+
+def is_current_delivery_file(relative: str) -> bool:
+    normalized = relative.replace('\\', '/')
+    return (normalized not in _RETIRED_DELIVERY_FILES
+            and not normalized.startswith(_RETIRED_DELIVERY_ROOTS))
+
 _SOURCE_EXTENSIONS = {
     ".css",
     ".html",
@@ -74,7 +96,6 @@ _SOURCE_FILES = {
     "subtitle_core.py",
     "firered_aed_worker.py",
     "asr_api_worker.py",
-    "nemotron_worker.py",
     "requirements-main.txt",
     "qwen_asr_worker.py",
     "speaker_embed_worker.py",
@@ -143,6 +164,10 @@ def _version_payload(root: Path) -> dict[str, object]:
 
 def _is_source_file(relative: str) -> bool:
     normalized = relative.replace("\\", "/")
+    if not is_current_delivery_file(normalized):
+        return False
+    if normalized.startswith('licenses/optional-models/'):
+        return True
     if normalized.startswith('assets/cover-templates/'):
         return Path(normalized).suffix.lower() in {'.psd','.xcf','.png','.json','.md'}
     if normalized in _SOURCE_FILES or normalized in _RENDERER_SOURCE_FILES:

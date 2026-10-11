@@ -24,6 +24,7 @@ datas.append((str(build_metadata), "."))
 # Public bundles always ship factory defaults, never this machine's settings.
 sys.path.insert(0, str(ROOT))
 from twobyteasr.settings import DEFAULT_SETTINGS
+from twobyteasr.build_identity import is_current_delivery_file
 defaults_dir = ROOT / 'tmp' / 'frozen-defaults'
 defaults_dir.mkdir(parents=True, exist_ok=True)
 (defaults_dir / '2byteasr_settings.json').write_text(
@@ -46,7 +47,13 @@ for source, destination in (
 ):
     path = ROOT / source
     if path.exists():
-        datas.append((str(path), destination))
+        if source in {"scripts", "third_party"}:
+            # Also enforce retirement if a builder still has old source files.
+            for retained in sorted(path.rglob('*')):
+                if retained.is_file() and is_current_delivery_file(retained.relative_to(ROOT).as_posix()):
+                    datas.append((str(retained), retained.parent.relative_to(ROOT).as_posix()))
+        else:
+            datas.append((str(path), destination))
 
 # Only locally present wheels with published upstream checksums are bundled.
 # The manifest is part of the source/build identity and verified again at use.
@@ -82,10 +89,10 @@ for filename in (
     "firered_llm_worker.py",
     "firered_aed_worker.py",
     "firered_vad_worker.py",
-    "asr_api_worker.py", "nemotron_worker.py",
     "qwen_asr_worker.py",
     "glm_asr_worker.py",
     "sensevoice_worker.py",
+    "asr_api_worker.py",
     "extract_target_speaker.py",
     "speaker_embed_worker.py",
     "register_host_voiceprint.py",
@@ -108,7 +115,8 @@ if _probe_source.is_file():
 # chain). Ship the package as real sources so those imports resolve from the
 # install root; the frozen GUI itself keeps using the compiled archive.
 for _source_file in sorted((ROOT / "twobyteasr").glob("*.py")):
-    datas.append((str(_source_file), "twobyteasr"))
+    if is_current_delivery_file(_source_file.relative_to(ROOT).as_posix()):
+        datas.append((str(_source_file), "twobyteasr"))
 
 # P8C-R3.1: pyd-free copy of the MOSS worker for the packaged runtime. The
 # install root carries the GUI's cp310 .pyd files; a 3.12 role venv running
@@ -128,7 +136,7 @@ if _speaker_embed_worker.is_file():
 # P9A-R7: real local FireRed-AED and Qwen3-ASR launchers.  Keep copies in the
 # pyd-free workers directory as well as the install root because packaged
 # startup resolves their paths from both locations across older bundles.
-for _asr_worker in (ROOT / "firered_aed_worker.py", ROOT / "firered_vad_worker.py", ROOT / "qwen_asr_worker.py", ROOT / "sensevoice_worker.py", ROOT / "asr_api_worker.py", ROOT / "nemotron_worker.py"):
+for _asr_worker in (ROOT / "firered_aed_worker.py", ROOT / "firered_vad_worker.py", ROOT / "qwen_asr_worker.py", ROOT / "sensevoice_worker.py", ROOT / "asr_api_worker.py"):
     if _asr_worker.is_file():
         datas.append((str(_asr_worker), "."))
         datas.append((str(_asr_worker), "workers"))

@@ -18,6 +18,10 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
 
+class RemovedModelError(ValueError):
+    """A retired key must be rejected before runtime/cache preparation."""
+
+
 def save(path, value):
     path = Path(path)
     pending = path.with_suffix(path.suffix + '.pending')
@@ -31,13 +35,22 @@ def main():
     parser.add_argument('--uv', type=Path, required=True)
     parser.add_argument('--models', required=True)
     args = parser.parse_args()
+    requested = set(args.models.split(','))
+    if requested & {'diarizen', 'diarizen_embedding', 'vibevoice_1_5b', 'vibevoice_7b'}:
+        raise RemovedModelError('DiariZen / VibeVoice models have been removed; no installation or download was started.')
     root = args.root.resolve()
     sys.path.append(str(root))
     from twobyteasr.runtime_paths import user_data_root
     from twobyteasr.runtime_registry import register_runtime, load_registry
     managed = user_data_root() / 'runtimes'
+    # Always use this app's cache; a caller's global UV_CACHE_DIR never leaks in.
+    os.environ['UV_CACHE_DIR'] = str(managed / 'download-cache')
+    # Hardlinks survive cache unlinking; symbolic links would tie installed
+    # environments to a disposable package cache.
+    os.environ['UV_LINK_MODE'] = 'hardlink'
+    from twobyteasr.runtime_download_cache import mark_runtime_cache_state
+    mark_runtime_cache_state('installing')
     contract = json.loads((root / 'dependencies.lock.json').read_text('utf-8-sig'))
-    requested = set(args.models.split(','))
     def run(arguments):
         print('[运行库] '+subprocess.list2cmdline([str(x) for x in arguments]), flush=True)
         # The application's Windows process policy defaults unspecified stdio
@@ -68,7 +81,7 @@ def main():
                 major = int(result.stdout.strip().split('.')[0])
                 tag = contract['runtime']['cuda_wheel_modern' if major >= 12 else 'cuda_wheel']
     registry = load_registry()
-    main_models = requested - {'moss', 'firered_llm', 'nemotron', 'omni_asr_llm_7b'}
+    main_models = requested - {'moss', 'firered_llm', 'omni_asr_llm_7b'}
     # The same pinned main contract underlies standard adapters. Union only the
     # app-managed selection, and create a new environment when the set changes.
     previous = registry.get('main', {}).get('python_executable', '')
@@ -139,8 +152,19 @@ def main():
                                          creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         (runtime/'installed.lock.txt').write_bytes(frozen)
         save(receipt, dict(identity, prepared_at=time.time()))
+        from twobyteasr.model_runtime_cleanup import write_runtime_inventory
+        write_runtime_inventory(runtime)
         register_runtime(role, str(python), source='managed-model-bootstrap')
+    from twobyteasr.runtime_download_cache import mark_runtime_cache_ready
+    mark_runtime_cache_ready()
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except RemovedModelError:
+        raise
+    except BaseException:
+        from twobyteasr.runtime_download_cache import mark_runtime_cache_state
+        mark_runtime_cache_state('paused')
+        raise

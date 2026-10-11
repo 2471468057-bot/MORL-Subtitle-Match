@@ -19,17 +19,6 @@ $env:PYTHONIOENCODING = "utf-8"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $LockPath = Join-Path $ProjectRoot "dependencies.lock.json"
-# This backend bootstraps itself natively and owns only its private runtime.
-# Bypass generic Python orchestration and unrelated Qwen auto-inclusion.
-if ($Only.Trim() -eq 'nemotron' -and -not $VerifyOnly) {
-    $nativeSource = switch -Regex ($Source) {
-        '^(?i)hfmirror|hf[_-]?mirror$' { 'HF_MIRROR' }
-        '^(?i)huggingface|hf[_-]?official$' { 'HF_OFFICIAL' }
-        default { $Source.ToUpperInvariant() }
-    }
-    & (Join-Path $PSScriptRoot 'setup_nemotron_backend.ps1') -Source $nativeSource
-    exit $LASTEXITCODE
-}
 if ($env:2BYTEASR_MODEL_ROOT) {
     $ModelsRoot = $env:2BYTEASR_MODEL_ROOT
     New-Item -ItemType Directory -Path $ModelsRoot -Force | Out-Null
@@ -248,7 +237,7 @@ foreach ($property in $Lock.models.PSObject.Properties) {
 $allowedOnlyNames = @(
     "moss", "firered_vad", "firered_aed", "qwen_asr", "speaker_embedding",
     "qwen_aligner", "whisper_turbo", "sensevoice", "paraformer", "funasr_nano",
-    "firered_llm", "glm_asr_nano", "canary_qwen", "omni_asr_llm_7b", "nemotron"
+    "firered_llm", "glm_asr_nano", "canary_qwen", "omni_asr_llm_7b"
 )
 $onlyNames = @(
     $Only -split ',' |
@@ -318,7 +307,7 @@ if (-not $VerifyOnly) {
     $backendKeys = @($modelSpecs | Where-Object { -not $_.Spec.resource_only } | ForEach-Object { [string]$_.Name } | Select-Object -Unique)
     if ($backendKeys.Count -gt 0) {
         $hasRuntimeInstall = @($backendKeys | Where-Object {
-            $_ -notin @("firered_llm", "glm_asr_nano", "canary_qwen", "omni_asr_llm_7b", "nemotron")
+            $_ -notin @("firered_llm", "glm_asr_nano", "canary_qwen", "omni_asr_llm_7b")
         }).Count -gt 0
         if ($hasRuntimeInstall) {
             Write-Host '[2BYTEASR_PHASE] {"phase":"runtime_installing"}'

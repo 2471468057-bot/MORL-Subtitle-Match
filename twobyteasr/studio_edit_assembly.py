@@ -24,20 +24,40 @@ class StudioEditAssemblyMixin:
         self.frame_capture.save()
 
     def _mark_in(self) -> None:
-        project = self.project
-        if project is None:
-            return
-        from .project_range import set_range, range_points, text_input_focused
-        if text_input_focused(): return
-        set_range(project, int(self.timeline.playhead_ms), range_points(project)[1], self.undo_stack)
+        self._mark_range_point(0)
 
     def _mark_out(self) -> None:
+        self._mark_range_point(1)
+
+    def _mark_range_point(self, index: int) -> None:
+        """I / O at the playhead; the same key again at the same place clears
+        that point (2026-10-09, M16, user). One undo step either way."""
         project = self.project
         if project is None:
             return
-        from .project_range import set_range, range_points, text_input_focused
+        from .project_range import set_range, range_points, text_input_focused, clock_text, RANGE_TOGGLE_MS
         if text_input_focused(): return
-        set_range(project, range_points(project)[0], int(self.timeline.playhead_ms), self.undo_stack)
+        points = list(range_points(project))
+        here = int(self.timeline.playhead_ms)
+        cleared = points[index] is not None and abs(points[index] - here) <= RANGE_TOGGLE_MS
+        points[index] = None if cleared else here
+        set_range(project, points[0], points[1], self.undo_stack)
+        name = '入点' if index == 0 else '出点'
+        key = 'I' if index == 0 else 'O'
+        if cleared:
+            bind_text(self.save_state, '已取消{name}', name=tr(name))
+        else:
+            bind_text(self.save_state, '{name} {time} · 同一位置再按 {key} 取消', name=tr(name), time=clock_text(here), key=key)
+        self.timeline.update()
+
+    def _clear_range(self) -> None:
+        project = self.project
+        if project is None:
+            return
+        from .project_range import set_range
+        set_range(project, None, None, self.undo_stack)
+        bind_text(self.save_state, '已清除入出点范围')
+        self.timeline.update()
 
     def _add_io_candidate(self) -> None:
         project = self.project

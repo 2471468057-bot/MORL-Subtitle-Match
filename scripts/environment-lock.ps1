@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 function Get-EnvironmentContract {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("main", "moss", "firered_llm", "nemotron")]
+        [ValidateSet("main", "moss", "firered_llm")]
         [string]$Role,
         [string]$ProjectRoot = ""
     )
@@ -49,7 +49,7 @@ function Get-EnvironmentContract {
 function Get-EnvironmentDependency {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("main", "moss", "firered_llm", "nemotron")]
+        [ValidateSet("main", "moss", "firered_llm")]
         [string]$Role,
         [Parameter(Mandatory = $true)][string]$Name,
         [string]$ProjectRoot = ""
@@ -68,7 +68,7 @@ function Get-EnvironmentDependency {
 function Get-EnvironmentPackages {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("main", "moss", "firered_llm", "nemotron")]
+        [ValidateSet("main", "moss", "firered_llm")]
         [string]$Role,
         [string]$ProjectRoot = ""
     )

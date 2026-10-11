@@ -35,6 +35,10 @@ class TextOccurrence:
     span: tuple[int, int]
     reason: str = ""
     confidence: float = 1.0
+    default_selected: bool = True
+    source: str = ""
+    evidence: str = ""
+    missing_evidence: str = ""
 
 
 def cue_locked(cue: StudioCue, locked_ids: Iterable[str] | None = None) -> bool:
@@ -72,9 +76,11 @@ def scope_cue_ids(page, scope: str) -> list[str]:
     if project is None:
         return []
     cues = list(project.cues)
-    selected = list(page.selected_cue_ids()) if page is not None else []
-    current = getattr(page.session, "selected_cue_id", "") or (selected[0] if selected else "")
     lookup = {cue.id: cue for cue in cues}
+    from .studio_edit_sequence import source_cue_id_of
+    resolve = lambda value: str(value) if str(value) in lookup else source_cue_id_of(str(value))
+    selected = list(dict.fromkeys(resolve(v) for v in page.selected_cue_ids())) if page is not None else []
+    current = resolve(getattr(page.session, "selected_cue_id", "") or (selected[0] if selected else ""))
     if scope == SCOPE_CURRENT:
         return [current] if current in lookup else []
     if scope == SCOPE_SELECTED:
@@ -185,6 +191,20 @@ def values_from_occurrences(project: SubtitleProject, hits: Iterable[TextOccurre
         if text != cue.text:
             values[cue_id] = text
     return values
+
+
+def occurrence_conflicts(hits: Iterable[TextOccurrence]) -> bool:
+    """Competing proposals for one span require an explicit choice."""
+    grouped = {}
+    for hit in hits:
+        grouped.setdefault(hit.cue_id, []).append(hit)
+    for items in grouped.values():
+        ordered = sorted(items, key=lambda hit: hit.span)
+        for first, second in zip(ordered, ordered[1:]):
+            if (second.span[0] < first.span[1]
+                    or first.span[0] == second.span[0] == first.span[1]):
+                return True
+    return False
 
 
 _CN_PUNCT = str.maketrans({
@@ -321,8 +341,19 @@ def glossary_occurrences(
     *,
     skip_locked: bool = True,
     locked_ids: Iterable[str] | None = None,
+    glossary_ids: Iterable[str] | None = None,
+    snapshot=None,
 ) -> list[TextOccurrence]:
-    mapping = list(pairs if pairs is not None else glossary_pairs(project))
+    from .terminology import TermResolver, snapshot_glossaries, snapshot_from_pairs
+    import subtitle_core as legacy
+    identities = tuple(project.glossary_ids if glossary_ids is None else glossary_ids)
+    if snapshot is None:
+        snapshot = snapshot_from_pairs(pairs) if pairs is not None else snapshot_glossaries(legacy, identities)
+    resolver = TermResolver(snapshot)
+    from .content_scene import resolve_content_scene
+    from types import SimpleNamespace
+    scene = resolve_content_scene(SimpleNamespace(enable_domain_terms=bool(snapshot.libraries),
+        glossary_snapshot=snapshot, game_name=''), snapshot)
     wanted = set(cue_ids)
     hits: list[TextOccurrence] = []
     for cue in project.cues:
@@ -330,22 +361,10 @@ def glossary_occurrences(
             continue
         if skip_locked and cue_locked(cue, locked_ids):
             continue
-        for wrong, correct in mapping:
-            start = 0
-            text = cue.text
-            while True:
-                index = text.find(wrong, start)
-                if index < 0:
-                    break
-                hits.append(TextOccurrence(
-                    cue_id=cue.id,
-                    start_ms=cue.start_ms,
-                    original=wrong,
-                    replacement=correct,
-                    span=(index, index + len(wrong)),
-                    reason="词库标准化",
-                ))
-                start = index + max(1, len(wrong))
+        resolution = resolver.resolve(cue.text, scene=scene)
+        for hit in resolution.hits:
+            hits.append(TextOccurrence(cue.id, cue.start_ms, hit.source, hit.canonical,
+                                       (hit.start, hit.end), reason=hit.reason))
     return hits
 
 

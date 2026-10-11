@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .ui_theme import DEFAULT_THEME_KEY, THEMES, ThemeDefinition, theme_definition
+from .lazy_pages import existing_page
 
 
 def _trace_mark(label: str, start: float | None = None) -> float:
@@ -26,11 +27,21 @@ SETTINGS_APP = "2ByteASR"
 _volatile_theme_keys: dict[str, str] = {}
 
 
+_PARENT_CHANGE = QEvent.Type.ParentChange
+_SHOW = QEvent.Type.Show
+
+
 class _ThemeRootFilter(QObject):
     """Theme new independent windows before their first paint."""
 
     def eventFilter(self, widget, event):
-        if event.type() == QEvent.Type.ParentChange and isinstance(widget, QWidget):
+        # Installed on the application: every event passes through here. Read
+        # the type once (PySide builds an enum object per call) and leave
+        # immediately for the many events this filter does not handle.
+        event_type = event.type()
+        if event_type != _PARENT_CHANGE and event_type != _SHOW:
+            return False
+        if event_type == _PARENT_CHANGE and isinstance(widget, QWidget):
             if widget.parentWidget() is not None and not widget.isWindow():
                 previous = getattr(widget, "_theme_root_sheet", None)
                 if previous is not None:
@@ -41,7 +52,7 @@ class _ThemeRootFilter(QObject):
                         widget.setStyleSheet(getattr(widget, "_theme_root_local_sheet", ""))
                     del widget._theme_root_sheet
                     widget._theme_root_local_sheet = ""
-        if event.type() == QEvent.Type.Show and isinstance(widget, QWidget):
+        if event_type == _SHOW and isinstance(widget, QWidget):
             if getattr(widget, "_secondary_theme_surface", False):
                 from .studio_theme import refresh_secondary_surface_theme
                 refresh_secondary_surface_theme(widget)
@@ -59,9 +70,12 @@ class _ThemeRootFilter(QObject):
         # Polishing them with the entire application sheet, then stripping it
         # on ParentChange, cost hundreds of redundant native style passes.
         # Show still precedes first paint, when window ownership is settled.
-        if event.type() == QEvent.Type.Show and isinstance(widget, QWidget):
+        if event_type == _SHOW and isinstance(widget, QWidget):
             if widget.parentWidget() is None and widget.objectName() != "subtitleStudio":
                 self.apply_root(widget)
+            if widget.isWindow():
+                from .ui_zoom import window_shown
+                window_shown(widget)
         return False
 
     def apply_root(self, widget):
@@ -72,7 +86,9 @@ class _ThemeRootFilter(QObject):
         current = widget.styleSheet()
         if current != previous:
             widget._theme_root_local_sheet = current
-        combined = sheet + getattr(widget, "_theme_root_local_sheet", "")
+        # Interface zoom scales the window sheet's geometry (ui_zoom).
+        from .ui_zoom import scale_qss
+        combined = scale_qss(sheet + getattr(widget, "_theme_root_local_sheet", ""))
         if current != combined:
             widget._theme_root_busy = True
             started = time.perf_counter()
@@ -141,6 +157,22 @@ def _palette(theme: ThemeDefinition) -> QPalette:
 def _global_qss(theme: ThemeDefinition) -> str:
     """Override semantic surfaces while retaining existing component geometry."""
     from .design.tokens import WEIGHT_SCALE
+    from .ui_theme import blend_hex
+    rest, hover, edge = theme.role_wash
+    role_rules = "\n".join(
+        f'QFrame#recognitionRoleCard[role="{role}"] {{ background: {blend_hex(theme.surface, color, rest)};'
+        f' border: 1px solid {blend_hex(theme.surface, color, edge)}; border-radius: 14px; }}\n'
+        f'QFrame#recognitionRoleCard[role="{role}"]:hover {{ background: {blend_hex(theme.surface, color, hover)};'
+        f' border-color: {color}; }}\n'
+        f'QFrame#recognitionRoleCard[role="{role}"]:focus {{ border: 1px solid {theme.focus}; }}\n'
+        f'QFrame#recognitionRoleCard[role="{role}"] QLabel#recognitionRoleIcon {{ background: {color};'
+        f' color: {theme.on_vivid}; }}\n'
+        f'QFrame#recognitionRoleCard[role="{role}"] QLabel#recognitionRoleLabel {{ color: {color}; }}'
+        for role, color in theme.role_colors.items()
+    )
+    media_ready = blend_hex(theme.surface, theme.success, 0.16)
+    media_ready_edge = blend_hex(theme.surface, theme.success, 0.55)
+    media_empty_edge = blend_hex(theme.surface, theme.accent_text, 0.45)
     return f"""
 QMainWindow, QWidget#appRoot, QWidget#appContent, QStackedWidget,
 QStackedWidget > QWidget, QScrollArea, QAbstractScrollArea,
@@ -159,32 +191,42 @@ QFrame#dropTarget {{
 }}
 QLabel#dropOverlayTitle {{ color: {theme.text}; }}
 QLabel#dropOverlayHint {{ color: {theme.text_muted}; }}
-QFrame#recognitionRoleCard {{ background: {theme.surface_muted}; border-color: {theme.border}; }}
-QFrame#recognitionRoleCard[role="primary"] {{
-    background: {theme.accent_soft}; border: 2px solid {theme.primary_role};
+/* 2026-10-07: each recognition role has its own identity hue (blue / teal /
+   orchid, theme.role_colors) on a light wash, icon chip and role label, so the
+   plan reads as three distinct steps. Identity hues are never status colours:
+   readiness stays in the success/warning chips below. */
+QLabel#recognitionRoleLabel, QFrame#recognitionRoleCard[density="compact"] QLabel#recognitionRoleLabel,
+QFrame#recognitionRoleCard[density="large"] QLabel#recognitionRoleLabel,
+QFrame#recognitionRoleCard[density="extra_large"] QLabel#recognitionRoleLabel {{
+    color: {theme.text_secondary}; font-size: 15px; font-weight: 600;
 }}
-QFrame#recognitionRoleCard[role="timeline"] {{
-    background: {theme.warning_soft}; border: 1px solid {theme.warning};
+{role_rules}
+QFrame#recognitionRoleCard[role="primary"] QLabel#recognitionModelName {{ color: {theme.text}; }}
+QLabel#recognitionModelDescription {{ color: {theme.text_secondary}; }}
+QLabel#recognitionKindBadge {{ background: {theme.surface_elevated}; color: {theme.text_secondary};
+    border: 0; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500; }}
+QLabel#recognitionStatusGood {{ background: {theme.success_soft}; color: {theme.success};
+    border: 0; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500; }}
+QLabel#recognitionStatusWarn {{ background: {theme.warning_soft}; color: {theme.warning};
+    border: 0; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500; }}
+QLabel#recognitionStatusMuted {{ background: {theme.surface_elevated}; color: {theme.text_secondary};
+    border: 0; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500; }}
+QPushButton#recognitionRecovery {{ background: {theme.surface_elevated}; color: {theme.text};
+    border: 1px solid {theme.border_strong}; border-radius: 8px; padding: 4px 12px; min-height: 26px;
+    font-size: 12px; font-weight: 500; }}
+QPushButton#recognitionRecovery:hover {{ background: {theme.selected}; border-color: {theme.text_muted}; }}
+QPushButton#recognitionRecovery:focus {{ border-color: {theme.focus}; }}
+QLabel#recognitionChangeHint {{ color: {theme.text_muted}; }}
+QFrame#settingTile[checked="true"], QFrame#settingTile:checked {{
+    background: {theme.surface}; border: 1px solid {theme.border_strong};
 }}
-QFrame#recognitionRoleCard[role="review"] {{
-    background: {theme.surface_muted}; border: 1px solid {theme.border};
-}}
-/* 五十二轮：暗色 accent（夜炭绿/岩灰橘）亮度高，图标/徽章上的固定白字
-   对比不足——与 QSS text_on_accent 契约对齐（暖色主题仍为白字，不变）。 */
-QLabel#recognitionRoleIcon {{ color: {theme.text_on_accent}; }}
-QFrame#recognitionRoleCard[role="timeline"] QLabel#recognitionRoleIcon {{
-    background: {theme.warning};
-}}
-QLabel#recognitionStatusWarn {{ color: {theme.text_on_accent}; }}
-QFrame#recognitionRoleCard[role="primary"] QLabel#recognitionModelName {{
-    color: {theme.text}; font-weight: {WEIGHT_SCALE['heavy']};
-}}
+QFrame#settingTile:hover {{ background: {theme.surface_elevated}; border-color: {theme.border_strong}; }}
 QLabel#contentHeroTitle, QLabel#sectionTitle, QLabel#pageSubtitle,
 QLabel#termLibraryTitle, QLabel#termGameTitle, QLabel#smartDialogTitle,
 QLabel#headerSubtitle, QLabel#recognitionRoleLabel, QLabel#recognitionModelName,
 QLabel#settingTileTitle, QLabel#settingTileSummary {{ color: {theme.text}; }}
 QLabel#pageSubtitle, QLabel#settingTileSummary {{ color: {theme.text_muted}; }}
-QLabel#headerStatus, QLabel#recognitionStatusGood {{ background: {theme.accent_soft}; color: {theme.success}; }}
+QLabel#headerStatus {{ color: {theme.success}; }}
 QLabel#headerStatus {{ padding: 0; min-width: 0; min-height: 0; background: transparent; }}
 QPushButton, QToolButton {{ color: {theme.text}; border-color: {theme.border}; }}
 QPushButton#outline, QPushButton#softAction {{
@@ -219,10 +261,10 @@ QFrame#homeContentProfile QLabel#muted, QFrame#homeBatchGlossary QLabel#muted {{
 }}
 QLabel#homeCardTitle, QLabel#homeGlossaryStatus {{ color: {theme.text}; }}
 QFrame#actionBar {{ background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 8px; }}
-QPushButton:hover, QToolButton:hover {{ background: {theme.selected}; border-color: {theme.accent}; }}
+QPushButton:hover, QToolButton:hover {{ background: {theme.selected}; border-color: {theme.border_strong}; }}
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     background: {theme.input_surface}; color: {theme.text}; border-color: {theme.border};
-    selection-background-color: {theme.accent}; selection-color: #ffffff;
+    selection-background-color: {theme.accent}; selection-color: {theme.text_on_accent};
 }}
 QComboBox QAbstractItemView, QAbstractItemView {{
     background: {theme.input_surface}; color: {theme.text}; border-color: {theme.border};
@@ -243,10 +285,21 @@ QPushButton#windowControl:pressed {{ background: {theme.border}; color: {theme.t
 QPushButton#windowControl:disabled {{ color: {theme.disabled}; }}
 QPushButton#windowControlClose:hover {{ background: {theme.danger}; color: #ffffff; }}
 QPushButton#windowControlClose:pressed {{ background: {theme.danger}; color: #ffffff; }}
-QLabel#mediaName, QFrame#mediaRow QLabel#mediaName {{ color: {theme.text}; font-weight: 700; }}
+QLabel#mediaName, QFrame#mediaRow QLabel#mediaName {{ color: {theme.text}; font-weight: 600; }}
 QLabel#dropHint, QFrame#mediaRow QLabel#dropHint {{ color: {theme.text_secondary}; }}
 QFrame#mediaRow QLabel {{ color: {theme.text}; }}
-QFrame#mediaRow[empty="true"] {{ background: {theme.input_surface}; border-color: {theme.border_strong}; }}
+/* Media card: an inviting dashed drop zone while empty; a green "ready" card
+   (real state: files are loaded) once media is chosen. */
+QFrame#mediaRow[empty="true"] {{ background: {theme.input_surface}; border: 2px dashed {media_empty_edge}; }}
+QFrame#mediaRow[empty="true"]:hover {{ border-color: {theme.accent_text}; }}
+QFrame#mediaRow[empty="false"] {{ background: {media_ready}; border: 1px solid {media_ready_edge}; }}
+QFrame#mediaRow[empty="false"]:hover {{ border-color: {theme.success}; }}
+QFrame#mediaRow:focus {{ border-color: {theme.focus}; }}
+QFrame#mediaRow[dropActive="true"] {{ background: {theme.accent_tint}; border: 2px dashed {theme.accent_text}; }}
+QFrame#mediaRow QLabel#mediaIcon {{ border-radius: 10px; background: {theme.accent_tint}; }}
+QFrame#mediaRow[empty="false"] QLabel#mediaIcon {{ background: {theme.success}; }}
+QFrame#mediaRow QLabel#mediaReadyBadge {{ background: {theme.success}; color: {theme.on_vivid};
+    border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; }}
 QLabel#muted {{ color: {theme.text_muted}; }}
 QLabel#pageSubtitle {{ color: {theme.text_secondary}; }}
 QFrame#studioEntryCard {{
@@ -332,7 +385,7 @@ def apply_application_theme(app: QApplication | None = None, key: str | None = N
         # Studio owns a page-level stylesheet for its editor controls. Refresh it
         # after the application sheet so Hub, Editor, and dialogs use one theme.
         for widget in list(app.topLevelWidgets()):
-            page = widget if widget.objectName() == "subtitleStudio" else getattr(widget, "studio_page", None)
+            page = widget if widget.objectName() == "subtitleStudio" else existing_page(widget, "studio")
             if isinstance(page, QWidget):
                 if page.parentWidget() is not None and not page.isVisible():
                     page._theme_refresh_pending = True
@@ -358,7 +411,7 @@ def apply_application_theme(app: QApplication | None = None, key: str | None = N
         t = _trace_mark("allWidgets palette loop", t)
         # Visible dialogs with their own secondary sheet are refreshed too.
         for widget in app.topLevelWidgets():
-            if widget.objectName() == "subtitleStudio" or getattr(widget, "studio_page", None) is not None:
+            if widget.objectName() == "subtitleStudio" or existing_page(widget, "studio") is not None:
                 continue
             if widget.isWindow() and widget.isVisible():
                 if not callable(getattr(widget, "refresh_theme_palette", None)):
@@ -370,6 +423,9 @@ def apply_application_theme(app: QApplication | None = None, key: str | None = N
 
         refresh_themed_icons(app)
         _trace_mark("refresh_themed_icons", t)
+        # Pages and dialogs re-set their own (unscaled) sheets above.
+        from .ui_zoom import reapply_all
+        reapply_all(app)
     finally:
         QApplication.restoreOverrideCursor()
     return theme

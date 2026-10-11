@@ -1,5 +1,6 @@
 ﻿from contextlib import contextmanager
 import threading
+from types import SimpleNamespace
 
 from twobyteasr.pipeline_runtime import finalize_cues, run_parallel_stages
 
@@ -42,6 +43,10 @@ def test_parallel_stage_results_and_reviews_keep_declared_order():
 class _FinalizeLegacy:
     def __init__(self):
         self.calls = []
+        self.events = []
+
+    def record_run_event(self, name, **payload):
+        self.events.append((name, payload))
 
     def _same(self, name, cues, *_args, **_kwargs):
         self.calls.append(name)
@@ -81,7 +86,7 @@ class _FinalizeLegacy:
 
 def test_finalize_cues_preserves_the_established_stage_order():
     legacy = _FinalizeLegacy()
-    cues = [object()]
+    cues = [SimpleNamespace(cue_id=1, speaker='S01', text='原文字', start=0., end=1.)]
     assert finalize_cues(cues, [], [], [], 10.0, 60.0, legacy) is cues
     assert legacy.calls == [
         "repair",
@@ -98,3 +103,7 @@ def test_finalize_cues_preserves_the_established_stage_order():
         "validate",
         "reviews",
     ]
+    assert [p['phase'] for name,p in legacy.events if name=='display_boundary_phase'] == [
+        'grouped_before_display', 'normalized_and_vad_onsets', 'speaker_reading_tail',
+        'short_gap_bridge', 'validated_and_content_recovered', 'final_half_open_display']
+    assert all(p['half_open'] for name,p in legacy.events if name=='display_boundary_phase')

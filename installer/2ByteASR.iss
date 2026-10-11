@@ -51,10 +51,10 @@ Source: "..\2ByteASR-Configure.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\*.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\*.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\*.json"; DestDir: "{app}"; Excludes: "secrets.json,2byteasr_settings.json,game_profiles.json"; Flags: ignoreversion
-Source: "..\2byteasr_settings.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
-Source: "..\game_profiles.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "..\2byteasr_settings.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\game_profiles.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\*.txt"; DestDir: "{app}"; Excludes: "glossary.txt"; Flags: ignoreversion
-Source: "..\glossary.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "..\glossary.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -87,9 +87,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 Filename: "{app}\2ByteASR-Configure.exe"; Description: "配置 2ByteASR 运行环境（失败可直接重试）"; WorkingDir: "{app}"; Flags: postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\.venv-main"
-Type: filesandordirs; Name: "{app}\.venv-moss"
-Type: filesandordirs; Name: "{app}\models"
+; Legacy downloads and in-place environments may still be registered by the
+; stable user-data registry. Never recursively remove them during uninstall.
 Type: filesandordirs; Name: "{app}\third_party"
 Type: filesandordirs; Name: "{app}\__pycache__"
 Type: filesandordirs; Name: "{app}\twobyteasr\__pycache__"

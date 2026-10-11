@@ -111,7 +111,7 @@ class ThemeDefinition:
     @property
     def text_on_accent(self) -> str:
         if self.key == "grape":
-            return "#fff1f6"
+            return "#fff6f9"
         return "#ffffff" if self.key == "warm" else self.app_background
 
     @property
@@ -162,6 +162,84 @@ class ThemeDefinition:
     @property
     def drop_surface(self) -> str:
         return self.surface_elevated
+
+    # 2026-10-07 semantic roles (properties only; TOKEN_FIELDS stays frozen).
+    @property
+    def accent_text(self) -> str:
+        """Brand color readable as text/icon on the theme's surfaces."""
+        return {
+            "grape": "#ec8db0", "plum": "#a9d1a6", "lavender": "#dcc3f7", "slate": "#f2b896",
+        }.get(self.key, self.accent)
+
+    @property
+    def info(self) -> str:
+        return self.focus
+
+    @property
+    def success_soft(self) -> str:
+        return blend_hex(self.surface, self.success, 0.16)
+
+    @property
+    def info_soft(self) -> str:
+        return blend_hex(self.surface, self.focus, 0.16)
+
+    @property
+    def accent_tint(self) -> str:
+        """Quiet brand wash for selected navigation (never a status)."""
+        return blend_hex(self.surface, self.accent, 0.22)
+
+    @property
+    def hairline(self) -> str:
+        """Divider between rows inside one surface; quieter than border."""
+        return blend_hex(self.surface, self.border, 0.7)
+
+    @property
+    def role_colors(self) -> dict[str, str]:
+        """Each theme's own companion palette (identity hues, never status).
+
+        A colour card per theme around its brand: grape = sunset (dusty violet,
+        apricot, mauve beside raspberry); warm = garden (cornflower, berry
+        rose, mustard beside forest green); plum = orchard (mauve, dusty aqua,
+        apricot beside sage); lavender = pastel (sky, peach, lemon beside
+        lilac); slate = nordic (sea glass, dusty rose, soft lavender beside
+        peach). Readiness is always a labelled chip, never these hues.
+        """
+        # Dark themes use dusty, lower-chroma tones: noticeable above the
+        # surface but never louder than the brand action (user, 2026-10-08).
+        return {
+            "grape": {"primary": "#a48ad9", "timeline": "#d6957c", "review": "#c48cb4"},
+            "warm": {"primary": "#4a6fc2", "timeline": "#b44d7a", "review": "#a8841c"},
+            "plum": {"primary": "#bc8fb0", "timeline": "#86b3b4", "review": "#d0a07c"},
+            "lavender": {"primary": "#93bbe4", "timeline": "#e3a68c", "review": "#d9c78f"},
+            "slate": {"primary": "#86bfb7", "timeline": "#d3a2b9", "review": "#b5a7da"},
+        }.get(self.key, {"primary": "#a48ad9", "timeline": "#d6957c", "review": "#c48cb4"})
+
+    @property
+    def role_wash(self) -> tuple[float, float, float]:
+        """(rest, hover, border) blend amounts for identity-tinted cards."""
+        return (0.12, 0.18, 0.5) if self.key == "warm" else (0.08, 0.13, 0.32)
+
+    @property
+    def zone_colors(self) -> dict[str, str]:
+        """Low-saturation zone hues for the home blocks (user, 2026-10-08):
+        Studio berry pink / purple-red, AI magenta rose-violet, content &
+        terms grey-violet leaning cyan. Light themes use deeper tones."""
+        if self.key == "warm":
+            return {"studio": "#b25a80", "ai": "#9a5aa6", "content": "#557e8e"}
+        return {"studio": "#cc7f9e", "ai": "#b585c4", "content": "#8aa5b8"}
+
+    @property
+    def on_vivid(self) -> str:
+        """Icon color on a vivid role/status chip."""
+        return "#ffffff" if self.key == "warm" else self.app_background
+
+    @property
+    def log_background(self) -> str:
+        return self.media if self.key != "warm" else "#2b2d29"
+
+    @property
+    def log_text(self) -> str:
+        return "#e8e3de" if self.key != "warm" else "#ecebe4"
 
     # P9A aliases. Not dataclass fields — TOKEN_FIELDS must stay frozen.
     @property
@@ -220,23 +298,23 @@ class ThemeDefinition:
     def accent_primary(self) -> str:
         return self.accent
 
-    @property
-    def info(self) -> str:
-        return self.focus
 
 
 THEMES = {
+    # 2026-10-07 视觉体系：保留深葡萄紫气质，但层级改为偏中性的灰紫表面，
+    # 品牌莓果色只承担主操作/选中指示；成功/警告/错误/信息使用可区分的色相，
+    # 不再与品牌粉紫混在一起。
     "grape": ThemeDefinition(
         key="grape", label="Deep Grape / Burgundy",
         labels={"zh": "深葡萄紫 / 酒红", "en": "Deep Grape / Burgundy", "ja": "ディープグレープ / ワイン"},
-        app_background="#211826", surface="#302337", surface_elevated="#3e2c44",
-        panel="#281e2e", input_surface="#241a29", selected="#56364e",
-        timeline="#211a26", media="#120e16", border="#503a56", border_strong="#795570",
-        text="#fff1f6", text_secondary="#e5ccd9", text_muted="#bc9bad",
-        accent="#a83e60", accent_hover="#bd4e72", accent_pressed="#8c2f4e", accent_soft="#492638",
-        success="#aec5ab", warning="#dab8c9", warning_soft="#483340",
-        danger="#ed8796", danger_soft="#522b3c", shell="#1b141f", shell_border="#503a56",
-        focus="#e8b8cf", disabled="#94788e",
+        app_background="#19151c", surface="#252028", surface_elevated="#2f2935",
+        panel="#1e1a22", input_surface="#1b171e", selected="#3a3241",
+        timeline="#17131a", media="#0e0c10", border="#342d3a", border_strong="#4a4152",
+        text="#f4eee9", text_secondary="#d0c6cd", text_muted="#a69ba6",
+        accent="#b34470", accent_hover="#c1517d", accent_pressed="#9b3a61", accent_soft="#3a2231",
+        success="#69cf9b", warning="#e9b65b", warning_soft="#3a2f1c",
+        danger="#f3866b", danger_soft="#3d2425", shell="#141117", shell_border="#2a2430",
+        focus="#86b4f7", disabled="#716779",
     ),
     "warm": ThemeDefinition(
         key="warm", label="Warm Cream / Green", labels={"zh": "暖奶油 / 绿色", "en": "Warm Cream / Green", "ja": "ウォームクリーム / グリーン"},
@@ -285,6 +363,19 @@ THEMES = {
 }
 
 DEFAULT_THEME_KEY = "grape"
+
+
+def blend_hex(base: str, overlay: str, amount: float) -> str:
+    """Mix ``overlay`` into ``base`` (0..1) in sRGB; used for soft state washes."""
+    def channels(value):
+        raw = str(value or "").lstrip("#")
+        if len(raw) != 6:
+            return (0, 0, 0)
+        return tuple(int(raw[index:index + 2], 16) for index in (0, 2, 4))
+    first, second = channels(base), channels(overlay)
+    amount = max(0.0, min(1.0, float(amount)))
+    mixed = (round(a + (b - a) * amount) for a, b in zip(first, second))
+    return "#" + "".join(f"{value:02x}" for value in mixed)
 
 
 def hex_luminance(value: str) -> float:

@@ -123,14 +123,12 @@ class SceneRasterizer:
         from .advanced_live_renderer import (render_live_snapshot, render_live_layers,
             composite_live_scene_layers, composition_pivot_for_snapshot)
         from .studio_live_canvas import compiled_scene_for_snapshot
-        from .subtitle_stacking import StackLayout, compute_stack_layout
         output = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
         output.fill(Qt.transparent)
         painter = QPainter(output)
         evidence = []
-        # 2026-09-19：抢话字幕自动分层（LIVE 链）。按显示中的 cue 集合计算
-        # 与 native ASS 一致的向上偏移；偏移是显示布局，只 replace 进本帧
-        # snapshot，不写回样式。确定性：同一 cue 集合任何时刻结果一致。
+        # Every prepared snapshot already carries its saved initial/manual
+        # anchor. Visible peers never change a cue's placement during playback.
         from .caption_playback_cache import FailedCaption as _FailedCaption
         prepared_cues = tuple((key, p.fallback if isinstance(p, _FailedCaption) and p.fallback else p)
                              for key, p in prepared_cues)
@@ -251,6 +249,10 @@ class CaptionScene(QObject):
         self.web_ready.connect(self.refresh_web)
         self.web_cache = WebSceneCache(self.web_ready.emit)
         self.thread = threading.Thread(target=self.work, name='caption-scene', daemon=True)
+        overlay_folder = getattr(self.page.video, '_compositor_overlay_dir', None)
+        if overlay_folder is not None:
+            from .overlay_session import register_overlay_worker
+            register_overlay_worker(overlay_folder, self.thread)
         self.thread.start()
         page.destroyed.connect(self.close)
 
@@ -265,7 +267,10 @@ class CaptionScene(QObject):
         if self.closed or page.project is not self.project:
             return False
         raster_only = getattr(getattr(page.video, 'controller', None), 'supports_native_subtitles', True) is False
-        if not self.active and len(cues) < 2 and not raster_only:
+        audio_tail = getattr(page, '_audio_tail_visual_active', lambda:False)()
+        from .studio_caption_timeline import independent_captions
+        independent = independent_captions(page.project)
+        if not self.active and len(cues) < 2 and not raster_only and not audio_tail and not independent:
             return False
         if not self.active:
             self.active = True
@@ -284,7 +289,7 @@ class CaptionScene(QObject):
             # In-flight uploads from the preceding active set are no longer valid.
             page.video._web_live_epoch += 1
         if self.failures.get(token, 0) > 1:
-            page.video.set_native_subtitle_visible(True)
+            page.video.set_native_subtitle_visible(not independent)
             return True
         page.video.set_native_subtitle_visible(False)
         if not cues:
@@ -400,7 +405,8 @@ class CaptionScene(QObject):
                     # A transient raster/upload failure gets one retry, then
                     # yields native ownership for this revision instead of
                     # leaving a dead worker holding a permanently blank layer.
-                    self.ready.emit(token, None, dict(error=f'{type(exc).__name__}: {exc}'))
+                    try: self.ready.emit(token, None, dict(error=f'{type(exc).__name__}: {exc}'))
+                    except RuntimeError: return
                     continue
                 trace = dict(expected_cue_ids=[key for key, _ in cues], cue_pixels=rows,
                              sample_ms=float(milliseconds), duration_ms=(time.perf_counter()-started)*1000)
@@ -431,7 +437,8 @@ class CaptionScene(QObject):
                 page._present_caption_scene()
             else:
                 page.video.remove_compositor_overlay(page.video.ADVANCED_OVERLAY_ID, force=True)
-                page.video.set_native_subtitle_visible(True)
+                from .studio_caption_timeline import independent_captions
+                page.video.set_native_subtitle_visible(not independent_captions(page.project))
                 bind_text(page.save_state, '字幕合成暂不可用 · 特效字幕等待恢复')
             return
         cues = active_cues(page, page._caption_sample_ms())
@@ -485,4 +492,8 @@ class CaptionScene(QObject):
             self.pending = None
             self.warm_pending.clear();self.frames.clear()
             self.published = None
+            # Every guard checks `closed` first; dropping the project lets a
+            # closed scene stop pinning the whole previous project in memory.
+            self.project = None
+            self.last_request = None
             self.wake.set()

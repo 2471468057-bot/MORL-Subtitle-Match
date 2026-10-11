@@ -504,6 +504,7 @@ def apply_term_updates(
     duplicates = 0
     failed = 0
     failed_keys = []
+    failed_errors = []
     applied_keys: list[list[str]] = []
     for diff in diffs:
         entries = [(diff.term.term, diff.term.term)]
@@ -520,11 +521,12 @@ def apply_term_updates(
                         verification=diff.term.verification,category_key=diff.term.category_key,
                         task_id=task_id,priority=diff.term.priority,frequency_note=diff.term.frequency_note),
                 )
-            except Exception:
+            except Exception as exc:
                 # One failing row (disk error, locked store) must not discard
                 # the rest of the batch or corrupt the existing library.
                 failed += 1
                 failed_keys.append([source, target])
+                failed_errors.append(" ".join(str(exc).split())[:240])
                 continue
             if ok:
                 added += 1
@@ -542,6 +544,7 @@ def apply_term_updates(
         "duplicates": duplicates,
         "failed": failed,
         "failed_keys": failed_keys,
+        "failed_errors": failed_errors,
         "applied_keys": applied_keys,
     }
     if applied_keys:

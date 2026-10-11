@@ -41,8 +41,22 @@ def individual_cue(segment):
     )
 
 
+def alignment_key(char):
+    """Pinyin used to pair a recognizer's word with the caption character.
+
+    Near-homophones that ASR systems trade freely (隐/影 yin/ying, 申/生,
+    资/知) pair with each other; tones and these finals/initials carry no
+    timing information."""
+    key = phonetic_text(char) or str(char).lower()
+    key = re.sub(r"^(zh|ch|sh)", lambda match: match.group(1)[0], key)
+    return re.sub(r"(?<=[aeiouv])ng$", "n", key)
+
+
 def segment_content_timeline(segment, firered_tokens=()):
     """用 FireRed 的可信字级锚点重切段内边界；始终保留 MOSS 外边界与正文。"""
+    if str(getattr(segment,'primary_source','')).startswith('vibevoice_'):
+        if content_only(''.join(w.text for w in segment.words))!=content_only(segment.text):return []
+        return [WordUnit(w.start,w.end,char,w.probability) for w in segment.words for char in content_only(w.text)]
     from .number_fidelity import mapped_content_timeline
     mapped = mapped_content_timeline(segment)
     if mapped is not None:
@@ -86,11 +100,8 @@ def segment_content_timeline(segment, firered_tokens=()):
                         float(token.get("confidence", segment.confidence)),
                     )
                 )
-        target_keys = [phonetic_text(char) or char.lower() for char in target]
-        candidate_keys = [
-            phonetic_text(unit.text) or unit.text.lower()
-            for unit in candidate_timeline
-        ]
+        target_keys = [alignment_key(char) for char in target]
+        candidate_keys = [alignment_key(unit.text) for unit in candidate_timeline]
         if candidate_keys:
             evidence = SequenceMatcher(
                 None,
@@ -108,9 +119,12 @@ def segment_content_timeline(segment, firered_tokens=()):
             # 内部时间锚点。这样能利用“然后……不好意思”的准确字时刻，同时
             # 避免把另一位主播零散碰巧同音的字当作本段时间证据。
             if segment.timing_locked:
+                # Eight consecutive same-sound characters are no coincidence;
+                # long locked segments need not match 45 % in one block
+                # (2026-10-10: 影袭/隐袭 left a 25-character turn on estimates).
                 enough_evidence = enough_evidence and largest_match >= max(
                     2,
-                    math.ceil(len(target) * 0.45),
+                    min(8, math.ceil(len(target) * 0.45)),
                 )
             if enough_evidence and matched_blocks:
                 # 丢掉窗口中属于另一位主播/相邻句的未匹配前后缀。FireRed 若漏掉
@@ -156,8 +170,8 @@ def segment_content_timeline(segment, firered_tokens=()):
             for index, char in enumerate(target)
         ]
 
-    raw_keys = [phonetic_text(unit.text) or unit.text.lower() for unit in raw_timeline]
-    target_keys = [phonetic_text(char) or char.lower() for char in target]
+    raw_keys = [alignment_key(unit.text) for unit in raw_timeline]
+    target_keys = [alignment_key(char) for char in target]
     # 同字数且逐字同音时直接保留原位置，不因校对后的字形不同而改变时间。
     if (
         len(raw_timeline) == len(target)

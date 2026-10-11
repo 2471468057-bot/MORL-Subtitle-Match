@@ -28,6 +28,7 @@ POWERSHELL = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass"]
 
 import twobyteasr.environment as env_module
 import twobyteasr.environment_repair as repair_module
+import twobyteasr.runtime_registry as registry_module
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +36,23 @@ def _reset_cache():
     env_module.reset_preflight_cache()
     yield
     env_module.reset_preflight_cache()
+
+
+@pytest.fixture(autouse=True)
+def confined_runtime_roots(tmp_path, monkeypatch):
+    """所有修复路径都限制在 tmp_path 内。
+
+    role_paths 在 project_root 下找不到 live venv 时会回落到
+    runtime_registry.intended_runtime_root；源码模式下它读真实注册表，
+    指向真实仓库的 .venv-*（2026-10-10 曾把假 staging 树换进真实
+    .venv-firered-llm）。这里把两处根都改到 tmp_path，单个测试仍可覆盖。
+    """
+    runtimes = tmp_path / "registry-runtimes"
+    monkeypatch.setattr(repair_module, "project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        registry_module, "intended_runtime_root", lambda role: str(runtimes / role)
+    )
+    return runtimes
 
 
 def _lock():
@@ -53,6 +71,16 @@ def _write_tree(path: Path, token: str) -> Path:
 
 def _identity(venv_dir: Path) -> str:
     return (venv_dir / "IDENTITY.txt").read_text(encoding="utf-8")
+
+
+def _repository_runtime_snapshot():
+    """真实仓库根下 .venv* 的名称、mtime 与直接子项；替换或新建都会改变它。"""
+    snapshot = {}
+    for entry in PROJECT_ROOT.iterdir():
+        if entry.name.startswith(".venv"):
+            children = sorted(child.name for child in entry.iterdir()) if entry.is_dir() else []
+            snapshot[entry.name] = (entry.stat().st_mtime_ns, children)
+    return snapshot
 
 
 def _fake_preflight(health):
@@ -497,6 +525,37 @@ def test_injected_firered_repair_does_not_execute_fixture_interpreter(
     )
 
     assert result.ok
+
+
+def test_repair_without_live_dir_never_leaves_tmp_path(tmp_path, confined_runtime_roots):
+    """2026-10-10 回归：tmp_path 内没有 live venv 时，回落路径与整次修复都留在 tmp_path。
+
+    之前回落到真实注册表，假 staging 树被换进真实仓库的 .venv-firered-llm。
+    """
+    boundary = tmp_path.resolve()
+    before = _repository_runtime_snapshot()
+    for role in ("main", "moss", "firered_llm"):
+        for key, path in repair_module.role_paths(role).items():
+            assert Path(path).resolve().is_relative_to(boundary), (role, key, path)
+
+    health = {"firered_llm": {"live": False, "staging": False}}
+    install = _install_ok(tmp_path, health)
+    staged = []
+
+    def recording_install(role, staging_path):
+        staged.append(Path(staging_path).resolve())
+        return install(role, staging_path)
+
+    result = repair_module.repair_roles(
+        ["firered_llm"],
+        install_fn=recording_install,
+        preflight_fn=_fake_preflight(health),
+    )
+
+    assert result.ok
+    assert staged and all(path.is_relative_to(boundary) for path in staged)
+    assert _identity(confined_runtime_roots / "firered_llm") == "staging-firered_llm"
+    assert _repository_runtime_snapshot() == before
 
 
 def test_failed_firered_staging_probe_preserves_live_runtime(tmp_path, monkeypatch):

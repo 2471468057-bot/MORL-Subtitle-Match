@@ -26,9 +26,9 @@ def test_cleanup_keeps_number_spelling_until_explicit_formatting_stage():
     assert format_numbers("威力加四十",enabled=False)[0] == "威力加四十"
 
 
-def test_spoken_ten_nine_eight_countdown_uses_separate_arabic_digits():
-    assert subtitle_core.normalize_output_text("十九八") == "10 9 8"
-    assert subtitle_core.normalize_output_text("倒计时十九八开始") == "倒计时10 9 8开始"
+def test_cleanup_does_not_force_small_countdown_numbers_to_digits():
+    assert subtitle_core.normalize_output_text("十九八") == "十九八"
+    assert subtitle_core.normalize_output_text("倒计时十九八开始") == "倒计时十九八开始"
 
 
 def test_ten_second_boarding_term_uses_the_live_membership_character():

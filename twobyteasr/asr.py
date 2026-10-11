@@ -23,6 +23,7 @@ from twobyteasr.runtime import get_runtime_context
 from twobyteasr.service import CancelledError
 from twobyteasr.processes import (
     popen_hidden_subprocess,
+    python_utf8_command,
     sanitized_child_environment,
     stop_process_tree,
 )
@@ -93,9 +94,11 @@ def _cuda_runtime_ready():
     in a short-lived child process so this process also does not poison the
     CUDA context when a CPU-capable backend can continue safely.
     """
-    from twobyteasr.hardware import detect_cuda_runtime
+    from twobyteasr.hardware import detect_cuda_runtime, ready_torch_probe
 
-    return detect_cuda_runtime().ready
+    # The probe is reused for the session only after it passed (same
+    # interpreter and packages), so CPU fallback still sees a fresh probe.
+    return detect_cuda_runtime(ready_torch_probe()).ready
 
 
 def _model_runtime_probe(*, model_id, runtime, model_path, source_path="", import_name=""):
@@ -143,6 +146,23 @@ def _model_runtime_probe(*, model_id, runtime, model_path, source_path="", impor
     if not model_path or not os.path.isdir(model_path):
         details["error"] = "model_path_missing"
         return details
+    from twobyteasr.environment import _stat_identity, reuse_ready_probe, runtime_identity
+
+    # Same interpreter, packages, model folder and source: same answer for the
+    # session (each probe imports torch, 4-6 s per model per recognition).
+    key = ("model_runtime", str(model_id), str(import_name or ""), runtime_identity(runtime),
+           model_path, _stat_identity(model_path), source_path,
+           _stat_identity(source_path) if source_path else None,
+           os.environ.get("CUDA_VISIBLE_DEVICES", ""))
+    result, reused = reuse_ready_probe(
+        key, lambda: _spawn_model_runtime_probe(details, runtime, source_path, import_name),
+        lambda value: bool(value.get("ready")))
+    if reused:
+        result["probe_reused"] = True
+    return result
+
+
+def _spawn_model_runtime_probe(details, runtime, source_path, import_name):
     script = r'''
 import json, sys
 result = {"imports": [], "cuda_available": False, "gpu_name": "", "torch_version": "", "torch_cuda_version": "", "error": ""}
@@ -977,13 +997,43 @@ atexit.register(end_local_asr_session, force=True)
 
 
 def build_qwen_asr_context(media_path):
-    """只给 Qwen3-ASR 内容类型与文件名，不把 glossary 当强制热词。"""
+    """Use Qwen's existing context input for pinned canonical spelling hints."""
     media_title = os.path.splitext(os.path.basename(media_path))[0]
-    return (
-        f"这是中文二次元游戏实况，文件名为《{media_title}》。"
-        "请忠实转写实际语音，注意角色、技能和机制专名，"
-        "不要凭文件名补写未说内容。"
+    from .content_scene import runtime_content_scene
+    scene = runtime_content_scene()
+    context = (
+        f"当前字幕场景：{scene.summary()}。素材名称《{media_title}》。"
+        "请忠实转写实际语音，场景和词库只用于理解专名，"
+        "不要凭文件名或比赛知识补写未说内容。"
     )
+    record_run_event("asr_content_context_prepared", model="Qwen3-ASR",
+        prompt_version="qwen-context-v2-shared-scene", content_scene=scene.to_dict(),
+        context_characters=len(context))
+    from .terminology import runtime_snapshot
+    terms = []
+    cost = 0
+    for term in runtime_snapshot().canonical_terms:
+        if len(terms) >= 64 or cost + len(term) > 600:
+            break
+        terms.append(term)
+        cost += len(term) + 1
+    if terms:
+        context += "用户已确认的专名写法：" + "、".join(terms) + "。仅在实际语音提到时采用，保持大小写和数字，不得补写未说内容。"
+    return context
+
+
+def _qwen_context_receipt(context):
+    """Describe the text actually handed to the adapter, including overrides."""
+    from .content_scene import runtime_content_scene
+    scene = runtime_content_scene()
+    text = str(context or "")
+    shared = text.startswith(f"当前字幕场景：{scene.summary()}。")
+    return {
+        "prompt_version": "qwen-context-v2-shared-scene" if shared else "custom-context",
+        "context_sha256": hashlib.sha256(text.encode("utf8")).hexdigest(),
+        "context_characters": len(text),
+        "content_scene": scene.to_dict() if shared else {},
+    }
 
 
 def build_qwen_asr_chunks(
@@ -1340,6 +1390,9 @@ def _api_transcription_rows(result, chunk):
             "text": text,
             "confidence": float(confidence),
         }
+        if result.get('timestamp_source') == 'qwen31_native':
+            row['timestamp_source'] = 'qwen31_native_word' if tokens else 'qwen31_native_sentence'
+            row['native_timing_owner'] = True
         if speaker:
             row["speaker"] = str(speaker)
         if tokens:
@@ -1445,6 +1498,14 @@ def call_qwen_asr_api(audio, context, *, endpoint=None, requests_module=None):
         if request_token is not None:request_token.raise_if_cancelled()
         else:_raise_if_queue_cancelled()
     protocol = endpoint.get("protocol", "dashscope_multimodal")
+    # A prompt/context hint is different from native hotword biasing. Some
+    # existing adapters carry no text context and must report that honestly.
+    context_supported = protocol in {"openai_transcription", "azure_transcription", "dashscope_multimodal"}
+    record_run_event("asr_terminology_input", backend="api", model=endpoint.get("model", ""),
+        method="context_hint" if context_supported else "unsupported",
+        native_hotwords=False, context_sent=bool(context_supported and context),
+        **(_qwen_context_receipt(context) if context_supported else {
+            "prompt_version": "unsupported-context", "context_sha256": "", "content_scene": {}}))
     from .speaker_evidence import save_speaker_evidence, public_request
     evidence_root = endpoint.get("audit_root", "")
     request_id = str(endpoint.get("audit_request", "request"))
@@ -1468,10 +1529,6 @@ def call_qwen_asr_api(audio, context, *, endpoint=None, requests_module=None):
                 }
             },
         }
-        if str(endpoint.get("model", "")).startswith("qwen-audio-3.0-asr-flash"):
-            body["input"]["messages"] = [{"role":"user","content":[
-                {"type":"input_audio","input_audio":{"data":data_uri}}]}]
-            body["parameters"] = {"format":"wav","sample_rate":16000}
     last_error = None
     is_multipart = protocol in {"openai_transcription", "azure_transcription"}
     # 三十七轮：OpenRouter JSON input_audio 通道（用户主动选择）——
@@ -2245,6 +2302,8 @@ def transcribe_qwen_reference(
     backend_override=None,
 ):
     """Qwen3-ASR 1.7B 提供第三份中文文字证据，不生成或修改时间戳。"""
+    from twobyteasr.cache import record_run_event
+
     use_qwen = bool(_legacy_runtime_value("USE_QWEN_ASR_REFERENCE", USE_QWEN_ASR_REFERENCE))
     backend = str(
         backend_override
@@ -2315,14 +2374,14 @@ def transcribe_qwen_reference(
                     _legacy_runtime_value("RUNTIME_SETTINGS", RUNTIME_SETTINGS)
                 )
             )
+            from .llm_config import validate_qwen_asr_endpoint
+            validate_qwen_asr_endpoint(api_endpoint)
             from .cloud_asr_jobs import FLASH, FILETRANS, SPARK
             if api_endpoint.get('model') in {FLASH,FILETRANS,SPARK}:
                 # Native workers receive the complete frozen analysis waveform;
                 # their own bounded chunks retain silence and exact offsets.
                 return _transcribe_api_owned(audio_path,[dict(start=0,end=len(audio)/sampling_rate,
                     audio=(audio,sampling_rate))],publish_primary=api_primary)
-            if str(api_endpoint.get("protocol") or "") == "dashscope_filetrans":
-                return _transcribe_qwen_filetrans(audio_path, audio, endpoint=api_endpoint)
             if api_primary and str(api_endpoint.get("protocol")) == "openrouter_verbose_json":
                 # One request gives provider diarization a global scope on the
                 # common three-minute edit. Long tasks retain explicit request
@@ -2342,6 +2401,12 @@ def transcribe_qwen_reference(
             ),
             max_merge_gap_seconds=(1.0 if api_primary else None),
         )
+        record_run_event("asr_review_scope", backend=backend,
+            reason="vad_speech_windows; not confidence_placeholder_trigger",
+            scope_kind="whole_speech_short_windows", chunk_count=len(chunks),
+            ranges=[{"start":item["start"], "end":item["end"]} for item in chunks],
+            audio_seconds=len(audio)/sampling_rate,
+            reviewed_window_seconds=sum(item["end"]-item["start"] for item in chunks))
         if not chunks:
             label = "Qwen3-ASR"
             if backend == "api":
@@ -2360,79 +2425,16 @@ def transcribe_qwen_reference(
         if backend != "local":
             return []
 
-        if getattr(sys, "frozen", False):
-            model_path = resolve_qwen_asr_local_source()
-            if not model_path:
-                raise RuntimeError("Qwen3-ASR local model directory is missing")
-            return _transcribe_qwen_worker(audio, chunks, model_path)
-
-        import gc
-        import torch
-
-        print(f"   加载 Qwen3-ASR 1.7B，按 VAD 短块生成第三份文字参考...")
-
-        model_load_started = time.perf_counter()
-        model = load_qwen_asr_model()
-        model_load_ms = (time.perf_counter() - model_load_started) * 1000.0
-        if model is None:
-            raise RuntimeError("Qwen3-ASR model loader returned no model")
-
+        # A frozen GUI and a source process must send the same PCM, context and
+        # generation policy to the same managed worker. Historical in-process
+        # batches and PCM16 worker WAVs were different recognition inputs.
+        model_path = resolve_qwen_asr_local_source()
+        if not model_path:
+            raise RuntimeError("Qwen3-ASR local model directory is missing")
         context = build_qwen_asr_context(audio_path)
-        started = time.perf_counter()
-        references = []
-        batch_count = (len(chunks) + QWEN_ASR_BATCH_SIZE - 1) // QWEN_ASR_BATCH_SIZE
-        for batch_index, offset in enumerate(
-            range(0, len(chunks), QWEN_ASR_BATCH_SIZE), 1
-        ):
-            _raise_if_queue_cancelled()
-            batch = chunks[offset : offset + QWEN_ASR_BATCH_SIZE]
-            batch_started = time.perf_counter()
-            results = model.transcribe(
-                audio=[item["audio"] for item in batch],
-                context=[context] * len(batch),
-                language=["Chinese"] * len(batch),
-                return_time_stamps=False,
-            )
-            for chunk, result in zip(batch, results):
-                text = clean_subtitle_text(result.text)
-                if content_only(text):
-                    confidence = _recognized_confidence(result)
-                    references.append(
-                        {
-                            "start": chunk["start"],
-                            "end": chunk["end"],
-                            "text": text,
-                            "confidence": confidence,
-                        }
-                    )
-            print(
-                f"      Qwen3-ASR 批次 {batch_index}/{batch_count}："
-                f"{time.perf_counter() - batch_started:.1f} 秒",
-                flush=True,
-            )
-        elapsed = time.perf_counter() - started
-        from twobyteasr.cache import record_run_event
-        record_run_event(
-            "QWEN_RUNTIME",
-            QWEN_PYTHON_EXECUTABLE=sys.executable,
-            QWEN_WORKER_ENTRYPOINT="qwen_asr.Qwen3ASRModel.transcribe",
-            QWEN_MODEL_PATH=str(resolve_qwen_asr_local_source()),
-            QWEN_DEVICE="cuda:0",
-            QWEN_CUDA_AVAILABLE=True,
-            QWEN_GPU_NAME="",
-            QWEN_INPUT_CHUNK_COUNT=len(chunks),
-            QWEN_PROCESS_PID=os.getpid(),
-            QWEN_MODEL_LOAD_MS=round(float(locals().get("model_load_ms", 0.0)), 3),
-            QWEN_INFERENCE_MS=round(elapsed * 1000.0, 3),
-            QWEN_RAW_RESULT_COUNT=len(references),
-            QWEN_PARSED_RESULT_COUNT=len(references),
-            QWEN_STDERR="",
-        )
-        print(
-            f"   [完成] Qwen3-ASR：{len(references)}/{len(chunks)} 个短块，"
-            f"纯转写 {elapsed:.1f} 秒。"
-        )
-        return references
+        evidence_root = str(Path(media_cache_context(audio_path)["cache_dir"]) / "speaker-evidence")
+        return _transcribe_qwen_worker(audio, chunks, model_path,
+            context=context, evidence_root=evidence_root)
     except CancelledError:
         raise
     except Exception as exc:
@@ -2476,7 +2478,7 @@ def transcribe_qwen_reference(
         import gc
 
         gc.collect()
-        if backend == "local" and not getattr(sys, "frozen", False):
+        if backend == "local" and model is not None and not getattr(sys, "frozen", False):
             # frozen GUI has no in-process torch; the worker subprocess owns
             # its GPU memory and releases it on exit. Importing torch here
             # would raise in the finally block and discard the worker result.
@@ -2502,6 +2504,8 @@ def write_pcm16_wav(path, audio):
 def _run_isolated_asr_worker(command, output_path, *, model_id, audio_input, model_path, entrypoint,
                              input_text=None, event_handler=None, cancel_handler=None, timeout_seconds=None):
     """Run a model worker and return parsed JSON plus process telemetry."""
+    if model_id in {'diarizen', 'vibevoice_1_5b', 'vibevoice_7b'}:
+        raise RuntimeError('此模型已从当前程序移除；请使用模型工坊中的现有模型。')
     from twobyteasr.processes import popen_hidden_subprocess, stop_process_tree
 
     started_wall = time.time()
@@ -2525,9 +2529,10 @@ def _run_isolated_asr_worker(command, output_path, *, model_id, audio_input, mod
     from collections import deque
     from .cache import record_run_event
     lines=queue.Queue(maxsize=256)
-    worker_identity = dict(model_id=model_id, backend=model_id.lower(), pid=process.pid,
+    from .model_execution import canonical_model_id
+    worker_identity = dict(model_id=canonical_model_id(model_id), backend=model_id.lower(), pid=process.pid,
                            worker=str(entrypoint), runtime=str(command[0]),
-                           role='primary_transcription' if model_id == 'PRIMARY_API' else 'asr_worker',
+                           role='speaker_diarization' if model_id=='diarizen' else 'primary_transcription' if model_id in {'PRIMARY_API','vibevoice_1_5b','vibevoice_7b'} else 'asr_worker',
                            execution='worker_process_started', loaded=None)
     record_run_event('asr_worker_started', **worker_identity)
     record_run_event('MODEL_STARTED', **worker_identity)
@@ -2558,6 +2563,8 @@ def _run_isolated_asr_worker(command, output_path, *, model_id, audio_input, mod
             if line.startswith('[2BYTEASR_SPEAKER] '):
                 event=json.loads(line[len('[2BYTEASR_SPEAKER] '):])
                 record_run_event('speaker_progress',worker_pid=process.pid,**event)
+                if model_id in {'diarizen','vibevoice_1_5b','vibevoice_7b'} and event.get('phase')=='loaded':
+                    record_run_event('MODEL_LOADED',model_id=model_id,backend=model_id,loaded=True,pid=process.pid,role=worker_identity['role'])
                 if event_handler is not None:event_handler(event)
                 continue
             if event_handler is not None and line.startswith('[2BYTEASR_API] '):
@@ -2596,7 +2603,7 @@ def _run_isolated_asr_worker(command, output_path, *, model_id, audio_input, mod
     finally:
         stop_readers.set()
         for reader in readers:reader.join(timeout=5)
-        record_run_event('asr_worker_exited',backend=model_id.lower(),pid=process.pid,
+        record_run_event('asr_worker_exited',model_id=canonical_model_id(model_id),backend=model_id.lower(),pid=process.pid,
             returncode=process.poll(),readers_stopped=not any(t.is_alive() for t in readers))
     stdout,stderr=''.join(captured['stdout']),''.join(captured['stderr'])
     elapsed_ms = (time.perf_counter() - started_perf) * 1000.0
@@ -2608,6 +2615,12 @@ def _run_isolated_asr_worker(command, output_path, *, model_id, audio_input, mod
         raise RuntimeError(f"{model_id} worker produced no valid output: {exc}") from exc
     from twobyteasr.cache import record_run_event
     count = len(payload.get("results", [])) if isinstance(payload, dict) else 0
+    if model_id in {'diarizen','vibevoice_1_5b','vibevoice_7b'}:
+        record_run_event('optional_worker_result',model_id=model_id,revision=payload.get('revision'),
+            role=worker_identity['role'],interval_count=len(payload.get('intervals',[])),text_count=count,
+            native_chunk_count=len(payload.get('chunks',[])),application_sessions=payload.get('application_sessions'),
+            timing_precision=payload.get('timing_precision'),resources=payload.get('resources'),
+            peak_allocated_vram_bytes=payload.get('peak_allocated_vram_bytes'),network_disabled=payload.get('network_disabled'))
     alignment_samples = _parse_firered_alignment_telemetry(stdout) if model_id == "FIRERED" else []
     forced_align_error = bool(
         model_id == "FIRERED"
@@ -2725,7 +2738,7 @@ def _transcribe_firered_worker(audio, audio_seconds, firered_dir):
         record_run_event('firered_audio_prepared',elapsed_ms=round((time.perf_counter()-segmentation_started)*1000,3),
             chunk_count=len(jobs),audio_seconds=audio_seconds,coverage='full_audio',batch_size=1)
         payload = _run_isolated_asr_worker(
-            [runtime, '-I', worker, "--manifest", manifest, "--output", output, "--model-dir", firered_dir],
+            python_utf8_command([runtime, '-I', worker, "--manifest", manifest, "--output", output, "--model-dir", firered_dir]),
             output, model_id="FIRERED", audio_input="shared_audio", model_path=firered_dir,
             entrypoint="firered_aed_worker.py",
         )
@@ -2748,35 +2761,62 @@ def _transcribe_firered_worker(audio, audio_seconds, firered_dir):
         return normalized
 
 
-def _transcribe_qwen_worker(audio, chunks, model_path):
-    from twobyteasr.runtime_registry import resolve_runtime_python
+def _transcribe_qwen_worker(audio, chunks, model_path, *, context, evidence_root):
+    """One managed-worker protocol for source and frozen Qwen evidence."""
+    import numpy as np
+    from .speaker_evidence import save_speaker_evidence
 
     runtime = _main_worker_python()
     worker = os.path.join(os.path.abspath(SCRIPT_DIR), "qwen_asr_worker.py")
     if not os.path.isfile(runtime) or not os.path.isfile(worker):
         raise RuntimeError(f"Qwen worker runtime missing: python={runtime}, worker={worker}")
+    policy = {"version": "qwen-worker-shared-float32-v1",
+        "batch_size": max(1, min(12, int(_legacy_runtime_value("QWEN_ASR_BATCH_SIZE", QWEN_ASR_BATCH_SIZE)))),
+        "max_new_tokens": int(_legacy_runtime_value("QWEN_ASR_MAX_NEW_TOKENS", QWEN_ASR_MAX_NEW_TOKENS)),
+        "sample_rate": AUDIO_SAMPLE_RATE, "audio_format": "float32-mono-npy-v1"}
+    record_run_event("asr_terminology_input", backend="qwen3_worker", model="Qwen3-ASR",
+        method="context_hint", native_hotwords=False, context_sent=bool(context),
+        **_qwen_context_receipt(context))
     with tempfile.TemporaryDirectory(prefix="qwen_asr_worker_") as temp_dir:
         jobs = []
         for index, chunk in enumerate(chunks, 1):
-            path = os.path.join(temp_dir, f"chunk_{index:04d}.wav")
-            write_pcm16_wav(path, chunk["audio"][0])
-            jobs.append({"segment_id": index, "path": path, "start": chunk["start"], "end": chunk["end"]})
+            path = os.path.join(temp_dir, f"chunk_{index:04d}.npy")
+            pcm = np.ascontiguousarray(chunk["audio"][0], dtype=np.float32)
+            if pcm.ndim != 1 or not np.isfinite(pcm).all():
+                raise RuntimeError("Qwen worker requires finite mono float32 PCM")
+            np.save(path, pcm, allow_pickle=False)
+            jobs.append({"segment_id": index, "path": path, "start": chunk["start"], "end": chunk["end"],
+                "context": context, "samples": int(pcm.size),
+                "pcm_sha256": hashlib.sha256(pcm.tobytes()).hexdigest()})
         manifest = os.path.join(temp_dir, "manifest.json")
         output = os.path.join(temp_dir, "results.json")
-        Path(manifest).write_text(
-            json.dumps({"jobs": jobs}, ensure_ascii=False), encoding="utf-8"
-        )
+        Path(manifest).write_text(json.dumps({"jobs": jobs, "policy": policy}, ensure_ascii=False), encoding="utf-8")
         payload = _run_isolated_asr_worker(
-            [runtime, '-I', worker, "--manifest", manifest, "--output", output, "--model-dir", model_path],
+            python_utf8_command([runtime, '-I', worker, "--manifest", manifest, "--output", output, "--model-dir", model_path]),
             output, model_id="QWEN3-ASR", audio_input="shared_audio", model_path=model_path,
-            entrypoint="qwen_asr_worker.py",
-        )
+            entrypoint="qwen_asr_worker.py")
         values = payload.get("results", []) if isinstance(payload, dict) else []
+        audit = {"policy": policy, "context": context, **_qwen_context_receipt(context),
+            "worker_sha256": hashlib.sha256(Path(worker).read_bytes()).hexdigest(),
+            "jobs": [{k: v for k, v in j.items() if k not in {"path", "context"}} for j in jobs],
+            "raw_worker_payload": payload}
+        save_speaker_evidence(evidence_root, "qwen-native-windows", audit)
+        if not isinstance(values, list) or any(not isinstance(v, dict) for v in values) or len(values) != len(jobs) or [v.get("segment_id") for v in values] != [j["segment_id"] for j in jobs]:
+            raise RuntimeError("Qwen worker returned missing, reordered or duplicate windows")
+        if payload.get("policy") != policy:
+            raise RuntimeError("Qwen worker generation policy receipt mismatch")
+        for value, job in zip(values, jobs):
+            if any(value.get(name) != job[name] for name in ("samples", "pcm_sha256", "start", "end")) or value.get("context_sha256") != hashlib.sha256(job["context"].encode("utf8")).hexdigest():
+                raise RuntimeError("Qwen worker PCM, range or context receipt mismatch")
+        record_run_event("qwen_native_windows", policy=policy, window_count=len(jobs),
+            context_sha256=audit["context_sha256"], worker_sha256=audit["worker_sha256"],
+            evidence_path=str(Path(evidence_root) / "qwen-native-windows.json"))
         references = []
         for chunk, value in zip(chunks, values):
             text = clean_subtitle_text(value.get("text", ""))
             if content_only(text):
-                references.append({"start": chunk["start"], "end": chunk["end"], "text": text, "confidence": float(value.get("confidence", 0.0) or 0.0)})
+                references.append({"start": chunk["start"], "end": chunk["end"], "text": text,
+                    "confidence": float(value.get("confidence", 0.0) or 0.0)})
         if not references:
             raise RuntimeError("Qwen worker returned no parsed text")
         return references
@@ -3094,6 +3134,8 @@ def transcribe_primary_reference(
         return transcribe_glm_reference(shared_audio,speech_regions)
     if backend == 'canary_qwen':
         return _transcribe_dedicated_reference('canary','Canary','canary-qwen-2.5b','canary_asr_worker.py',shared_audio,speech_regions)
+    if backend in {'vibevoice_1_5b','vibevoice_7b'}:
+        raise RuntimeError('VibeVoice-ASR-Streaming 已移除，请在模型工坊选择现有主力模型。')
     if backend == "firered":
         result = transcribe_firered_reference(
             shared_audio, audio_seconds, force=True

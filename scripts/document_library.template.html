@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>兔白字幕 · 文档检索</title>
+<style>
+:root{color-scheme:light;--bg:#f6f4ef;--paper:#fffefa;--ink:#252924;--muted:#60675e;--line:#d8ddd1;--accent:#346349}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 'Microsoft YaHei UI',system-ui,sans-serif}a{color:var(--accent);text-underline-offset:3px}button,input,select{font:inherit}button{cursor:pointer}main{max-width:1080px;padding:36px 24px 64px;margin:auto}header{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:26px}.eyebrow{font-size:13px;letter-spacing:.1em;color:var(--accent)}h1{font-size:clamp(28px,5vw,42px);line-height:1.3;margin:8px 0 16px;font-weight:650}h2{font-size:22px;margin:0 0 7px}p{margin:8px 0}.muted{color:var(--muted)}nav{display:flex;gap:20px;flex-wrap:wrap;margin-top:18px}.search{background:var(--paper);padding:24px;border:1px solid var(--line);border-radius:8px}label{display:block;font-weight:600;margin-bottom:7px}input[type=search]{width:100%;padding:12px 14px;border:1px solid #939f8d;border-radius:5px;background:white;color:var(--ink)}.filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;margin-top:16px}.filters>div{flex:1;min-width:180px}select{width:100%;padding:8px;background:white;border:1px solid var(--line);border-radius:4px}.history{font-weight:400;display:flex;gap:9px;align-items:center;margin:0;min-height:42px}input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}.examples{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 0}.examples button{border:1px solid var(--line);background:transparent;color:var(--accent);padding:4px 10px;border-radius:4px;font-size:14px}.resultbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:24px 0 12px}.resultbar button,#more{border:1px solid var(--line);background:var(--paper);padding:6px 15px;border-radius:4px}.cards{display:grid;gap:12px}.card{background:var(--paper);border:1px solid var(--line);padding:18px 22px;border-radius:5px}.card h2{font-size:18px;font-weight:600}.meta{font-size:13px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px}.card p{font-size:15px}.tags{font-size:13px;color:var(--accent);margin-top:10px}details{margin-top:9px;font-size:13px;color:var(--muted)}summary{cursor:pointer}details p{font-size:13px;overflow-wrap:anywhere}.historic .meta{color:#8a6134}footer{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:20px;margin-top:30px}#more{display:block;margin:20px auto}#empty{border:1px dashed var(--line);padding:30px;text-align:center}button:hover{background:#edf1e9}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #346349;outline-offset:3px}[hidden]{display:none!important}@media(max-width:600px){main{padding:24px 16px 40px}.search{padding:17px}.filters{display:block}.filters>div{margin-bottom:12px}.resultbar{align-items:flex-start}.card{padding:16px}.card h2{font-size:17px}}
+.reader{max-width:920px;width:calc(100% - 32px);max-height:90vh;border:1px solid var(--line);border-radius:8px;padding:24px;background:var(--paper);color:var(--ink)}.reader::backdrop{background:#17201b80}.reader-top{display:flex;justify-content:space-between;gap:15px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:12px}.reader-top button{padding:6px 14px;background:var(--bg);border:1px solid var(--line);border-radius:4px}.reader-content{line-height:1.8;overflow-wrap:anywhere}.reader-content h1{font-size:28px}.reader-content h2{font-size:22px;margin-top:25px}.reader-content h3{font-size:19px;margin-top:22px}.reader-content p{margin:10px 0}.reader-content table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;margin:18px 0;font-size:14px}.reader-content td,.reader-content th{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}.reader-content pre{white-space:pre-wrap;background:var(--bg);padding:14px;font-size:13px}.reader-content code{font-size:.9em;background:var(--bg);padding:1px 3px}.reader-content blockquote{border-left:3px solid var(--line);margin:14px 0;padding-left:16px;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<header>
+<div class="eyebrow">兔白字幕 / 项目资料</div>
+<h1>记得问题，就能找到文档。</h1>
+<p class="muted">几天没看，先看现状和变化。要追查某件事，再用下面的搜索。</p>
+<nav aria-label="常用入口"><a href="PROJECT_STATE.md">项目现在怎样</a><a href="RECENT_CHANGES.md">最近改了什么</a><a href="TASKS.md">还有哪些待办</a><a href="README.md">文档首页</a><a href="CATALOG.md">全部目录</a></nav>
+</header>
+<section class="search" aria-label="查找文档">
+<label for="q">用你的说法搜索</label>
+<input id="q" type="search" placeholder="例如：字幕不同步、模型下载、窗口恢复" autocomplete="off">
+<div class="examples" aria-label="常用问题"><button type="button" data-query="字幕不同步">字幕不同步</button><button type="button" data-query="模型下载">模型下载</button><button type="button" data-query="没做完">没做完</button><button type="button" data-query="窗口恢复">窗口恢复</button><button type="button" data-query="最近变化">最近变化</button></div>
+<div class="filters"><div><label for="topic">按主题</label><select id="topic"><option value="">所有主题</option></select></div><div><label for="kind">按文档用途</label><select id="kind"><option value="">所有用途</option></select></div><label class="history"><input id="history" type="checkbox">也看旧记录、许可原文和上游资料</label></div>
+<p class="muted" style="font-size:13px;margin-top:14px">搜索标题、白话说明、关键词和文件路径。多个词用空格分开；普通说法会匹配相关词。旧记录不是当前结论，任务所在文件夹也不代表已完成。</p>
+</section>
+<div class="resultbar"><p id="count" role="status" aria-live="polite"></p><button id="reset" type="button">清除筛选</button></div>
+<section id="results" class="cards" aria-label="检索结果"></section>
+<p id="empty" hidden>没有找到匹配文档。试试“同步”“模型”“导出”等短词，或勾选查看旧记录。</p>
+<button id="more" type="button" hidden>再显示 40 份</button>
+<footer>资料整理日期：@@DATE@@ · 全目录 @@COUNT@@ 份 · 本页离线可用，不发送搜索内容，也不读取用户工程。<br>日期来自文件名，未标日期表示文件名没有日期；不按文件修改时间猜测交付时间。维护者修改说明后需刷新本页。<a href="WRITING_GUIDE.md">维护方法</a></footer>
+<noscript><p>此浏览器没有启用脚本，请使用<a href="CATALOG.md">完整 Markdown 目录</a>并通过页面查找检索。</p></noscript>
+</main>
+<dialog id="reader" class="reader" aria-label="阅读文档"><div class="reader-top"><span id="reader-meta" class="muted"></span><button id="close-reader" type="button">返回检索</button></div><div id="reader-content" class="reader-content"></div><p><a id="original-file">查看或保存原文件</a></p></dialog>
+<script id="library-data" type="application/json">@@DATA@@</script>
+<script>
+'use strict';
+const library=JSON.parse(document.getElementById('library-data').textContent);
+const $=id=>document.getElementById(id);
+const docs=library.documents.map(d=>({...d,haystack:[d.title,d.originalTitle,d.summary,d.path,...d.keywords,...d.topics].join(' ').toLowerCase()}));
+const byUrl=new Map(docs.map(d=>[new URL(d.href,location.href).href,d]));
+let limit=40;
+function addOptions(id,values){for(const value of values){const option=document.createElement('option');option.value=value;option.textContent=value;$(id).append(option)}}
+addOptions('topic',[...new Set(docs.flatMap(d=>d.topics))].sort());
+addOptions('kind',[...new Set(docs.map(d=>d.kind))].sort());
+function score(d,q){const words=q.toLowerCase().trim().split(/\s+/).filter(Boolean);let sum=0;for(const word of words){if(d.haystack.includes(word)){sum+=20+(d.title.toLowerCase().includes(word)?40:0)+(d.keywords.includes(word)?25:0)}else if((library.aliases[word]||[]).some(alias=>d.haystack.includes(alias.toLowerCase()))){sum+=8}else{return 0}}return words.length?sum:1}
+function element(tag,text,cls){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node}
+const entryOrder=['docs/PROJECT_STATE.md','docs/RECENT_CHANGES.md','docs/TASKS.md','docs/README.md','docs/product-guide.zh-CN.md'];
+function entryRank(d){const i=entryOrder.indexOf(d.path);return i<0?100:i}
+function render(){const q=$('q').value,topic=$('topic').value,kind=$('kind').value;const matches=docs.filter(d=>($('history').checked||!d.historic)&&(!topic||d.topics.includes(topic))&&(!kind||d.kind===kind)&&score(d,q)>0).sort((a,b)=>score(b,q)-score(a,q)||(a.historic-b.historic)||(q.trim()?0:entryRank(a)-entryRank(b))||b.date.localeCompare(a.date)||a.path.localeCompare(b.path));$('count').textContent=`找到 ${matches.length} 份，显示 ${Math.min(matches.length,limit)} 份`;$('results').replaceChildren();for(const d of matches.slice(0,limit)){const card=element('article',undefined,'card'+(d.historic?' historic':''));const meta=element('div',undefined,'meta');meta.append(element('span',d.kind),element('span',d.date||'文件名无日期'));if(d.historic)meta.append(element('span','追溯资料 · 不是当前结论'));card.append(meta);const h=element('h2');const a=element('a',d.title);a.href=d.href;h.append(a);card.append(h,element('p',d.summary),element('div',d.topics.join(' / '),'tags'));const detail=element('details');detail.append(element('summary','原标题与文件位置'),element('p',d.originalTitle),element('p',d.path));card.append(detail);$('results').append(card)}$('empty').hidden=matches.length>0;$('more').hidden=matches.length<=limit;return matches}
+function inline(parent,text,base){const pattern=/\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`/g;let end=0;for(const match of text.matchAll(pattern)){parent.append(document.createTextNode(text.slice(end,match.index)));if(match[1]){let url;try{url=new URL(match[2],base)}catch{}if(url&&['http:','https:','file:','mailto:','codex:'].includes(url.protocol)){const a=element('a',match[1]);a.href=url.href;parent.append(a)}else{parent.append(document.createTextNode(match[1]))}}else{parent.append(element(match[3]?'strong':'code',match[3]||match[4]))}end=match.index+match[0].length}parent.append(document.createTextNode(text.slice(end)))}
+function renderText(text,base){const out=$('reader-content');out.replaceChildren();const lines=text.split(/\r?\n/);let list=null;for(let i=0;i<lines.length;i++){const line=lines[i];if(!line.trim()){list=null;continue}if(line.startsWith('```')){const code=[];while(++i<lines.length&&!lines[i].startsWith('```'))code.push(lines[i]);out.append(element('pre',code.join('\n')));continue}if(line.startsWith('|')&&i+1<lines.length&&/^\|[\s:|\-]+\|$/.test(lines[i+1])){const table=element('table');let header=true;while(i<lines.length&&lines[i].startsWith('|')){if(!/^\|[\s:|\-]+\|$/.test(lines[i])){const row=element('tr');for(const cell of lines[i].replace(/^\||\|$/g,'').split('|')){const td=element(header?'th':'td');inline(td,cell.trim(),base);row.append(td)}table.append(row);header=false}i++}i--;out.append(table);continue}const heading=line.match(/^(#{1,6})\s+(.+)/);if(heading){const h=element('h'+heading[1].length);inline(h,heading[2],base);out.append(h);list=null;continue}const bullet=line.match(/^\s*(?:[-*]|\d+\.)\s+(.+)/);if(bullet){if(!list){list=element(/^\s*\d+\./.test(line)?'ol':'ul');out.append(list)}const li=element('li');inline(li,bullet[1],base);list.append(li);continue}list=null;const p=element(line.startsWith('>')?'blockquote':'p');inline(p,line.replace(/^>\s?/,''),base);out.append(p)}}
+function openDoc(d){$('reader-meta').textContent=d.kind+(d.historic?' · 历史资料，当前结论看状态页':'');const base=new URL(d.href,location.href).href;$('original-file').href=base;if(library.readable[d.path]){renderText(library.readable[d.path],base)}else{$('reader-content').replaceChildren(element('h1',d.title),element('p',d.summary),element('p','这份历史或许可原文未复制到阅读页。需要追溯时，请打开或保存下面的原文件。'),element('p',d.path))}if(!$('reader').open)$('reader').showModal();$('reader').scrollTop=0}
+document.addEventListener('click',event=>{const a=event.target.closest('a');if(!a||a.id==='original-file')return;const d=byUrl.get(a.href.split('#')[0]);if(d){event.preventDefault();openDoc(d)}});
+$('close-reader').addEventListener('click',()=>$('reader').close());
+function refresh(){limit=40;render()}
+for(const id of ['q','topic','kind','history'])$(id).addEventListener(id==='q'?'input':'change',refresh);
+document.querySelectorAll('[data-query]').forEach(b=>b.addEventListener('click',()=>{$('q').value=b.dataset.query;refresh();$('q').focus()}));
+$('more').addEventListener('click',()=>{limit+=40;render()});
+$('reset').addEventListener('click',()=>{$('q').value='';$('topic').value='';$('kind').value='';$('history').checked=false;refresh();$('q').focus()});
+render();
+</script>
+</body>
+</html>

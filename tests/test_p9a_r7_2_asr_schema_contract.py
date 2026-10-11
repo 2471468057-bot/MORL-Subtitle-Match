@@ -79,6 +79,8 @@ def test_frozen_qwen_worker_result_survives_finally_without_torch(monkeypatch):
     references = [{"start": 0.0, "end": 1.0, "text": "真实短块", "confidence": 0.9}]
     monkeypatch.setattr(asr, "USE_QWEN_ASR_REFERENCE", True)
     monkeypatch.setattr(asr, "QWEN_ASR_BACKEND", "local")
+    monkeypatch.setattr(asr, "_legacy_runtime_value", lambda name, default: {
+        "USE_QWEN_ASR_REFERENCE": True, "QWEN_ASR_BACKEND": "local"}.get(name, default))
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(asr, "resolve_qwen_asr_local_source", lambda: "C:/fake/qwen3-asr")
     monkeypatch.setattr(

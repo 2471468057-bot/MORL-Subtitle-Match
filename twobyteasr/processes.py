@@ -353,6 +353,12 @@ def renderer_child_environment():
     for name in ('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE'):env.pop(name,None)
     env['TWOBYTEASR_CHILD_PROCESS_LOG']=str(process_log_path())
     env['TWOBYTEASR_PROCESS_ACTION']='web-subtitle-render'
+    from .export_run_log import current_export_log
+    logger = current_export_log()
+    if logger is not None:
+        env['TWOBYTEASR_CHILD_PROCESS_LOG'] = str(logger.path / 'renderer-children.jsonl')
+        env['TWOBYTEASR_EXPORT_JOB_ID'] = str(logger.job.export_context['job_id'])
+        env['TWOBYTEASR_EXPORT_STDERR_ROOT'] = str(logger.path)
     return env
 
 
@@ -382,6 +388,7 @@ def run_hidden_subprocess(
     started = time.perf_counter()
     completed = None
     child_pid = None
+    export_log = None
     try:
         if runner is not None:
             completed = runner(command_list, **kwargs)
@@ -396,6 +403,7 @@ def run_hidden_subprocess(
             if input_value is not None:
                 kwargs["stdin"] = subprocess.PIPE
             process = subprocess.Popen(command_list, **kwargs)
+            export_log = _export_process_started(process, command_list, purpose, kwargs)
             child_pid = process.pid
             _note_child_start()
             _record_child_process(
@@ -416,12 +424,18 @@ def run_hidden_subprocess(
                 stdout, stderr = process.communicate()
                 exc.stdout = stdout
                 exc.stderr = stderr
+                if export_log:
+                    export_log.output('stdout', stdout); export_log.output('stderr', stderr)
                 raise
+            if export_log:
+                export_log.output('stdout', stdout); export_log.output('stderr', stderr)
             completed = subprocess.CompletedProcess(command_list, process.returncode, stdout, stderr)
             if check:
                 completed.check_returncode()
         return completed
     finally:
+        if export_log:
+            export_log.exited(process.returncode)
         _record_child_process(
             command_list,
             purpose,
@@ -459,6 +473,7 @@ class _InstrumentedPopen:
         self._creationflags = int(creationflags or 0)
         self._redact_process_details = bool(redact_process_details)
         self._recorded = False
+        self._export_log = None
 
     def _record(self) -> None:
         if self._recorded:
@@ -467,6 +482,8 @@ class _InstrumentedPopen:
         if code is None:
             return
         self._recorded = True
+        if self._export_log:
+            self._export_log.exited(code)
         _record_child_process(
             self._command,
             self._purpose,
@@ -494,7 +511,11 @@ class _InstrumentedPopen:
 
     def communicate(self, *args, **kwargs):
         try:
-            return self._process.communicate(*args, **kwargs)
+            output = self._process.communicate(*args, **kwargs)
+            if self._export_log:
+                self._export_log.output('stdout', output[0])
+                self._export_log.output('stderr', output[1])
+            return output
         finally:
             self._record()
 
@@ -510,6 +531,31 @@ class _InstrumentedPopen:
 
     def __getattr__(self, name: str):
         return getattr(self._process, name)
+
+
+def _export_process_started(process, command, purpose, kwargs):
+    from .export_run_log import current_export_log
+    logger = current_export_log()
+    if logger is None:
+        return None
+    redirected = {channel: str(getattr(kwargs.get(channel), 'name'))
+                  for channel in ('stdout', 'stderr')
+                  if isinstance(getattr(kwargs.get(channel), 'name', None), (str, os.PathLike))}
+    argv = [str(x) for x in command]
+    text_mode = bool(kwargs.get('text') or kwargs.get('encoding') or kwargs.get('universal_newlines'))
+    probe_text = (Path(argv[0]).stem.lower() == 'ffprobe' and any(
+        option in argv for option in ('-show_packets', '-show_streams', '-show_format', '-show_entries')))
+    try:
+        return logger.process_started(command, purpose, process, cwd=kwargs.get('cwd'), redirected=redirected,
+            capture_stdout=text_mode or probe_text, stderr_merged=kwargs.get('stderr') == subprocess.STDOUT)
+    except BaseException:
+        # The caller has not received the handle yet. A diagnostic write failure
+        # must not strand a running export child outside cancellation ownership.
+        try:
+            stop_process_tree(process)
+        except Exception:
+            pass
+        raise
 
 
 def popen_hidden_subprocess(
@@ -586,7 +632,7 @@ def popen_hidden_subprocess(
         original_command=recorded_command,
         redact_process_details=log_command is not None,
     )
-    return _InstrumentedPopen(
+    instrumented = _InstrumentedPopen(
         process,
         recorded_command_list,
         purpose,
@@ -596,9 +642,17 @@ def popen_hidden_subprocess(
         original_command=recorded_command,
         redact_process_details=log_command is not None,
     )
+    instrumented._export_log = _export_process_started(process, command_list, purpose, kwargs)
+    if instrumented._export_log:
+        from .export_run_log import LoggedPipe
+        for channel in ('stdout', 'stderr'):
+            stream = getattr(process, channel, None)
+            if stream is not None and (channel == 'stderr' or instrumented._export_log.capture_stdout):
+                setattr(instrumented, channel, LoggedPipe(stream, instrumented._export_log, channel))
+    return instrumented
 
 
-def stop_process_tree(process) -> None:
+def stop_process_tree(process, *, deadline_monotonic=None) -> None:
     """终止整个子进程树（含孙进程）并等待其真正退出；幂等。
 
     Windows 用 ``taskkill /T /F``（按进程树终止）；受限环境下 taskkill
@@ -607,24 +661,35 @@ def stop_process_tree(process) -> None:
     """
     if process.poll() is not None:
         return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            **hidden_subprocess_kwargs(),
-        )
+    remaining = lambda:max(0., min(3., deadline_monotonic-time.monotonic())) if deadline_monotonic is not None else 3.
+    if os.name == "nt" and remaining() > 0:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=remaining(),
+                **hidden_subprocess_kwargs(),
+            )
+        except subprocess.TimeoutExpired:
+            pass
         # 受限环境下 taskkill 可能无法结束根进程；直接 kill 作为立即兜底。
         if process.poll() is None:
             process.kill()
     else:
         process.kill()
     try:
-        process.wait(timeout=3)
+        process.wait(timeout=remaining())
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=3)
+        try:
+            process.wait(timeout=remaining())
+        except subprocess.TimeoutExpired:
+            if deadline_monotonic is None:
+                raise
+            return False
+    return True
 
 
 def run_subprocess_with_tree_kill(command, *, timeout, **kwargs):

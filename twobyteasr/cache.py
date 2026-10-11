@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 # The core owns runtime configuration; these imports preserve the existing public contract.
 from subtitle_core import *  # noqa: F401,F403
@@ -22,8 +22,10 @@ from twobyteasr.processes import popen_hidden_subprocess, run_hidden_subprocess
 from twobyteasr.runtime import get_runtime_context
 
 _EVENT_LOG_LOCK = threading.Lock()
+_EVENT_LOG_SESSION_LEASE = None
 _EVENT_OBSERVER_LOCK = threading.RLock()
 _EVENT_OBSERVERS = []
+_VALIDATED_GROUP_PRODUCERS = frozenset({"ai", "mixed", "local_fast"})
 
 __all__ = [
     'stable_digest',
@@ -31,6 +33,7 @@ __all__ = [
     '_redact_runtime_secrets',
     'redact_runtime_secrets',
     'begin_run_event_log',
+    'end_run_event_log',
     'record_run_event',
     'add_run_event_observer',
     'remove_run_event_observer',
@@ -66,17 +69,38 @@ def file_digest(path):
         return ""
 
 
-def redact_runtime_secrets(value):
-    text = str(value)
+def _runtime_secret_values():
     runtime_keys = []
     for resolver in (polish_llm_settings, group_llm_settings):
         try:
             runtime_keys.append(resolver().get("api_key", ""))
         except Exception:
             pass
-    for secret in (DASHSCOPE_API_KEY, HF_TOKEN, *runtime_keys):
-        if secret:
-            text = text.replace(secret, "<redacted>")
+    return tuple(secret for secret in (DASHSCOPE_API_KEY, HF_TOKEN, *runtime_keys) if secret)
+
+
+# One event redacts every string in its payload. Resolving the secrets (two
+# endpoint resolutions) per string made a large event cost ~20 ms, so an
+# event resolves them once and nested redaction on this thread reuses them.
+_SECRET_SCOPE = threading.local()
+
+
+@contextmanager
+def _resolved_runtime_secrets():
+    previous = getattr(_SECRET_SCOPE, "values", None)
+    if previous is None:
+        _SECRET_SCOPE.values = _runtime_secret_values()
+    try:
+        yield
+    finally:
+        _SECRET_SCOPE.values = previous
+
+
+def redact_runtime_secrets(value):
+    text = str(value)
+    secrets = getattr(_SECRET_SCOPE, "values", None)
+    for secret in (_runtime_secret_values() if secrets is None else secrets):
+        text = text.replace(secret, "<redacted>")
     return text
 
 
@@ -87,21 +111,23 @@ _redact_runtime_secrets = redact_runtime_secrets
 
 def _redact_runtime_payload(value):
     """Redact secrets without flattening lists and dictionaries used by reports."""
-    if isinstance(value, dict):
-        return {
-            str(key): _redact_runtime_payload(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_redact_runtime_payload(item) for item in value]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return redact_runtime_secrets(value)
+    with _resolved_runtime_secrets():
+        if isinstance(value, dict):
+            return {
+                str(key): _redact_runtime_payload(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [_redact_runtime_payload(item) for item in value]
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        return redact_runtime_secrets(value)
 
 
 def begin_run_event_log():
     """为本次队列建立内部 JSONL 日志，不在素材目录生成辅助文件。"""
-    global RUN_EVENT_LOG_PATH
+    global RUN_EVENT_LOG_PATH, _EVENT_LOG_SESSION_LEASE
+    end_run_event_log()
     runtime_context = get_runtime_context()
     log_root = RUN_LOG_ROOT
     try:
@@ -114,13 +140,21 @@ def begin_run_event_log():
             RUN_EVENT_LOG_PATH = ""
             runtime_context.event_log_path = ""
             return "日志目录不可写，已继续运行（不影响字幕输出）"
-    _prune_run_event_logs(log_root)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     RUN_EVENT_LOG_PATH = os.path.join(
         log_root,
         f"auto_asr_{stamp}_{os.getpid()}_{uuid.uuid4().hex[:6]}.jsonl",
     )
     runtime_context.event_log_path = RUN_EVENT_LOG_PATH
+    from .storage_service import register_cache, cache_lease
+    register_cache(RUN_EVENT_LOG_PATH, 'log', producer='cache_run_event_log')
+    try:
+        lease = cache_lease(RUN_EVENT_LOG_PATH)
+        lease.__enter__()
+        with _EVENT_LOG_LOCK:
+            _EVENT_LOG_SESSION_LEASE = lease
+    except OSError:
+        pass
     record_run_event(
         "run_started",
         pid=os.getpid(),
@@ -131,28 +165,24 @@ def begin_run_event_log():
     return RUN_EVENT_LOG_PATH
 
 
+def end_run_event_log():
+    """Release the queue's diagnostic file after its final event, retaining its path."""
+    global _EVENT_LOG_SESSION_LEASE
+    with _EVENT_LOG_LOCK:
+        lease, _EVENT_LOG_SESSION_LEASE = _EVENT_LOG_SESSION_LEASE, None
+    if lease is not None:
+        try:
+            lease.__exit__(None, None, None)
+        except OSError:
+            pass
+
+
 def _prune_run_event_logs(log_root, *, max_age_days=30, max_files=100):
-    """Bound retention of redacted diagnostics that can still contain local paths."""
-    try:
-        root = os.path.realpath(log_root)
-        entries = []
-        for name in os.listdir(root):
-            if not (name.startswith("auto_asr_") and name.endswith(".jsonl")):
-                continue
-            path = os.path.realpath(os.path.join(root, name))
-            if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
-                continue
-            entries.append((os.path.getmtime(path), path))
-        entries.sort(reverse=True)
-        cutoff = time.time() - max(1, int(max_age_days)) * 86400
-        for index, (modified, path) in enumerate(entries):
-            if modified < cutoff or index >= max(1, int(max_files)):
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-    except (OSError, ValueError):
-        pass
+    """Legacy no-op: registered logs follow storage's 14-day/200-MiB policy.
+
+    Filename and age alone do not prove ownership. Maintenance is scheduled
+    outside the recognition task and rechecks leases before every deletion.
+    """
 
 
 def add_run_event_observer(callback):
@@ -181,6 +211,15 @@ def run_event_observer(callback):
 
 
 def record_run_event(event, **payload):
+    with _resolved_runtime_secrets():
+        _record_run_event(event, payload)
+
+
+def _record_run_event(event, payload):
+    payload.setdefault("monotonic_seconds", time.monotonic())
+    context = get_runtime_context()
+    if context.identity_task_active:
+        payload.setdefault("job_id", context.job_id)
     safe_payload = {
         key: _redact_runtime_payload(value)
         for key, value in payload.items()
@@ -204,19 +243,19 @@ def record_run_event(event, **payload):
     }
     try:
         with _EVENT_LOG_LOCK:
-            with open(event_log_path, "a", encoding="utf-8") as file:
-                file.write(redact_runtime_secrets(json.dumps(row, ensure_ascii=False)) + "\n")
+            from .storage_service import cache_lease, touch_cache
+            with cache_lease(event_log_path):
+                with open(event_log_path, "a", encoding="utf-8") as file:
+                    file.write(redact_runtime_secrets(json.dumps(row, ensure_ascii=False)) + "\n")
+                touch_cache(event_log_path)
     except OSError:
         pass
 
 
 def media_cache_context(media_path):
-    stat = os.stat(media_path)
-    identity = {
-        "path": os.path.normcase(os.path.abspath(media_path)),
-        "size": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-    }
+    from .recognition_result import media_identity_for_task
+    context = get_runtime_context()
+    identity = media_identity_for_task(media_path, context if context.identity_task_active else None)
     cache_key = stable_digest(identity)[:24]
     cache_dir = os.path.join(CACHE_ROOT, cache_key)
     os.makedirs(cache_dir, exist_ok=True)
@@ -346,79 +385,112 @@ def decode_audio_to_array(media_path, cancellation_token=None, _stall_limit=None
     return audio
 
 
+def _read_shared_audio_memmap(audio_path, meta_path):
+    """Keep the immutable NPY and its identity sidecar leased through array views."""
+    import numpy as np
+    import weakref
+    from .storage_service import cache_lease
+    leases = ExitStack()
+    try:
+        leases.enter_context(cache_lease(audio_path))
+        leases.enter_context(cache_lease(meta_path))
+        audio = np.load(audio_path, mmap_mode='r', allow_pickle=False)
+        if not isinstance(audio, np.memmap):
+            close = getattr(audio, 'close', None)
+            if callable(close):close()
+            raise ValueError('Shared audio cache must be a memory-mapped NPY')
+        audio._storage_lease_finalizer = weakref.finalize(audio, leases.close)
+        return audio
+    except Exception:
+        leases.close()
+        raise
+
+
 def load_shared_audio(media_path, cache_context):
     """读取隐藏的 float32 PCM 缓存；缓存损坏时自动重新解码。"""
     import numpy as np
 
     audio_path = os.path.join(cache_context["cache_dir"], "audio_16k.npy")
     meta_path = os.path.join(cache_context["cache_dir"], "audio_meta.json")
-    signature = cache_stage_signature("audio")
-    cache_reject_reason = "missing_artifact"
-    try:
-        with open(meta_path, "r", encoding="utf-8") as file:
-            meta = json.load(file)
-        if (
-            meta.get("schema") == CACHE_SCHEMA_VERSION
-            and meta.get("identity") == cache_context["identity"]
-            and meta.get("signature") == signature
-            and int(meta.get("sample_rate", 0)) == AUDIO_SAMPLE_RATE
-            and os.path.isfile(audio_path)
-        ):
-            audio = np.load(audio_path, mmap_mode="r")
-            if audio.ndim == 1 and audio.size == int(meta.get("samples", -1)):
-                print(
-                    f"   [缓存命中] 统一音频，{audio.size / AUDIO_SAMPLE_RATE:.2f} 秒。"
-                )
+    from .storage_service import register_cache, cache_lease
+    with ExitStack() as leases:
+        for path in (audio_path, meta_path, audio_path+'.tmp', meta_path+'.tmp'):
+            leases.enter_context(cache_lease(path))
+        signature = cache_stage_signature("audio")
+        cache_reject_reason = "missing_artifact"
+        try:
+            with open(meta_path, "r", encoding="utf-8") as file:
+                meta = json.load(file)
+            if (
+                meta.get("schema") == CACHE_SCHEMA_VERSION
+                and meta.get("identity") == cache_context["identity"]
+                and meta.get("signature") == signature
+                and int(meta.get("sample_rate", 0)) == AUDIO_SAMPLE_RATE
+                and os.path.isfile(audio_path)
+            ):
+                audio = _read_shared_audio_memmap(audio_path, meta_path)
+                if audio.ndim == 1 and audio.size == int(meta.get("samples", -1)):
+                    print(
+                        f"   [缓存命中] 统一音频，{audio.size / AUDIO_SAMPLE_RATE:.2f} 秒。"
+                    )
+                    try:
+                        os.utime(cache_context["cache_dir"], None)
+                    except OSError:
+                        pass
+                    record_run_event("cache_hit", stage="audio", path=audio_path)
+                    record_run_event("CACHE_ACCEPTED", stage="audio", path=audio_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
+                    for path in (audio_path, meta_path):
+                        register_cache(path, 'audio', source=str(media_path), producer='cache_shared_audio')
+                    return audio
+                audio._mmap.close()
+                audio._storage_lease_finalizer()
+                del audio
+        except (OSError, ValueError, TypeError):
+            cache_reject_reason = "invalid_artifact"
+        record_run_event("CACHE_REJECTED", stage="audio", path=audio_path, reason=cache_reject_reason)
+
+        decoded = decode_audio_to_array(
+            media_path,
+            cancellation_token=get_runtime_context().cancellation_token,
+        )
+        temp_audio_path = audio_path + ".tmp"
+        try:
+            buffer = io.BytesIO()
+            np.save(buffer, decoded, allow_pickle=False)
+            Path(temp_audio_path).write_bytes(buffer.getvalue())
+            os.replace(temp_audio_path, audio_path)
+            atomic_write_json(
+                meta_path,
+                {
+                    "schema": CACHE_SCHEMA_VERSION,
+                    "created_at": time.time(),
+                    "identity": cache_context["identity"],
+                    "signature": signature,
+                    "sample_rate": AUDIO_SAMPLE_RATE,
+                    "samples": int(decoded.size),
+                    "dependency_hash": stable_digest(cache_context["identity"]),
+                },
+            )
+        finally:
+            if os.path.exists(temp_audio_path):
                 try:
-                    os.utime(cache_context["cache_dir"], None)
+                    os.remove(temp_audio_path)
                 except OSError:
                     pass
-                record_run_event("cache_hit", stage="audio", path=audio_path)
-                record_run_event("CACHE_ACCEPTED", stage="audio", path=audio_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
-                return audio
-    except (OSError, ValueError, TypeError):
-        cache_reject_reason = "invalid_artifact"
-    record_run_event("CACHE_REJECTED", stage="audio", path=audio_path, reason=cache_reject_reason)
-
-    decoded = decode_audio_to_array(
-        media_path,
-        cancellation_token=get_runtime_context().cancellation_token,
-    )
-    temp_audio_path = audio_path + ".tmp"
-    try:
-        buffer = io.BytesIO()
-        np.save(buffer, decoded, allow_pickle=False)
-        Path(temp_audio_path).write_bytes(buffer.getvalue())
-        os.replace(temp_audio_path, audio_path)
-        atomic_write_json(
-            meta_path,
-            {
-                "schema": CACHE_SCHEMA_VERSION,
-                "created_at": time.time(),
-                "identity": cache_context["identity"],
-                "signature": signature,
-                "sample_rate": AUDIO_SAMPLE_RATE,
-                "samples": int(decoded.size),
-                "dependency_hash": stable_digest(cache_context["identity"]),
-            },
-        )
-    finally:
-        if os.path.exists(temp_audio_path):
-            try:
-                os.remove(temp_audio_path)
-            except OSError:
-                pass
-    duration = decoded.size / AUDIO_SAMPLE_RATE
-    del decoded
-    audio = np.load(audio_path, mmap_mode="r")
-    record_run_event("cache_write", stage="audio", path=audio_path)
-    print(f"   [缓存写入] 统一音频，{duration:.2f} 秒。")
-    return audio
+        duration = decoded.size / AUDIO_SAMPLE_RATE
+        del decoded
+        audio = _read_shared_audio_memmap(audio_path, meta_path)
+        for path in (audio_path, meta_path):
+            register_cache(path, 'audio', source=str(media_path), producer='cache_shared_audio')
+        record_run_event("cache_write", stage="audio", path=audio_path)
+        print(f"   [缓存写入] 统一音频，{duration:.2f} 秒。")
+        return audio
 
 
 def cache_stage_signature(stage, extra=None, provider_snapshot=None):
     runtime_context = get_runtime_context()
     version = CACHE_STAGE_VERSIONS.get(stage)
+    if stage=='diarizen_v2':version=1
     if version is None and str(stage).startswith("primary_"):
         version = CACHE_STAGE_VERSIONS["primary_backend"]
     if version is None:
@@ -428,12 +500,19 @@ def cache_stage_signature(stage, extra=None, provider_snapshot=None):
         "stage": stage,
         "version": version,
     }
+    # Version ALL derived identities, including child batches. Independent audio,
+    # VAD, FireRed and Qwen evidence keep their existing signatures.
+    if stage in {"firered_primary", "firered_llm", "polished", "grouped", "grouped_local", "final_timing"}:
+        base["primary_context_contract"] = "moss-full-context-v1"
+        base["local_review_contract"] = "qwen-worker-shared-float32-v1-particle-safe-v1"
     if stage == "audio":
         base.update({"sample_rate": AUDIO_SAMPLE_RATE, "format": "float32-mono"})
     elif stage == "qwen":
         base.update(
             {
                 "model": QWEN_ASR_MODEL,
+                "worker_contract": "qwen-worker-shared-float32-v1",
+                "max_new_tokens": QWEN_ASR_MAX_NEW_TOKENS,
                 "chunk": QWEN_ASR_CHUNK_SECONDS,
                 "pad": QWEN_ASR_AUDIO_PAD_SECONDS,
                 "batch_size": QWEN_ASR_BATCH_SIZE,
@@ -455,10 +534,18 @@ def cache_stage_signature(stage, extra=None, provider_snapshot=None):
             }
         )
     elif stage == "polished":
-        from .asr_provider_snapshot import task_provider_snapshot
+        from .asr_provider_snapshot import task_provider_snapshot, POLISH_PROMPT_VERSION
+        from .terminology import runtime_snapshot
+        from .terminology_retrieval import RULE_VERSION as TERM_RETRIEVAL_VERSION
+        from .number_fidelity import RULE_VERSION as NUMBER_RULE_VERSION, preference
         snapshot = provider_snapshot or task_provider_snapshot('polish')
         endpoint = snapshot.endpoint()
+        vocabulary_snapshot = runtime_snapshot()
+        frozen_vocabulary = getattr(runtime_context, 'glossary_snapshot', None) is not None
         base['provider_snapshot'] = snapshot.cache_identity()
+        base.update(glossary_snapshot_digest=vocabulary_snapshot.digest,
+            terminology_retrieval_rules=TERM_RETRIEVAL_VERSION, correction_protocol=POLISH_PROMPT_VERSION,
+            number_rules=NUMBER_RULE_VERSION, prefer_arabic_numbers=preference())
         base.update(
             {
                 "provider": endpoint["provider"],
@@ -466,21 +553,23 @@ def cache_stage_signature(stage, extra=None, provider_snapshot=None):
                 "base_url": endpoint["base_url"],
                 "domain": CONTENT_DOMAIN_HINT,
                 "glossary": file_digest(GLOSSARY_PATH),
-                "game_profiles": file_digest(GAME_PROFILES_PATH),
+                "game_profiles": (vocabulary_snapshot.digest if frozen_vocabulary
+                                  else file_digest(GAME_PROFILES_PATH)),
                 "game_lexicons": (
-                    enabled_game_lexicon_signature()
+                    {library.id: library.revision for library in vocabulary_snapshot.libraries}
+                    if frozen_vocabulary else enabled_game_lexicon_signature()
                     if runtime_context.enable_domain_terms
                     else {}
                 ),
                 "logic": POLISH_LOGIC_VERSION,
                 "runtime_profile": runtime_content_profile_signature(),
                 "verified_terms": (
-                    file_digest(GAME_PROFILES_PATH)
+                    vocabulary_snapshot.digest if frozen_vocabulary else file_digest(GAME_PROFILES_PATH)
                     if runtime_context.enable_domain_terms
                     else ""
                 ),
                 "learned_terms": (
-                    file_digest(LEARNED_TERMS_PATH)
+                    vocabulary_snapshot.digest if frozen_vocabulary else file_digest(LEARNED_TERMS_PATH)
                     if runtime_context.enable_domain_terms
                     else ""
                 ),
@@ -511,7 +600,13 @@ def cache_stage_signature(stage, extra=None, provider_snapshot=None):
     elif stage == "firered_primary":
         # 主播人数直接决定哪些 MOSS 标签进入成片。必须进入缓存签名，
         # 否则同一素材先按两人运行后再改成三人仍会命中旧的两人主稿。
-        base.update({"runtime_profile": runtime_content_profile_signature()})
+        # This is the uncorrected ASR/speaker assembly. Its producer never
+        # reads terminology or number preferences; changes to those affect
+        # downstream correction only and must reuse the same ASR evidence.
+        base.update({"speaker_selection": {
+            "expected_speakers": int(runtime_context.expected_speakers),
+            "dialogue_coverage_mode": str(runtime_context.dialogue_coverage_mode),
+        }})
     elif stage == "final_timing":
         from .number_fidelity import RULE_VERSION, preference
         base.update({"logic": TIMING_LOGIC_VERSION, 'fidelity_rules': RULE_VERSION,
@@ -541,7 +636,8 @@ def atomic_write_json(path, payload):
 
 def _stage_cache_path(stage, cache_context, signature):
     # Legacy grouped.json is retained verbatim. New identities never replace it.
-    name = f"grouped-snapshot-{signature}.json" if stage == "grouped" else f"{stage}.json"
+    name = (f"moss-full-context-{signature}.json" if stage == "moss" else
+            f"grouped-snapshot-{signature}.json" if stage == "grouped" else f"{stage}.json")
     return os.path.join(cache_context["cache_dir"], name)
 
 
@@ -590,18 +686,18 @@ def run_cached_stage(
             reasons.append("upstream_hash_mismatch" if payload.get("dependency_hash") else "missing_dependency")
         if api_stage_force_refresh(stage):
             reasons.append("force_refresh")
-        if stage == "grouped" and (payload.get("producer") != "ai" or payload.get("validation") != "exact_text_and_boundaries"):
+        if stage == "grouped" and (payload.get("producer") not in _VALIDATED_GROUP_PRODUCERS or payload.get("validation") != "exact_text_and_boundaries"):
             reasons.append("legacy_or_unvalidated_grouped")
         if stage == "grouped" and not reasons and not _grouped_stage_text_valid(decoder(payload.get("data")), extra_signature):
             reasons.append("text_mismatch")
         if not reasons:
             require_current()
+            decoded = decoder(payload.get("data"))
             if stage=='polished':
-                owner.terminology_status=dict(payload.get('terminology_status') or {})
                 owner.polishing_summary=dict(payload.get('polishing_summary') or {})
-                if owner.terminology_status:
-                    owner.terminology_status['cached']=True
-                    record_run_event('domain_term_verification_summary',**owner.terminology_status)
+                # Legacy nested search state does not prove a search ran in
+                # this task; the independent search executor owns its receipt.
+                owner.polishing_summary.pop('terminology', None)
                 if owner.polishing_summary:
                     owner.polishing_summary['cached']=True
                     record_run_event('polishing_summary',**owner.polishing_summary)
@@ -613,7 +709,10 @@ def run_cached_stage(
             print(f"   [缓存命中] {stage}，跳过重复计算。")
             record_run_event("CACHE_ACCEPTED", stage=stage, path=cache_path, reason="fingerprint_match,model_hash_match,upstream_hash_match,schema_match")
             record_run_event("cache_hit", stage=stage, path=cache_path)
-            return decoder(payload.get("data"))
+            if stage == "grouped":
+                from .asr_provider_snapshot import GroupedBatchResult
+                return GroupedBatchResult(decoded, origin=payload["producer"], validated=True, cache_hit=True)
+            return decoded
         rejected_reason = ",".join(reasons) or rejected_reason
         record_run_event("CACHE_REJECTED", stage=stage, path=cache_path, reason=rejected_reason)
     except (OSError, ValueError, TypeError):
@@ -627,10 +726,10 @@ def run_cached_stage(
         item.get("category") in ("漏句回退", "校对回退", "断句回退")
         for item in stage_review_items
     )
-    if stage=='polished' and (getattr(owner,'terminology_status',{}) or {}).get('status') in {'failed','partial'}:
-        used_fallback=True
+    if stage == 'polished' and int((getattr(owner, 'polishing_summary', {}) or {}).get('fallback_cues', 0) or 0):
+        used_fallback = True
     verified_group = stage != "grouped" or (
-        getattr(value, "origin", None) == "ai" and getattr(value, "validated", False)
+        getattr(value, "origin", None) in _VALIDATED_GROUP_PRODUCERS and getattr(value, "validated", False)
         and _grouped_stage_text_valid(value, extra_signature))
     if should_cache(value) and not used_fallback and verified_group:
         atomic_write_json(
@@ -641,13 +740,14 @@ def run_cached_stage(
                 "identity": cache_context["identity"],
                 "signature": signature,
                 "dependency_hash": dependency_hash,
-                **({"producer": "ai", "validation": "exact_text_and_boundaries"} if stage == "grouped" else {}),
+                **({"producer": value.origin, "validation": "exact_text_and_boundaries"} if stage == "grouped" else {}),
                 "model_identity": (extra_signature.get("model_identity") if isinstance(extra_signature, dict) else ""),
                 "runtime_version": (extra_signature.get("runtime_version") if isinstance(extra_signature, dict) else "") or PIPELINE_BUILD_ID,
                 "upstream_artifact_hashes": (extra_signature.get("upstream_artifact_hashes") if isinstance(extra_signature, dict) else {}),
                 "review_items": stage_review_items,
-                **({'terminology_status':getattr(owner,'terminology_status',{}),
-                    'polishing_summary':getattr(owner,'polishing_summary',{})} if stage=='polished' else {}),
+                **({'polishing_summary': {key: item for key, item in
+                    (getattr(owner, 'polishing_summary', {}) or {}).items()
+                    if key != 'terminology'}} if stage == 'polished' else {}),
                 "data": encoder(value),
             },
         )
@@ -748,6 +848,8 @@ def run_cached_api_batch(
         item.get("category") in set(fallback_categories)
         for item in batch_review_items
     )
+    if stage == 'polished' and getattr(value, 'failures', {}):
+        used_fallback = True
     validated_ai = not strict_group or (
         getattr(value, "origin", None) == "ai" and getattr(value, "validated", False)
         and validator is not None and validator(value)
@@ -766,6 +868,9 @@ def run_cached_api_batch(
                 **({"provider_fingerprint": provider_snapshot.fingerprint,
                     "cache_version": GROUP_CACHE_VERSION, "producer": "ai",
                     "validation": "exact_text_and_boundaries"} if strict_group else {}),
+                **({"producer": "local_fast", "validation": "exact_text_and_boundaries"}
+                    if stage == "grouped_local" and getattr(value, "origin", "") == "local_fast"
+                    and getattr(value, "validated", False) else {}),
                 "review_items": batch_review_items,
                 "data": encoder(value),
             },
@@ -813,7 +918,7 @@ def store_cached_stage_value(
     extra_signature=None,
 ):
     """写入已经由批量常驻模型算出的阶段结果。"""
-    cache_path = os.path.join(cache_context["cache_dir"], f"{stage}.json")
+    cache_path = _stage_cache_path(stage, cache_context, cache_stage_signature(stage, extra_signature))
     atomic_write_json(
         cache_path,
         {

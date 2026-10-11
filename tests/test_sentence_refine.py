@@ -142,7 +142,7 @@ def test_refine_end_to_end_applies_split_and_space(qapp, tmp_path, monkeypatch):
     ]}, ensure_ascii=False)
     _patch_provider(monkeypatch, [response])
     outcome = refine_cues_with_llm(cues, project=project, runtime_settings={"models": {"polish": {}}})
-    assert outcome.llm_status == "completed"
+    assert outcome.llm_status == "partial"  # invalid field is unfinished, not a completed cue
     actions = {a.cue_id: a for a in outcome.actions}
     assert set(actions) == {"c917", "c919"}  # c916 被 1 字段护栏拒绝
     # 端到端替换
@@ -247,9 +247,9 @@ def test_clause_particle_is_a_valid_space_anchor():
     assert validate_action("这个机制我觉得挺好", {"action": "space", "space_after_chars": [3]}) is None
 
 
-def test_space_guard_rejects_existing_space_and_trailing():
+def test_space_guard_keeps_existing_space_and_rejects_trailing():
     # 已有空格处不再插（规则 5 本地强制，重复处理不叠加）。
-    assert validate_action("啊 好", {"action": "space", "space_after_chars": [0]}) is None
+    assert validate_action("啊 好", {"action": "space", "space_after_chars": [0]}).action == 'keep'
     # 尾字符后不允许尾随空格。
     assert validate_action("很好嗯", {"action": "space", "space_after_chars": [2]}) is None
 

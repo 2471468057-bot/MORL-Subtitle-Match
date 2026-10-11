@@ -65,18 +65,25 @@ def verify(ui, out):
                     'preview':rect(panel.preview),'path':rect(panel.path),
                     'play':rect(panel.play),'reveal':rect(panel.reveal),
                     'back':rect(panel.back),'again':rect(panel.again),
+                    'info':rect(panel.info),
                     'scroll_max':panel.scroll.verticalScrollBar().maximum()}
             wide=ui.width()>=1000
+            # 2026-10-08 (M13): result workspace hierarchy — play (primary)
+            # above show-in-folder (secondary), both spanning the facts
+            # column; back / export-again equal in the page header.
             check(label+' preview 16:9',abs(panel.preview.height()-panel.preview.width()*9/16)<=1)
-            check(label+' equal button size',panel.play.size()==panel.reveal.size())
             check(label+' primary height',56<=panel.play.height()<=64)
-            a,b=rect(panel.play),rect(panel.reveal)
-            content=panel.card.contentsRect().adjusted(28,28,-28,-24)
-            check(label+' full width actions',a[0]==content.x() and (b[0]+b[2]==content.x()+content.width() if wide else a[2]==content.width()))
+            check(label+' secondary below primary',rect(panel.reveal)[1]>rect(panel.play)[1]
+                  and panel.reveal.height()<panel.play.height())
+            a,b,info=rect(panel.play),rect(panel.reveal),layout['info']
+            check(label+' actions span facts column',a[0]==b[0]==info[0] and a[2]==b[2]==info[2])
             check(label+' no horizontal scroll',panel.scroll.horizontalScrollBar().maximum()==0)
             if wide:
-                p,v=layout['preview'],layout['path']
-                check(label+' preview/path bottom aligned',abs(p[1]+p[3]-v[1]-v[3])<=1)
+                p=layout['preview']
+                check(label+' poster and facts share the top edge',abs(p[1]-info[1])<=2)
+                # 2026-10-09 (M15): the two actions end on the poster's bottom edge.
+                check(label+' actions end on the poster bottom',abs((b[1]+b[3])-(p[1]+p[3]))<=2)
+            check(label+' navigation in header',rect(panel.back)[1]<0 and rect(panel.again)[1]<0)
             check(label+' secondary same form',panel.back.objectName()==panel.again.objectName() and panel.back.height()==panel.again.height())
             shot('completion-'+label)
             panel.scroll.ensureWidgetVisible(panel.again);pump()

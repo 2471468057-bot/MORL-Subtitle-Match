@@ -10,7 +10,8 @@ import pytest
 from PySide6.QtGui import QUndoStack
 from PySide6.QtWidgets import QApplication
 
-from twobyteasr.media_availability import apply_availability, export_sources, probe_sources, require_available
+from twobyteasr.media_availability import (apply_availability, export_sources, probe_sources,
+                                           require_available, shutdown_probe_worker)
 from twobyteasr.studio_edit_sequence import sequence_of
 from twobyteasr.studio_media_commands import media_graph_command
 from twobyteasr.studio_media_pool import relink_media_asset
@@ -31,15 +32,49 @@ def test_real_probe_recovers_stale_flags_and_distinguishes_corrupt_media(tmp_pat
 def test_timeout_and_cancel_reap_the_owned_probe_process(tmp_path):
     source = tmp_path/'readable'
     source.write_bytes(b'a')
+    # A cold worker cannot answer within 1 ms, which stands in for a hung path.
+    shutdown_probe_worker()
     baseline = {p.pid for p in multiprocessing.active_children()}
     started = time.monotonic()
     result = probe_sources([str(source)], timeout=.001)
     assert result[str(source)]['status'] == 'timeout'
     assert time.monotonic() - started < 3
+    assert {p.pid for p in multiprocessing.active_children()} == baseline
     deadline = time.monotonic() + .03
     with pytest.raises(InterruptedError):
         probe_sources([str(source)], cancel_check=lambda: time.monotonic() > deadline)
     assert {p.pid for p in multiprocessing.active_children()} == baseline
+
+
+def test_periodic_checks_reuse_one_worker_until_it_is_discarded(tmp_path):
+    source = tmp_path/'readable'
+    source.write_bytes(b'a')
+    shutdown_probe_worker()
+    baseline = {p.pid for p in multiprocessing.active_children()}
+    assert probe_sources([str(source)])[str(source)]['status'] == 'available'
+    first = {p.pid for p in multiprocessing.active_children()} - baseline
+    assert len(first) == 1
+    for _ in range(3):
+        assert probe_sources([str(source)])[str(source)]['status'] == 'available'
+    assert {p.pid for p in multiprocessing.active_children()} - baseline == first
+    (tmp_path/'readable').unlink()
+    assert probe_sources([str(source)])[str(source)]['status'] == 'missing'
+    # A timed-out worker is never reused: a late reply cannot reach a caller.
+    assert probe_sources([str(source)], timeout=0)[str(source)]['status'] in {'timeout', 'missing'}
+    shutdown_probe_worker()
+    assert {p.pid for p in multiprocessing.active_children()} == baseline
+
+
+def test_idle_worker_exit_is_not_reported_as_offline_media(tmp_path, monkeypatch):
+    import twobyteasr.media_availability as availability
+    source = tmp_path/'readable'
+    source.write_bytes(b'a')
+    shutdown_probe_worker()
+    monkeypatch.setattr(availability, '_WORKER_IDLE_SECONDS', .05)
+    assert probe_sources([str(source)])[str(source)]['status'] == 'available'
+    time.sleep(.6)  # the reusable worker has exited on its idle limit
+    assert probe_sources([str(source)])[str(source)]['status'] == 'available'
+    shutdown_probe_worker()
 
 
 def test_relink_undo_keeps_trims_tracks_cues_and_rebinds_primary_paths(tmp_path):

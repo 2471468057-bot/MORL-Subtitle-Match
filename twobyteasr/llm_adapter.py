@@ -338,6 +338,34 @@ def _log_ai_request(*, stage, provider, model, mode) -> None:
         pass
 
 
+def audited_bounded_request(messages, *, stage, request_mode, key_source="", **kwargs):
+    """``asr_http_transport.complete`` plus the invocation audit row.
+
+    This bounded transport serves recognition stages such as grouping; before
+    2026-10-10 its requests were missing from llm_invocations.jsonl.
+    """
+    from .asr_http_transport import complete
+    diagnostics = kwargs.get("request_diagnostics")
+    diagnostics = diagnostics if diagnostics is not None else {}
+    started = time.perf_counter()
+    failure = "incomplete"
+    try:
+        value = complete(messages, **kwargs)
+        failure = ""
+        return value
+    except BaseException as exc:
+        failure = str(getattr(exc, "category", type(exc).__name__))
+        raise
+    finally:
+        record_llm_invocation(
+            stage=stage, provider=kwargs.get("provider", "custom"), model=kwargs.get("model", ""),
+            base_url=kwargs.get("base_url", ""), url=kwargs.get("url", ""), request_mode=request_mode,
+            key_source=key_source, key_present=bool(kwargs.get("api_key")),
+            status_code=diagnostics.get("http_status"), ok=False if failure else None, error=failure,
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+
 def post_chat_completion(
     messages,
     *,
@@ -365,8 +393,8 @@ def post_chat_completion(
 ):
     _log_ai_request(stage=stage, provider=provider, model=model, mode=request_mode)
     if request_diagnostics is not None:
-        from .asr_http_transport import complete
-        return complete(messages, model=model, api_key=api_key, url=url,
+        return audited_bounded_request(messages, stage=stage, request_mode=request_mode,
+            key_source=key_source, model=model, api_key=api_key, url=url,
             max_tokens=max_tokens, temperature=temperature, timeout=timeout,
             enable_thinking=enable_thinking, response_format=response_format,
             provider=provider, base_url=base_url, request_diagnostics=request_diagnostics,
@@ -453,6 +481,10 @@ def post_chat_completion(
 
     effective_body = body
     _invocation_started = time.perf_counter()
+    from .public_api_response import timestamp
+    request_sent_at = timestamp()
+    _record_event('ai_request_dispatched', stage=stage or 'unknown', provider=provider,
+        model=model, endpoint=url, thinking_mode=thinking_mode, request_sent_at=request_sent_at)
     response = send(effective_body)
     response_format_fallback = False
     if response_format is not None and getattr(response, "status_code", 0) == 400:
@@ -615,6 +647,9 @@ def post_chat_completion(
         "stream": False,
         "raw_response_preview": llm_response_preview(_redact(payload, api_key)),
     }
+    from .public_api_response import message_evidence
+    diagnostics.update(request_sent=True, request_sent_at=request_sent_at)
+    message_evidence(payload, diagnostics, api_key=api_key)
     content = extract_chat_message_text(message, prefer_structured=bool(response_format))
     diagnostics["selected_content_length"] = len(str(content or ""))
     _DIAGNOSTIC_LOCAL.value = diagnostics
@@ -770,27 +805,55 @@ def post_chat_completion_stream(
         body['thinking'] = {'type': 'enabled' if enable_thinking is True else 'disabled'}
     elif response_format is not None and caps['supports_enable_thinking']:
         body['enable_thinking'] = False
-    diagnostics = dict(provider=provider, model=model, stream=True,
-                       max_tokens=max_tokens, thinking_sent=body.get('thinking'))
+    diagnostics = dict(provider=provider, model=model, endpoint=url, base_url=base_url, stream=True,
+                       max_tokens=max_tokens, thinking_sent=body.get('thinking'),
+                       thinking_mode=(body.get('thinking') or {}).get('type','provider_default'))
     _DIAGNOSTIC_LOCAL.value = diagnostics
     started = time.perf_counter()
+    from .public_api_response import observe, summary
+    def public_event(kind, value):
+        observe(diagnostics, kind, value, api_key=api_key)
+        if on_stream_event is None:
+            return
+        if kind == 'thinking':
+            # Public DeepSeek API output has a separate source-labelled channel.
+            # Other transports retain their normal private-event protections.
+            if diagnostics.get('public_reasoning_source'):
+                on_stream_event('public_reasoning', _redact(value, api_key))
+            else:
+                on_stream_event('provider_activity', {'returned_reasoning_field_chars':len(str(value or ''))})
+        elif kind != 'thinking_end':
+            on_stream_event(kind, value)
+    failure = 'incomplete'
     try:
-        return request_chat(url, {**auth_headers(api_key),
+        value = request_chat(url, {**auth_headers(api_key),
             'Content-Type': 'application/json', 'Accept': 'text/event-stream'},
-            body, timeout, diagnostics, on_stream_event or (lambda *_: None), cancel_check,
+            body, timeout, diagnostics, public_event, cancel_check,
             total_deadline=total_deadline,input_budget=input_budget)
+        diagnostics.update(summary(diagnostics))
+        if on_stream_event is not None:
+            on_stream_event('public_response', summary(diagnostics))
+        failure = ''
+        return value
     except (StreamProtocolError, requests.RequestException) as exc:
         category = getattr(exc, 'category', 'transport_error')
         diagnostics['failure_category'] = category
+        failure = str(category)
         error=LLMRequestError(str(exc),category=category,diagnostics=diagnostics)
         if hasattr(exc,'report'):error.report=exc.report
         if hasattr(exc,'retry_after_seconds'):error.retry_after_seconds=exc.retry_after_seconds
         raise error from exc
+    except BaseException as exc:
+        failure = str(getattr(exc, 'category', type(exc).__name__))
+        raise
     finally:
         _DIAGNOSTIC_LOCAL.value = dict(diagnostics)
+        # HTTP 200 only means the stream opened; a stream cut by the deadline
+        # or cancellation is not a successful call.
         record_llm_invocation(stage=stage, provider=provider, model=model, base_url=base_url,
             url=url, request_mode='chat.completions_stream', key_source=key_source,
             key_present=bool(api_key), status_code=diagnostics.get('http_status'),
+            ok=False if failure else None, error=failure,
             duration_ms=(time.perf_counter()-started)*1000.)
 
 

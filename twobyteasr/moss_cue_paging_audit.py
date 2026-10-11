@@ -85,7 +85,7 @@ def start(window,out):
         guard.timeout.connect(dialogs);guard.start(200)
         page._open_recognition_sheet();pump(.2)
         local=window.findChild(QCheckBox,'localSpeakerRecognition');sheet=local.parentWidget();local.setChecked(True)
-        selector=next(c for c in sheet.findChildren(QComboBox) if c.findData('nemotron')>=0)
+        selector=next(c for c in sheet.findChildren(QComboBox) if c.findData('moss')>=0)
         check('sheet inherits disabled',selector.currentData()=='single')
         selector.setCurrentIndex(selector.findData('moss'))
         start_button=next(b for b in sheet.findChildren(QPushButton) if b.text()=='识别并替换当前字幕')

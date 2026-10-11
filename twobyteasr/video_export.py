@@ -34,6 +34,7 @@ def capture_video_graph(project) -> dict:
     validate_media_graph(project)
     return dict(media_pool=[asdict(x) for x in project.media_pool],
                 audio_mix=capture_audio_mix(project),
+                clip_transitions=__import__("copy").deepcopy(project.studio_state.get("clip_transitions", [])),
                 video_tracks=[asdict(x) for x in project.video_tracks],
                 audio_tracks=[asdict(x) for x in project.audio_tracks],
                 width=project.media.width or 1920, height=project.media.height or 1080,
@@ -72,6 +73,10 @@ def _audio_arguments(ffmpeg, job) -> list[str]:
         return audio_mix_arguments(ffmpeg, job, job.video_graph["audio_mix"])
     if job.settings.audio_codec == "none" or not media_has_audio(ffmpeg, job.media_path):
         return ["-an"]
+    # The raster output is frame-bounded, while source audio keeps the
+    # requested time range. Do not extend or stretch it to the video frame end.
+    requested_duration = float(job.duration_seconds or max(.001,
+        job.video_graph["duration_ms"] / 1000 - float(job.start_seconds or 0.)))
     slices = job.edit_segments
     if slices:
         graph = []
@@ -79,16 +84,16 @@ def _audio_arguments(ffmpeg, job) -> list[str]:
         for i, (a, b) in enumerate(slices):
             graph.append(f"[1:a]atrim=start={a:.6f}:end={b:.6f},asetpts=PTS-STARTPTS[a{i}]")
             labels.append(f"[a{i}]")
-        graph.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[audio]")
+        graph.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[joined]")
+        graph.append(f"[joined]atrim=duration={requested_duration:.6f}[audio]")
         return ["-i", job.media_path, "-filter_complex", ";".join(graph), "-map", "[audio]", "-c:a", "pcm_s16le"]
-    return ["-ss", f"{job.start_seconds or 0.:.6f}", "-i", job.media_path, "-map", "1:a:0", "-c:a", "pcm_s16le"]
+    return ["-ss", f"{job.start_seconds or 0.:.6f}", "-t", f"{requested_duration:.6f}",
+            "-i", job.media_path, "-map", "1:a:0", "-c:a", "pcm_s16le"]
 
 
-def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=None, indexes=None) -> dict:
-    from .studio_render import export_progress, STAGE_COMPOSE_VIDEO
+def _video_frame_clock(ffmpeg: Path, job):
+    """One output sampling clock for preflight and the actual raster pass."""
     graph = job.video_graph
-    width = int(job.settings.width or graph["width"])
-    height = int(job.settings.height or graph["height"])
     fps = float(job.settings.fps or graph.get("fps") or 0.)
     if fps <= 0:
         from .processes import run_hidden_subprocess
@@ -101,18 +106,43 @@ def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=N
     start = float(job.start_seconds or 0.)
     duration = float(job.duration_seconds or max(.001, graph["duration_ms"] / 1000 - start))
     frame_count = max(1, math.ceil(duration * fps - 1e-8))
+    return fps, start, duration, frame_count
+
+
+def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=None, indexes=None) -> dict:
+    from .studio_render import export_progress, STAGE_COMPOSE_VIDEO
+    graph = job.video_graph
+    width = int(job.settings.width or graph["width"])
+    height = int(job.settings.height or graph["height"])
+    fps, start, duration, frame_count = _video_frame_clock(ffmpeg, job)
     assets = {x["asset_id"]: x for x in graph["media_pool"]}
-    clips = [c for t in sorted(graph["video_tracks"], key=lambda t: (t.get("z_index", 0), t["id"]))
+    clips = [dict(c,track_id=t["id"]) for t in sorted(graph["video_tracks"], key=lambda t: (t.get("z_index", 0), t["id"]))
              if t.get("enabled", True) for c in t.get("clips", []) if c.get("enabled", True)
              and (assets[c["asset_id"]].get("video_metadata") or {}).get("has_video") is not False]
+    from .studio_transitions import transition_windows, transition_gain
+    windows = transition_windows(graph, "video")
+    clips = [dict(c, **{k:v for k,v in windows.get((c["track_id"],c["id"]),windows.get(c["id"], {})).items() if k != "id"}) for c in clips]
     command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
                "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{width}x{height}",
                "-r", f"{fps:.9f}", "-i", "pipe:0", *_audio_arguments(ffmpeg, job),
                "-map", "0:v:0", "-c:v", "ffv1", "-level", "3", "-threads", "2",
-               "-t", f"{duration:.6f}", str(output)]
+               "-frames:v", str(frame_count), str(output)]
     decoders = {}
-    indexes = indexes or {a['canonical_source']: probe_media(ffmpeg,a['canonical_source'],cancelled=cancelled) for a in graph['media_pool'] if a.get('video_metadata',{}).get('has_video',True)}
+    if indexes is None:
+        indexes = {str(Path(a['canonical_source']).resolve()): probe_media(ffmpeg,a['canonical_source'],cancelled=cancelled) for a in graph['media_pool'] if a.get('video_metadata',{}).get('has_video',True)}
     job_id = uuid.uuid4().hex
+    output_duration = float(Fraction(frame_count) / Fraction(str(fps)))
+    frame_clock = dict(fps=fps, frame_count=frame_count,
+        requested_start_seconds=start, requested_duration_seconds=duration,
+        duration_seconds=output_duration,
+        frame_range=[0, frame_count],
+        first_sample_pts=str(Fraction(str(start))),
+        last_sample_pts=str(Fraction(str(start)) + Fraction(frame_count - 1) / Fraction(str(fps))),
+        output_end_pts=str(Fraction(frame_count) / Fraction(str(fps))),
+        audio_range_policy="original requested range; no stretch or extension")
+    clock_file = Path(job.output_path).with_suffix('.composition-frame-clock.json')
+    clock_file.write_text(json.dumps(dict(frame_clock, status='planned', written_frames=0),
+        ensure_ascii=False, indent=2), encoding='utf8')
     receipt_file = Path(job.output_path).with_suffix('.decode-requests.jsonl')
     receipts = receipt_file.open('w',encoding='utf-8')
     errors = output.with_suffix(".stderr")
@@ -161,7 +191,9 @@ def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=N
                         receipts.write(json.dumps(receipt)+'\n')
                         layer = QImage(pixels, fw, fh, fw * 4,
                                        QImage.Format.Format_ARGB32)
-                        paint_layer(painter, width, height, layer, clip)
+                        sampled = dict(clip, transform=dict(clip.get("transform") or {}))
+                        sampled["transform"]["opacity"] = float(sampled["transform"].get("opacity",1.)) * transition_gain(clip.get("envelopes",[]),timeline_ms)
+                        paint_layer(painter, width, height, layer, sampled)
                 finally:
                     painter.end()
                 process.stdin.write(image.constBits())
@@ -178,6 +210,9 @@ def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=N
             returncode = process.wait(timeout=60)
             if returncode:
                 raise RuntimeError(f"视频轨合成失败 ({returncode})")
+            clock_file.write_text(json.dumps(dict(frame_clock, status='raster_encoded',
+                written_frames=frame_count, encoder_exit_code=returncode),
+                ensure_ascii=False, indent=2), encoding='utf8')
         except BaseException as exc:
             if cancelled and cancelled():
                 raise InterruptedError("render cancelled") from exc
@@ -198,7 +233,21 @@ def compose_video(ffmpeg: Path, job, output: Path, *, cancelled=None, progress=N
             for decoder in decoders.values():
                 decoder.close()
             receipts.close()
-    return {"fps": fps, "duration_seconds": duration}
+    return frame_clock
+
+
+def composed_video_frame_count(job):
+    """Exact video cap for a resolved raster, never for original-media exports."""
+    if not job.composition_resolved:
+        return None
+    clock = (job.export_context or {}).get("composed_video_frame_clock")
+    if not clock:
+        return None  # Older internal queue entries have no raster clock receipt.
+    count = clock.get("frame_count")
+    if (isinstance(count, bool) or not isinstance(count, int) or count <= 0
+            or abs(float(job.duration_seconds) * float(job.settings.fps) - count) > 1e-6):
+        raise ValueError("Resolved composition frame count does not match its output clock")
+    return count
 
 
 @contextmanager
@@ -206,6 +255,8 @@ def prepared_video_job(ffmpeg, job, *, cancelled=None, progress=None):
     if not job.video_graph or not requires_video_composition(job.video_graph):
         yield replace(job, video_graph=None)
         return
+    from .timeline_media import resolve_video_graph
+    job = replace(job, video_graph=resolve_video_graph(job.video_graph, ffmpeg, cancelled=cancelled))
     parent = Path(job.output_path).resolve().parent
     parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -215,7 +266,8 @@ def prepared_video_job(ffmpeg, job, *, cancelled=None, progress=None):
         diagnostic=Path(job.output_path).with_suffix('.diagnostic.json')
         diagnostic.write_text(json.dumps(dict(getattr(exc,'receipt',{}),stage='media_preflight',detail=str(exc)),ensure_ascii=False,indent=2),encoding='utf8')
         raise RuntimeError(f'{exc}\n诊断日志：{diagnostic}') from exc
-    if identity_video_graph(job.video_graph,job.media_path):
+    if (not job.video_graph.get("clip_transitions") and identity_video_graph(job.video_graph,job.media_path)
+            and str(Path(job.media_path).resolve()) in indexes):
         index = indexes[str(Path(job.media_path).resolve())]
         yield replace(job,video_graph=None,edit_segments=(),settings=replace(job.settings,fps=job.settings.fps or float(index.fps)))
         return
@@ -228,19 +280,36 @@ def prepared_video_job(ffmpeg, job, *, cancelled=None, progress=None):
         settings = replace(job.settings, fps=composed["fps"],
                            audio_codec=("opus" if job.settings.container == "webm" else "aac") if audio == "copy" else audio)
         yield replace(job, media_path=str(output), settings=settings, edit_segments=(),
-                      video_graph=None, composition_resolved=True, duration_seconds=composed["duration_seconds"])
+                      video_graph=None, composition_resolved=True, duration_seconds=composed["duration_seconds"],
+                      export_context=dict(job.export_context or {}, composed_video_frame_clock=composed))
 
 
 def preflight_video_job(ffmpeg, job, *, cancelled=None, progress=None):
     from .studio_render import export_progress, STAGE_PREPARE_PROJECT
     if progress: progress(export_progress(STAGE_PREPARE_PROJECT,message='检查媒体实际首尾 PTS 与完整可解码性…'))
     graph=job.video_graph;assets={a['asset_id']:a for a in graph['media_pool']};indexes={};receipts=[]
+    fps, start, duration, frame_count = _video_frame_clock(Path(ffmpeg), job)
+    origin, rate = Fraction(str(start)), Fraction(str(fps))
+    from .studio_transitions import transition_windows
+    windows=transition_windows(graph,'video')
     for track in graph['video_tracks']:
         if not track.get('enabled',True):continue
         for clip in track.get('clips',[]):
             if not clip.get('enabled',True):continue
+            clip=dict(clip,track_id=track['id'])
+            clip=dict(clip,**{k:v for k,v in windows.get((track['id'],clip['id']),windows.get(clip['id'],{})).items() if k!='id'})
             asset=assets[clip['asset_id']]
             if asset.get('video_metadata',{}).get('has_video') is False:continue
+            # The clip and export are half-open intervals on the exact output
+            # frame grid. Neither exclusive out nor a clip outside this range
+            # is an actual decoder request for this job.
+            first=max(0,math.ceil((Fraction(clip['timeline_in_ms'],1000)-origin)*rate))
+            last=min(frame_count-1,math.ceil((Fraction(clip['timeline_out_ms'],1000)-origin)*rate)-1)
+            if first>last:
+                receipts.append(dict(clip_id=clip['id'],status='not_sampled',
+                    reason='no active output frame in requested range',export_start_seconds=start,
+                    export_duration_seconds=duration,export_fps=fps,export_frame_count=frame_count))
+                continue
             path=str(Path(asset['canonical_source']).resolve())
             try:
                 if path not in indexes:indexes[path]=probe_media(ffmpeg,path,cancelled=cancelled)
@@ -249,17 +318,24 @@ def preflight_video_job(ffmpeg, job, *, cancelled=None, progress=None):
                 if isinstance(exc,InterruptedError):raise
                 from .export_media import ExportMediaError
                 raise ExportMediaError('MEDIA_PREFLIGHT',dict(clip_id=clip['id'],path=path),exc) from exc
-            # Endpoint requests use exact rational video time, not duration as
-            # the timestamp of a nonexistent last frame.
-            start=Fraction(clip['source_in_ms'],1000);end=Fraction(clip['source_out_ms'],1000)
-            samples=[start,(start+end)/2,end-media.interval*3,end-media.interval*2,end-media.interval,end]
-            for value in samples:
-                if value<start:continue
+            # Positive affine clip mapping is bounded by actual first/last
+            # samples. Check representative interior/tail frames as well.
+            samples=sorted({first,(first+last)//2,max(first,last-2),max(first,last-1),last})
+            for index in samples:
+                timeline=origin+Fraction(index)/rate
+                value=project_to_source_exact(clip,timeline)
+                if value is None:raise RuntimeError('Preflight/raster active-frame disagreement')
                 try: target=media.target(value)
                 except ValueError as exc:
                     from .export_media import ExportMediaError
-                    raise ExportMediaError('CLIP_MAPPING',dict(clip_id=clip['id'],source_ms=float(value)*1000),exc) from exc
+                    raise ExportMediaError('CLIP_MAPPING',dict(clip_id=clip['id'],timeline_frame_index=index,
+                        timeline_pts=str(timeline),source_ms=float(value)*1000),exc) from exc
                 receipts.append(dict(clip_id=clip['id'],source_pts=str(value),resolved_pts=str(target),
+                    timeline_frame_index=index,timeline_pts=str(timeline),boundary_clamped=target!=value,
+                    boundary_policy='existing MediaIndex.target: at most one source-frame interval; no duration/AV-tail extension',
+                    decoded_last_seconds=str(media.last),source_frame_interval=str(media.interval),
+                    clip_first_output_frame=first,clip_last_output_frame=last,
+                    export_start_seconds=start,export_duration_seconds=duration,export_fps=fps,export_frame_count=frame_count,
                     time_base=str(media.time_base),last_pts=media.pts[-1],frame_count=len(media.pts),probe_seconds=media.elapsed))
     destination=Path(job.output_path).with_suffix('.preflight.json')
     destination.write_text(json.dumps(receipts,indent=2),encoding='utf-8')

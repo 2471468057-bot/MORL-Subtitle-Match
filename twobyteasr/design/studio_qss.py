@@ -6,6 +6,7 @@ dataclass. Legacy retheme mappings never see these generated declarations.
 from dataclasses import dataclass
 from .tokens import TYPE_SCALE, RADIUS_SCALE
 from ..typography import MONO_FONT_STACK, UI_FONT_STACK
+from ..ui_theme import blend_hex
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,23 @@ class StudioComponentTokens:
 def build_studio_component_qss(theme, tokens: StudioComponentTokens | None = None) -> str:
     t = tokens or StudioComponentTokens()
     return f"""
+/* Timeline geometry belongs to this bar, independently of dialog controls. */
+QWidget#studioTimelineCommandBar QToolButton#studioTool {{
+    min-width: 32px; min-height: 34px; max-height: 34px;
+    padding: 0; font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
+}}
+QWidget#studioTimelineCommandBar QPushButton#studioButton {{
+    min-height: 34px; max-height: 34px; padding: 0 10px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 600;
+}}
+QWidget#studioTimelineCommandBar QCheckBox {{
+    min-height: 34px; padding: 0; spacing: 8px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
+}}
+QWidget#studioTimelineCommandBar QComboBox {{
+    min-height: 32px; max-height: 32px; padding: 0 8px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
+}}
 QLabel#projectRowStatus {{
     background: transparent; border: 0; color: {theme.text_muted};
     font-family: {UI_FONT_STACK}; font-size: {t.caption_size}px; font-weight: 500;
@@ -105,4 +123,154 @@ QPlainTextEdit#performanceDetails {{
     border-radius: {t.control_radius}px; padding: {t.input_padding}px; font-family: {MONO_FONT_STACK};
     font-size: {t.label_size}px;
 }}
+/* 2026-10-07 visual system: Studio chrome stays quiet so preview, timeline
+   and the user's subtitles carry the colour. Toolbar text commands are ghost
+   until hovered; panel toggles show a neutral "on" lift, never a pink wash. */
+QFrame#studioToolbar QPushButton[buttonRole="secondary"], QFrame#studioToolbar QPushButton[buttonRole="ghost"],
+QFrame#studioToolbar QPushButton[buttonRole="toggle"] {{
+    background: transparent; color: {theme.text_secondary}; border: 1px solid transparent;
+    border-radius: {t.control_radius}px; min-height: 32px; max-height: 32px; padding: 0 10px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 500;
+}}
+QFrame#studioToolbar QPushButton[buttonRole="secondary"]:hover, QFrame#studioToolbar QPushButton[buttonRole="ghost"]:hover,
+QFrame#studioToolbar QPushButton[buttonRole="toggle"]:hover {{ background: {theme.selected}; color: {theme.text}; border-color: transparent; }}
+QFrame#studioToolbar QPushButton[buttonRole="toggle"]:checked {{
+    background: {theme.surface_elevated}; color: {theme.text}; border-color: {theme.border_strong}; }}
+QFrame#studioToolbar QPushButton[buttonRole="secondary"]:focus, QFrame#studioToolbar QPushButton[buttonRole="ghost"]:focus,
+QFrame#studioToolbar QPushButton[buttonRole="toggle"]:focus {{ border-color: {theme.focus}; }}
+QFrame#studioToolbar QPushButton[buttonRole="primary"] {{ min-height: 32px; max-height: 32px; padding: 0 14px; font-size: {t.label_size}px; }}
+QFrame#studioToolbar QLabel#studioFilename {{ color: {theme.text}; font-family: {UI_FONT_STACK}; font-size: 15px; font-weight: 600; }}
+QFrame#studioToolbar QLabel#studioSaveState {{ color: {theme.text_muted}; font-size: {t.caption_size}px; font-weight: 500; }}
+QWidget#studioTimelineCommandBar QPushButton#studioButton {{
+    background: transparent; color: {theme.text_secondary}; border: 1px solid {theme.border};
+    border-radius: {t.control_radius}px; font-weight: 500;
+}}
+QWidget#studioTimelineCommandBar QPushButton#studioButton:hover {{ background: {theme.selected}; color: {theme.text}; border-color: {theme.border_strong}; }}
+QWidget#studioTimelineCommandBar QPushButton#studioButton:checked {{ background: {theme.accent_tint}; color: {theme.text}; border-color: {theme.accent}; }}
+QPushButton#filterChip {{
+    background: transparent; color: {theme.text_secondary}; border: 1px solid {theme.border};
+    border-radius: {t.control_radius}px; min-height: 32px; padding: 0 10px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 500;
+}}
+QPushButton#filterChip:hover {{ background: {theme.selected}; color: {theme.text}; border-color: {theme.border_strong}; }}
+QPushButton#filterChip:checked {{ background: {theme.surface_elevated}; color: {theme.text}; border-color: {theme.text_muted}; font-weight: 600; }}
+QPushButton#filterChip:focus {{ border-color: {theme.focus}; }}
+QPushButton#reviewEntryButton {{
+    background: {theme.accent_tint}; color: {theme.accent_text}; border: 1px solid transparent;
+    border-radius: {t.control_radius}px; min-height: 32px; padding: 0 10px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 600;
+}}
+QPushButton#reviewEntryButton:hover {{ background: {theme.accent}; color: {theme.text_on_accent}; }}
+QPushButton#reviewEntryButton:pressed {{ background: {theme.accent_pressed}; color: {theme.text_on_accent}; }}
+QPushButton#reviewEntryButton:focus {{ border-color: {theme.focus}; }}
+/* 2026-10-08 timeline command bar: centred transport pill with an accent
+   play button, view tools as one icon family, display switches as chips,
+   range row as outlined segments with icon actions. */
+QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] {{
+    background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 12px; }}
+QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"] {{
+    background: {theme.accent}; color: {theme.text_on_accent}; border: 0; border-radius: 17px;
+    min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; }}
+QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:hover {{ background: {theme.accent_hover}; }}
+QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:pressed {{ background: {theme.accent_pressed}; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip, QWidget#projectRangeBar QCheckBox#timelineToggleChip {{
+    background: transparent; color: {theme.text_secondary}; border: 1px solid {theme.border};
+    border-radius: 8px; padding: 0 12px; spacing: 0; min-height: 34px; max-height: 34px;
+    font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 500; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip::indicator, QWidget#projectRangeBar QCheckBox#timelineToggleChip::indicator {{
+    width: 0; height: 0; border: 0; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip:hover, QWidget#projectRangeBar QCheckBox#timelineToggleChip:hover {{
+    border-color: {theme.border_strong}; color: {theme.text}; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip:checked, QWidget#projectRangeBar QCheckBox#timelineToggleChip:checked {{
+    background: {theme.surface_elevated}; color: {theme.text}; border-color: {theme.border_strong}; font-weight: 600; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip:focus, QWidget#projectRangeBar QCheckBox#timelineToggleChip:focus {{
+    border-color: {theme.focus}; }}
+QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip {{ padding: 0 10px 0 8px; }}
+/* 2026-10-09 (M16): save frame / cover / options as icon buttons in the bar. */
+QWidget#studioTimelineCommandBar QToolButton#rangeAction {{ background: transparent; color: {theme.text_secondary};
+    border: 1px solid {theme.border}; border-radius: 8px; min-height: 34px; max-height: 34px; min-width: 34px;
+    padding: 0 6px; font-size: {t.label_size}px; }}
+QWidget#studioTimelineCommandBar QToolButton#rangeAction:hover {{ background: {theme.selected}; border-color: {theme.border_strong}; color: {theme.text}; }}
+QWidget#studioTimelineCommandBar QToolButton#rangeAction::menu-button {{ border: 0; border-left: 1px solid {theme.border}; width: 16px; }}
+QWidget#studioTimelineCommandBar QToolButton#rangeAction[menuOnly="true"] {{ padding-right: 18px; }}
+QWidget#studioTimelineCommandBar QToolButton#rangeAction::menu-indicator {{
+    subcontrol-origin: padding; subcontrol-position: right center; right: 5px; }}
+QFrame#rangeSegment {{ background: {theme.input_surface}; border: 1px solid {theme.border}; border-radius: 8px; }}
+QFrame#rangeSegment:hover {{ border-color: {theme.border_strong}; }}
+QFrame#rangeSegment QPushButton#rangeMark {{ background: {theme.surface_elevated}; color: {theme.text}; border: 0;
+    border-right: 1px solid {theme.border}; border-top-left-radius: 7px; border-bottom-left-radius: 7px;
+    border-top-right-radius: 0; border-bottom-right-radius: 0;
+    min-height: 32px; max-height: 32px; padding: 0 12px; font-size: {t.label_size}px; font-weight: 600; }}
+QFrame#rangeSegment QPushButton#rangeMark:hover {{ background: {theme.accent_tint}; color: {theme.accent_text}; }}
+QFrame#rangeSegment QLineEdit#rangeField {{ background: transparent; color: {theme.text}; border: 0; border-radius: 0;
+    min-height: 32px; max-height: 32px; padding: 0 10px; font-family: {MONO_FONT_STACK}; font-size: {t.label_size}px; }}
+QFrame#rangeSegment QPushButton#rangeJump {{ background: transparent; border: 0; border-left: 1px solid {theme.border};
+    border-top-right-radius: 7px; border-bottom-right-radius: 7px; border-top-left-radius: 0; border-bottom-left-radius: 0;
+    min-height: 32px; max-height: 32px; padding: 0; }}
+QFrame#rangeSegment QPushButton#rangeJump:hover {{ background: {theme.selected}; }}
+QLabel#rangeStatus {{ color: {theme.text_muted}; font-size: {t.caption_size}px; font-variant-numeric: tabular-nums; background: transparent; }}
+QWidget#projectRangeBar QPushButton#rangeClear {{ background: transparent; color: {theme.text_secondary};
+    border: 1px solid {theme.border}; border-radius: 8px; min-height: 32px; max-height: 32px; padding: 0 12px; }}
+QWidget#projectRangeBar QPushButton#rangeClear:hover {{ background: {theme.selected}; color: {theme.text}; border-color: {theme.border_strong}; }}
+QWidget#projectRangeBar QToolButton#rangeAction {{ background: {theme.surface_elevated}; color: {theme.text};
+    border: 1px solid {theme.border_strong}; border-radius: 8px; min-height: 32px; max-height: 32px;
+    padding: 0 12px; font-size: {t.label_size}px; font-weight: 500; }}
+QWidget#projectRangeBar QToolButton#rangeAction:hover {{ background: {theme.selected}; border-color: {theme.text_muted}; }}
+QWidget#projectRangeBar QToolButton#rangeAction::menu-button {{ border: 0; border-left: 1px solid {theme.border}; width: 20px; }}
+QWidget#projectRangeBar QToolButton#rangeAction[menuOnly="true"] {{ padding-right: 24px; }}
+QWidget#projectRangeBar QToolButton#rangeAction::menu-indicator {{
+    subcontrol-origin: padding; subcontrol-position: right center; right: 8px; }}
+/* 2026-10-08 style inspector: flat sections with clear headers, quiet field
+   captions, flat property rows (no card-in-card), brand accent only on the
+   row being edited and on checked emphasis toggles. */
+QFrame#styleSection {{ background: transparent; border: 0; border-top: 1px solid {theme.hairline}; border-radius: 0; }}
+QToolButton#styleSectionHeader {{ background: transparent; border: 0; color: {theme.text};
+    font-family: {UI_FONT_STACK}; font-size: 14px; font-weight: 600; padding: 2px 0; text-align: left; }}
+QToolButton#styleSectionHeader:hover {{ color: {theme.accent_text}; }}
+QLabel#styleFieldLabel {{ color: {theme.text_muted}; font-size: 12px; font-weight: 500; background: transparent; }}
+/* 2026-10-09 (M16): compact style panel — scope chips on top, inline
+   captions, one-line property rows with small switches. */
+QFrame#styleScopeBar, QFrame#styleInlineSection {{ background: transparent; border: 0; }}
+QLabel#styleInlineLabel {{ color: {theme.text_muted}; font-size: 12px; font-weight: 600; background: transparent; }}
+QCheckBox#styleInlineCheck {{ color: {theme.text_secondary}; font-size: 12px; background: transparent; }}
+QFrame#styleScopeBar QRadioButton#scopeOption {{ color: {theme.text_secondary}; background: {theme.surface};
+    border: 1px solid {theme.border}; border-radius: 7px; padding: 2px 6px; min-height: 26px; spacing: 0; }}
+QFrame#styleScopeBar QRadioButton#scopeOption::indicator {{ width: 0; height: 0; margin: 0; }}
+QFrame#styleScopeBar QRadioButton#scopeOption:hover {{ border-color: {theme.border_strong}; color: {theme.text}; }}
+QFrame#styleScopeBar QRadioButton#scopeOption:checked {{ background: {theme.accent_tint}; color: {theme.accent_text};
+    border-color: {theme.accent}; font-weight: 700; }}
+QCheckBox#styleSwitch {{ background: transparent; spacing: 0; }}
+QCheckBox#styleSwitch::indicator {{ width: 30px; height: 16px; border-radius: 8px; border: 1px solid {theme.border_strong};
+    background: {theme.input_surface}; }}
+QCheckBox#styleSwitch::indicator:checked {{ background: {theme.accent}; border-color: {theme.accent}; image: none; }}
+QToolButton#stylePreviewSample {{ background: rgba(0,0,0,0.28); color: #f4f0ea; border: 1px solid rgba(255,255,255,0.28);
+    border-radius: 6px; font-size: 11px; font-weight: 700; padding: 0; }}
+QToolButton#stylePreviewSample:checked {{ background: {theme.accent}; border-color: {theme.accent}; color: {theme.text_on_accent}; }}
+QPushButton#styleLibraryButton {{ background: {theme.accent_tint}; color: {theme.accent_text}; border: 1px solid transparent;
+    border-radius: {t.control_radius}px; min-height: {t.field_height}px; padding: 0 12px; font-weight: 600; }}
+QPushButton#styleLibraryButton:hover {{ background: {theme.accent}; color: {theme.text_on_accent}; }}
+QPushButton#styleLibraryButton:focus {{ border-color: {theme.focus}; }}
+QToolButton#styleEmphasis:checked, QToolButton#styleAnchor:checked {{
+    background: {theme.accent_tint}; color: {theme.accent_text}; border-color: {theme.accent_text}; }}
+QFrame#stylePropertyRow {{ background: transparent; border: 0; border-top: 1px solid {theme.hairline};
+    border-left: 3px solid transparent; border-radius: 0; }}
+QFrame#stylePropertyRow:hover {{ background: {theme.surface}; }}
+QFrame#stylePropertyRow[expanded="true"] {{ background: {theme.surface}; border-left: 3px solid {theme.accent_text}; }}
+QLabel#stylePropertyRowTitle {{ font-size: 14px; font-weight: 600; }}
+QLabel#stylePropertyRowSummary {{ font-size: 12px; }}
+QFrame#resumeProjectCard {{ background: {blend_hex(theme.surface, theme.accent_text, 0.07)};
+    border: 1px solid {blend_hex(theme.surface, theme.accent_text, 0.40)}; }}
+QLabel#resumeProjectEyebrow {{ color: {theme.accent_text}; font-size: 13px; font-weight: 600; }}
+QLabel#resumeProjectStatus {{ color: {theme.text_secondary}; font-size: 14px; font-weight: 500; }}
+QLabel#resumeProjectStatusPill, QLabel#projectCardStatus, QLabel#projectRowStatus {{
+    background: {theme.surface_elevated}; color: {theme.text_secondary}; border: 0; border-radius: 6px;
+    padding: 2px 10px; font-size: 12px; font-weight: 600; }}
+QLabel#resumeProjectStatusPill[status="ready"], QLabel#projectRowStatus[status="ready"] {{ background: {theme.success_soft}; color: {theme.success}; }}
+QLabel#resumeProjectStatusPill[status="offline"], QLabel#projectRowStatus[status="offline"] {{ background: {theme.warning_soft}; color: {theme.warning}; }}
+QLabel#resumeProjectStatusPill[status="missing"], QLabel#projectRowStatus[status="missing"] {{ background: {theme.danger_soft}; color: {theme.danger}; }}
+/* Badges over cover art need a solid chip to stay legible on any image. */
+QLabel#projectCardStatus[status="ready"] {{ background: {theme.success}; color: {theme.on_vivid}; }}
+QLabel#projectCardStatus[status="offline"] {{ background: {theme.warning}; color: {theme.on_vivid}; }}
+QLabel#projectCardStatus[status="missing"] {{ background: {theme.danger}; color: {theme.on_vivid}; }}
+QToolButton#recentProjectCard:hover {{ border-color: {theme.accent_text}; }}
 """

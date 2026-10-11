@@ -24,7 +24,7 @@ REFINE_SYSTEM_PROMPT = """你是中文直播字幕的断句与节奏编排引擎
 - keep：保持原样（默认；不确定时一律 keep）。
 - split：在"原文第几个字符后"切分成多条 cue。判据：两段各自语义完整、
   构成先后两个分句，cue 时长足以承载两条可读字幕（每段≥约1.2s），
-  且切分点附近有真实停顿证据（pause_hints 的 gap_ms 较大，如 ≥350ms）。
+  切分点必须落在真实字词边界；停顿是加强证据，连续说话中的明确语义转折也可拆分。
   语气词收尾+新完整句（如"这个直言不讳的说啊|其实我想要的是"）应拆。
 - space：不拆 cue，只在"原文第几个字符后"插入一个半角空格 U+0020，
   用于组织句内阅读节奏。覆盖三类位置：
@@ -51,7 +51,11 @@ REFINE_SYSTEM_PROMPT = """你是中文直播字幕的断句与节奏编排引擎
    停顿且自身成句）可以单独成句，否则并入相邻句。
 5. 已经含有半角空格的文本保持既有空格，不重复插空格。
 6. 连续笑声/哭声等拟声（"哈哈哈哈"）不逐字加空格。
-7. 只返回 JSON，不要解释。"""
+   不删去重复词（例如“继续继续”），不把收尾语气词移到下一句开头。
+7. 只返回 JSON，不要解释。顶层必须是 results 数组，每个输入 cue_id 恰好返回一次：
+{"results":[{"cue_id":"输入的ID","action":"keep","split_after_chars":[],"space_after_chars":[],"reason":"原因"}]}
+split_after_chars 与 space_after_chars 都是原文的 0 基字符索引，空格也计数。
+word_boundaries.after_chars 使用同一索引。不得返回输入 cues 或省略 keep 项。"""
 
 REFINE_SCHEMA = {
     "type": "object",
@@ -90,6 +94,8 @@ class RefineOutcome:
     rejected: int = 0
     llm_status: str = "completed"
     llm_error: str = ""
+    failed_cue_ids: list[str] = field(default_factory=list)
+    requests: list[dict] = field(default_factory=list)
 
 
 def _batch(items: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
@@ -123,14 +129,17 @@ def validate_action(text: str, raw: Mapping[str, Any]) -> CueRefineAction | None
     if action == "space":
         if not spaces:
             return None
+        # A provider may repeat an already present rhythm space. Treat that
+        # individual suggestion as a no-op, never as a failed transformation.
+        spaces=[index for index in spaces if index+1>=length or text[index+1]!=' ']
+        if not spaces:
+            return CueRefineAction(cue_id=str(raw.get('cue_id') or ''),action='keep')
         # 每个空格点必须紧跟白名单语气字之后（句内节奏位），否则视为误报
         for index in spaces:
             if index >= length or text[index] not in INTERJECTION_CHARS:
                 return None
             if index == length - 1:
                 return None  # 尾字符后不允许追加尾随空格
-            if text[index + 1] == " ":
-                return None  # 规则 5 本地强制：已有空格处不再重复插
         return CueRefineAction(
             cue_id=str(raw.get("cue_id") or ""), action="space",
             space_after_chars=spaces,
@@ -298,6 +307,11 @@ def refine_payload(
         hints = pause_hints_for_cue(cue, words)
         if hints:
             item["pause_hints"] = hints
+        if words:
+            from .cue_word_alignment import cue_words
+            measured, _ = cue_words(project, cue)
+            item['word_boundaries'] = [dict(after_chars=w.char_end-1, start_ms=w.start_ms, end_ms=w.end_ms)
+                                       for w in measured]
         items.append(item)
     return {
         "cues": items,
@@ -315,6 +329,7 @@ def refine_cues_with_llm(
     cancel_check: Callable[[], bool] | None = None,
     provider_post: Callable[..., str] | None = None,
     batch_size: int = 40,
+    max_attempts: int = 2,
 ) -> RefineOutcome:
     """对给定 cue 执行 LLM 断句/节奏优化。失败抛出；拒绝项计入 rejected。"""
     from .ai_providers import provider_for_stage
@@ -327,14 +342,14 @@ def refine_cues_with_llm(
     if ai_service or model:
         settings = dict(settings)
         models = dict(settings.get("models") or {})
-        polish = dict(models.get("polish") or {})
+        polish = dict(models.get("group") or {})
         if ai_service:
             polish["service"] = ai_service
         if model:
             polish["model"] = model
-        models["polish"] = polish
+        models["group"] = polish
         settings["models"] = models
-    provider = provider_for_stage(settings, "polish", sender=provider_post)
+    provider = provider_for_stage(settings, "group", sender=provider_post)
 
     by_id = {cue.id: cue for cue in cues}
     ordered = sorted(cues, key=lambda item: item.start_ms)
@@ -355,21 +370,56 @@ def refine_cues_with_llm(
         payload = refine_payload(
             group, neighbors=neighbors, project=project, following_gaps=following_gaps
         )
-        content = provider.complete(
+        rows = None
+        group_ids = {cue.id for cue in group}
+        for attempt in range(max(1, min(2, int(max_attempts)))):
+            if cancel_check and cancel_check():
+                outcome.llm_status = 'cancelled'
+                outcome.actions.clear()
+                return outcome
+            receipt = dict(stage='sentence_refine', provider=getattr(provider,'provider_id',''),
+                model=getattr(provider,'model',''), cue_ids=sorted(group_ids), attempt=attempt+1)
+            try:
+                content = provider.complete(
             [
                 {"role": "system", "content": REFINE_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             max_tokens=6000,
             temperature=0.1,
-            timeout=(15, 180),
+            timeout=(10, 60),
             enable_thinking=False,
             response_format={"type": "json_object"},
             stage="sentence_refine",
             json_schema=REFINE_SCHEMA,
             cancel_check=cancel_check,
-        )
-        rows = _parse_results(content)
+                )
+                from .provider_diagnostics import redact_diagnostics
+                receipt['raw_response'] = str(redact_diagnostics(content))[:24000]
+                trace = getattr(provider, 'invocation_trace', None)
+                receipt['transport'] = redact_diagnostics(trace() if callable(trace) else getattr(provider, 'last_invocation_trace', {}))
+                rows = _parse_results(content)
+                if not rows:
+                    raise ValueError('AI 断句响应没有有效 results 数组')
+                ids = [str(row.get('cue_id') or '') for row in rows]
+                if set(ids) != group_ids or len(ids) != len(group_ids):
+                    raise ValueError('AI 断句响应缺少字幕或包含重复／跨批次 ID')
+                receipt.update(status='validated', response=rows)
+                outcome.requests.append(receipt)
+                break
+            except Exception as exc:
+                if cancel_check and cancel_check():
+                    outcome.llm_status = 'cancelled';outcome.actions.clear()
+                    return outcome
+                from .provider_diagnostics import redact_diagnostics
+                message = str(redact_diagnostics(str(exc)))[:300]
+                receipt.update(status='failed', category=getattr(exc,'category','parse_or_validation'), error=message)
+                outcome.requests.append(receipt)
+                outcome.llm_error = message
+                rows = None
+        if rows is None:
+            outcome.failed_cue_ids.extend(sorted(group_ids))
+            continue
         seen: set[str] = set()
         for row in rows:
             cue_id = str(row.get("cue_id") or "")
@@ -381,8 +431,13 @@ def refine_cues_with_llm(
             action = validate_action(cue.text, row)
             if action is None:
                 outcome.rejected += 1
+                outcome.failed_cue_ids.append(cue_id)
+                receipt.setdefault('field_errors', []).append(dict(cue_id=cue_id,category='invalid_action_indices'))
+                outcome.llm_error='AI 建议的字符索引或操作字段未通过校验'
                 continue
             outcome.actions.append(action)
+    if outcome.failed_cue_ids:
+        outcome.llm_status = 'partial' if outcome.actions else 'failed'
     return outcome
 
 

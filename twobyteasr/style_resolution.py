@@ -83,6 +83,14 @@ def resolve_cue_visual_from_records(
                 setattr(style, name, copy.deepcopy(getattr(derived, name)))
     appearance = _payload(getattr(cue, "appearance_override", {}))
     transform = _payload(getattr(cue, "transform", {}))
+    # Initial overlap layout is saved once, in video coordinates.  An explicit
+    # cue/track edit below overrides it; rendering never reallocates its row.
+    initial = transform.get("initial_layout", {})
+    if isinstance(initial, Mapping) and initial.get("version") == 1:
+        for name in ("position_x", "position_y"):
+            value = initial.get(name)
+            if isinstance(value, (int, float)):
+                setattr(style, name, value)
     for name, value in appearance.items():
         if name in APPEARANCE_FIELDS and hasattr(style, name):
             setattr(style, name, copy.deepcopy(value))

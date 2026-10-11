@@ -306,9 +306,29 @@ def _wheel_build_tag(version: str) -> str:
     return version.partition("+")[2].strip().lower()
 
 
-def detect_torch_audio_runtime() -> TorchAudioRuntimeStatus:
+def ready_torch_probe() -> dict:
+    """Torch probe for readiness gates, reused for the session once it passed.
+
+    The gate before each recognition and every local model load used to start
+    the main interpreter and import torch again (2-6 s each, ~5 per run) for
+    an answer that cannot change while the interpreter and its packages stay
+    the same. A failed probe is never reused; environment repair and model
+    downloads clear it (``environment.reset_preflight_cache``). Telemetry that
+    needs current free VRAM keeps calling ``_probe_torch_runtime`` directly.
+    """
+    from .environment import reuse_ready_probe, runtime_identity
+
+    key = ("torch_runtime_probe", runtime_identity(main_python_executable() or ""),
+           os.environ.get("CUDA_VISIBLE_DEVICES", ""))
+    probe, _reused = reuse_ready_probe(
+        key, _probe_torch_runtime,
+        lambda value: bool(value.get("imported") and value.get("usable") and value.get("torchaudio_imported")))
+    return probe
+
+
+def detect_torch_audio_runtime(probe: dict | None = None) -> TorchAudioRuntimeStatus:
     """Check the shared Torch/TorchAudio pair without importing it in the GUI."""
-    probe = _probe_torch_runtime()
+    probe = _probe_torch_runtime() if probe is None else probe
     torch_version = str(probe.get("torch_version", "") or "")
     audio_version = str(probe.get("torchaudio_version", "") or "")
     if not probe.get("imported"):
@@ -352,11 +372,11 @@ def detect_torch_audio_runtime() -> TorchAudioRuntimeStatus:
     )
 
 
-def detect_cuda_runtime() -> CudaRuntimeStatus:
+def detect_cuda_runtime(probe: dict | None = None) -> CudaRuntimeStatus:
     """Return an actionable CUDA diagnosis without raising."""
     gpu_name, memory_mb = _visible_nvidia_gpu()
     driver_version = _nvidia_driver_version()
-    probe = _probe_torch_runtime()
+    probe = _probe_torch_runtime() if probe is None else probe
     if not probe.get("imported"):
         exc = probe.get("error", "PyTorch is not installed")
         return CudaRuntimeStatus(
@@ -463,7 +483,7 @@ def detect_cuda_runtime() -> CudaRuntimeStatus:
 
 
 def require_cuda_runtime() -> CudaRuntimeStatus:
-    status = detect_cuda_runtime()
+    status = detect_cuda_runtime(ready_torch_probe())
     if not status.ready:
         raise RuntimeError(f"{status.summary} {status.guidance}")
     return status
@@ -497,7 +517,7 @@ def selected_local_runtime_components(settings: dict) -> list[str]:
 
 
 def require_local_torch_runtime(settings: dict) -> TorchAudioRuntimeStatus:
-    status = detect_torch_audio_runtime()
+    status = detect_torch_audio_runtime(ready_torch_probe())
     if selected_local_runtime_components(settings) and not status.ready:
         raise RuntimeError(f"{status.summary} {status.guidance}")
     return status

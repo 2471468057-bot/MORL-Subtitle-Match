@@ -89,7 +89,7 @@ def test_playback_source_prefers_continuous_proxy(tmp_path):
     )
     cache = IndexedMediaCache(root=tmp_path / "seek")
     cache.resolve(str(flv))
-    Path(cache.wait_optimized(str(flv), timeout=180))
+    assert cache._requested == set(), '可直接播放的FLV不按后缀换封装'
 
     deadline = time.monotonic() + 180
     kind = "original"
@@ -101,6 +101,7 @@ def test_playback_source_prefers_continuous_proxy(tmp_path):
     assert kind == "proxy", "扫描→代理构建链应在合理时间内产出 continuous.mkv"
     playback, kind = cache.playback_source(str(flv))
     assert Path(playback).name == "continuous.mkv"
+    assert not list(cache.root.glob('v2/*/optimized.*')), '真实断流仅生成必要的连续代理'
 
 
 def test_av_sync_map_folds_to_identity_when_proxy_bound(monkeypatch, tmp_path):

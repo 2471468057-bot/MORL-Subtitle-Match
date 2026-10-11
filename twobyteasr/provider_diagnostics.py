@@ -2,6 +2,106 @@
 import re
 from collections.abc import Mapping
 
+
+def _model_configuration_failure(value):
+    """Only error envelopes or the CLI's explicit model-selection error count."""
+    import json
+    error_texts = []
+    def visit(item, error=False, depth=0):
+        if depth > 8:
+            return
+        if isinstance(item, Mapping):
+            result = item.get('result')
+            rejected_result = (item.get('event') == 'result' and isinstance(result, Mapping)
+                and result.get('status') not in {None, 'SUCCESS', 'success'})
+            error = error or item.get('type') == 'error' or item.get('is_error') is True or rejected_result
+            if not error and (item.get('type') in {'assistant', 'user', 'result'}
+                    or item.get('role') in {'assistant', 'user'}
+                    or item.get('event') == 'result'):
+                # Model/user content may quote JSON-shaped errors. Successful
+                # terminal envelopes are business output, never diagnostics.
+                return
+            for key, nested in item.items():
+                if str(key).lower() not in _SECRET_KEYS:
+                    visit(nested, error or str(key).lower() in {'error', 'errors'}, depth + 1)
+        elif isinstance(item, (list, tuple)):
+            for nested in item:
+                visit(nested, error, depth + 1)
+        elif isinstance(item, str):
+            try:
+                visit(json.loads(item), error, depth + 1)
+            except (ValueError, TypeError):
+                if len(item.splitlines()) > 1:
+                    for line in item.splitlines():
+                        visit(line, error, depth)
+                    return
+                if error or depth == 0 and re.match(r"(?is)^\s*(?:error:\s*)?couldn.t set model\b", item):
+                    error_texts.append(item)
+    visit(value)
+    if not re.search(r'(?i)\bunknown model id\b', '\n'.join(error_texts)):
+        return None
+    return {'category': 'unknown_model', 'message':
+            '服务端拒绝了当前模型 ID。请在 AI 设置中确认可用模型，修改后重试；本轮保留本地结果。',
+            'details': public_stream_text(str(value))}
+
+
+def cli_failure(value):
+    """Read nested CLI envelopes without mistaking an error for model output.
+
+    Version constraints are supplied by the server, never a pinned 'latest'.
+    Keep the full credential-free envelope for the details/clipboard surface.
+    """
+    model_failure = _model_configuration_failure(value)
+    if model_failure:
+        return model_failure
+    import json
+    texts = []
+    def visit(item, depth=0):
+        if depth > 8:
+            return
+        if isinstance(item, Mapping):
+            for key, nested in item.items():
+                if str(key).lower() not in _SECRET_KEYS:
+                    if str(key).lower() in {'http_status', 'status', 'status_code'} and nested == 426:
+                        texts.append('HTTP status 426')
+                    if str(key).lower() in {'minimum_version', 'minimum_cli_version', 'required_version'}:
+                        texts.append('minimum version ' + str(nested))
+                    if str(key).lower() in {'cli_version', 'client_version', 'received_version'}:
+                        texts.append('Grok CLI version ' + str(nested))
+                    visit(nested, depth + 1)
+        elif isinstance(item, (list, tuple)):
+            for nested in item:
+                visit(nested, depth + 1)
+        elif isinstance(item, str):
+            texts.append(item)
+            try:
+                visit(json.loads(item), depth + 1)
+            except (ValueError, TypeError):
+                start = item.find('{')
+                if start >= 0:
+                    try:
+                        visit(json.JSONDecoder().raw_decode(item[start:])[0], depth + 1)
+                    except ValueError:
+                        pass
+    visit(value)
+    text = '\n'.join(texts)
+    if not (re.search(r'(?i)(?:status|http(?:_status)?)\D{0,20}426\b', text)
+            or re.search(r'(?i)\bupgrade required\b', text)):
+        return None
+    version = re.search(r'(?i)(?:Grok\s+CLI\s+version|client\s+version)\s*[:=( ]+([\w.+-]+)', text)
+    minimum = re.search(r'(?i)(?:update\s+to\s+(?:version\s+)?|requires?\s+(?:at\s+least\s+|version\s+)?|minimum\s+(?:version\s*)?[:= ]*)(\d+(?:\.\d+)+(?:[-+][\w.]+)?)', text)
+    received = version.group(1).rstrip(').,') if version else ''
+    required = minimum.group(1) if minimum else ''
+    description = 'Grok CLI 版本过旧。'
+    if received:
+        description += f'服务端收到 {received}，'
+    if required:
+        description += f'要求至少 {required}，'
+    description += '请更新后重试。'
+    return {'category': 'upgrade_required', 'http_status': 426,
+            'received_version': received, 'minimum_version': required,
+            'message': description, 'details': public_stream_text(str(value))}
+
 _SECRET_KEYS={'token','cookie','password','secret','api_key','access_token','refresh_token','id_token','authorization'}
 _PATTERNS=[
     re.compile(r'(?i)(https?://)[^/\s"\']+@'),
@@ -24,6 +124,18 @@ def redact_diagnostics(value, *, key=''):
     if isinstance(value,Mapping):return {str(k):redact_diagnostics(v,key=str(k)) for k,v in value.items()}
     if isinstance(value,(list,tuple)):return [redact_diagnostics(v) for v in value]
     if isinstance(value,str):
+        # stderr often embeds JSON as an escaped message inside outer JSON.
+        # Decode complete objects (including an 'Internal error:' prefix) so
+        # sensitive keys do not bypass redaction merely through extra slashes.
+        import json
+        start = value.find('{')
+        if start >= 0:
+            try:
+                parsed, end = json.JSONDecoder().raw_decode(value[start:])
+                if isinstance(parsed, (dict, list)):
+                    value = value[:start] + json.dumps(redact_diagnostics(parsed), ensure_ascii=False) + value[start + end:]
+            except (ValueError, TypeError):
+                pass
         for pattern in _PATTERNS:value=pattern.sub('[REDACTED]',value)
     return value
 

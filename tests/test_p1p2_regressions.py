@@ -1,6 +1,6 @@
 ﻿"""Regression tests for the 2026-08-10 P1/P2 fixes:
 
-- MOSS parallel worker count requires free VRAM above the threshold;
+- MOSS legacy parallel settings cannot reactivate independent contexts;
 - glossary.txt tolerates GBK/GB18030 encodings (Windows 记事本);
 - game_profiles.json is cached per process and invalidated by mtime;
 - dead Tk entry points no longer exist.
@@ -25,9 +25,9 @@ def test_moss_parallel_worker_count_requires_free_vram(monkeypatch):
     # 总显存足够但空闲不足 → 单路，避免 OOM 后整批回退
     monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 10.0)
     assert moss_firered_pipeline._moss_parallel_worker_count(jobs, _Legacy()) == 1
-    # 空闲显存足够 → 双路
+    # 空闲显存足够仍为整段单上下文
     monkeypatch.setattr(moss_firered_pipeline, "_cuda_free_memory_gb", lambda: 20.0)
-    assert moss_firered_pipeline._moss_parallel_worker_count(jobs, _Legacy()) == 2
+    assert moss_firered_pipeline._moss_parallel_worker_count(jobs, _Legacy()) == 1
 
 
 def test_load_glossary_tolerates_gbk_encoding(monkeypatch, tmp_path):

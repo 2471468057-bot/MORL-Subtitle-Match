@@ -114,10 +114,13 @@ def test_p237_style_fields_are_uniform_and_scrub_is_wheel_safe():
     )
     assert page.style_shadow.isHidden()
     assert {field.height() for field in fields} == {28}
-    assert 76 <= page.style_scope.height() <= 80
+    # 2026-10-09 (M16): the scope is one row of chips at the top of the panel.
+    assert page.style_scope.height() <= 34
     radios = page.style_scope.findChildren(QRadioButton)
-    assert radios
-    assert all(button.height() == 38 for button in radios)
+    assert len(radios) == 4
+    assert all(button.height() == page.style_scope.height() for button in radios), (
+        page.style_scope.height(), [button.height() for button in radios])
+    assert len({button.y() for button in radios}) == 1
     spin = ScrubSpinBox()
     spin.setRange(0, 500)
     spin.setValue(52)

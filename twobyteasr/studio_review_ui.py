@@ -128,10 +128,12 @@ class StudioReviewMixin:
             bind_text(self.review_summary_text, '✓ 文本一致 · 仅断句差异')
         elif aggregate.speaker_only:
             bind_text(self.review_summary_text, '说话人候选不同')
+        elif not aggregate.models_agree_text:
+            bind_text(self.review_summary_text, '⚠ 候选文本存在差异')
         elif len(candidates) == 1 or aggregate.models_agree_text:
             coverage = format_model_evidence_coverage(aggregate.hypotheses)
             self.review_summary_text.setText(
-                coverage["headline"] if coverage["single_source"] else f"✓ {coverage['headline']}"
+                coverage["headline"] if aggregate.requires_review or coverage["single_source"] else f"✓ {coverage['headline']}"
             )
         elif ordered_issues:
             self.review_summary_text.setText("  ".join(
@@ -165,6 +167,12 @@ class StudioReviewMixin:
             reason = "文本一致，仅断句不同；无需进行文字二选一"
         elif aggregate.speaker_only:
             reason = "文本一致，请确认说话人候选"
+        elif aggregate.source_coverage.get('missing'):
+            reason = "来源范围信息缺失，现有记录需要恢复或结合音频确认"
+        elif aggregate.source_coverage.get('coverage_unknown'):
+            reason = "原始来源已保留，字级覆盖待核验；可对照下方原文与音频"
+        elif aggregate.source_coverage.get('partial'):
+            reason = "不同文本范围的独立来源覆盖不同，请检查缺少覆盖的部分"
         elif len(candidates) > 1:
             reason = "模型输出存在文本差异，请选择更可信的文本"
         else:
@@ -215,6 +223,9 @@ class StudioReviewMixin:
                         parent=self,
                     )
                     card.clicked.connect(lambda row=index: self._adopt_review_candidate(row))
+                    if candidate.context_only:
+                        card.setEnabled(False)
+                        card.setToolTip('原始段落上下文；缺少本条精确字词边界，请结合原音编辑，不能整段替换。')
                     self.review_dock_candidate_layout.addWidget(
                         card, index // columns, index % columns
                     )
@@ -226,11 +237,13 @@ class StudioReviewMixin:
                 # Consistent banner
                 coverage = format_model_evidence_coverage(aggregate.hypotheses)
                 banner = QLabel(
-                    f"{coverage['headline']} · 无需人工检查"
-                    if coverage["single_source"]
-                    else f"✓ {coverage['headline']} · 无需人工检查"
+                    f"{coverage['headline']} · 建议确认"
+                    if aggregate.requires_review or coverage['missing'] or coverage['partial']
+                    else f"{coverage['headline']} · 无冲突证据"
                 )
-                banner.setObjectName("checkPass")
+                banner.setText(banner.text() + '\n' + coverage['display'])
+                banner.setWordWrap(True)
+                banner.setObjectName("checkWarning" if aggregate.requires_review else "checkPass")
                 self.review_dock_candidate_layout.addWidget(banner, 0, 0, 1, columns)
 
     def _set_review_mode(self, enabled: bool) -> None:
@@ -300,13 +313,14 @@ class StudioReviewMixin:
                         if key not in stale
                     }
                 )
-            for cue_id in present:
-                result = self._qc_engine.analyze_incremental(
-                    self.project,
-                    cue_id,
-                    result,
-                    terminology=self._qc_terminology,
-                )
+            # One context build over the union of the edited windows; folding
+            # analyze_incremental() per cue rebuilt it for every cue.
+            result = self._qc_engine.analyze_incremental_many(
+                self.project,
+                present,
+                result,
+                terminology=self._qc_terminology,
+            )
             # Risks derive purely from each cue's own issues, so recompute
             # exactly the edited window instead of rebuilding the cached
             # dict for every cue in the project (measured ~150ms at 1k cues).
@@ -615,6 +629,9 @@ class StudioReviewMixin:
         if not 0 <= int(index) < len(candidates):
             return
         candidate = candidates[int(index)]
+        if candidate.context_only:
+            bind_text(self.save_state, '这是原始段落上下文，不能直接替换当前字幕；请结合原音编辑。')
+            return
         if not self.project or not self.selected_cue_id:
             return
         cue = self._cue_lookup.get(self.selected_cue_id)

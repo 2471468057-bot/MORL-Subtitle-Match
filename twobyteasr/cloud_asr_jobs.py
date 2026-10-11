@@ -12,8 +12,9 @@ from .spark_asr import MODEL as SPARK
 
 
 def validate_speaker_strategy(endpoint):
-    if endpoint.get('model')==SPARK and endpoint.get('speaker_source') in {'native','filetrans'}:
-        raise ASRProtocolError('Spark-ASR V2没有供应商原生说话人能力；请选择关闭或独立说话人后端。', 'unsupported_speaker_strategy')
+    # Native-only is a policy, not a demand for nonexistent model capability.
+    # Spark remains a valid primary selection and never starts another model.
+    return endpoint
 
 
 def worker_timeout(model, samples):
@@ -27,9 +28,12 @@ def worker_timeout(model, samples):
 
 def public_identity(endpoint):
     from .network_policy import public_url
-    return dict(version=1,provider=endpoint.get('provider'), model=endpoint.get('model'),
+    return dict(version=2,provider=endpoint.get('provider'), model=endpoint.get('model'),
                 protocol=endpoint.get('protocol'),url=public_url(endpoint.get('url','')),
-                speaker_source=endpoint.get('speaker_source','single'))
+                speaker_source=endpoint.get('speaker_source','single'),
+                native_hints_sha256=hashlib.sha256(json.dumps({k:endpoint.get(k) for k in
+                    ('vocabulary','vocabulary_id','vocabulary_model','filetrans_context')},
+                    ensure_ascii=False,sort_keys=True).encode('utf8')).hexdigest())
 
 
 def save(path, payload):
@@ -49,6 +53,53 @@ def job_root(audio, endpoint, cache_root):
     root=Path(cache_root)/'native-asr-v1'/key;root.mkdir(parents=True,exist_ok=True)
     save(root/'input.json',identity)
     return root
+
+
+def validate_filetrans_result(payload, duration):
+    """Reject malformed native timing before the compatibility parser can clamp it."""
+    from .qwen31_asr import seconds
+    if not isinstance(payload,dict) or not isinstance(payload.get('transcripts'),list):
+        raise ASRProtocolError('Filetrans结果缺少transcripts', 'parse_failed')
+    for transcript in payload['transcripts']:
+        if not isinstance(transcript,dict) or not isinstance(transcript.get('sentences',[]),list):
+            raise ASRProtocolError('Filetrans句列表格式非法', 'parse_failed')
+        for sentence in transcript.get('sentences',[]):
+            if not isinstance(sentence,dict): raise ASRProtocolError('Filetrans句格式非法','parse_failed')
+            start,end=seconds(sentence.get('begin_time')),seconds(sentence.get('end_time'))
+            if not start < end <= duration + .1:
+                raise ASRProtocolError('Filetrans原生句时间非法或越出提交音频', 'invalid_timing')
+            if not isinstance(sentence.get('words',[]),list):
+                raise ASRProtocolError('Filetrans词列表格式非法','parse_failed')
+            for word in sentence.get('words',[]):
+                if not isinstance(word,dict): raise ASRProtocolError('Filetrans词格式非法','parse_failed')
+                ws,we=seconds(word.get('begin_time')),seconds(word.get('end_time'))
+                if not start <= ws < we <= end + .01:
+                    raise ASRProtocolError('Filetrans原生词时间非法或越出所属句', 'invalid_timing')
+
+
+def verify_compiled_vocabulary(endpoint, vocabulary, client, headers, root):
+    """Read the actual workspace binding; a saved model label is not proof."""
+    vocabulary_id=endpoint.get('vocabulary_id')
+    if not vocabulary_id:return
+    base=str(endpoint['url'])
+    marker='/api/v1/'
+    if marker not in base:
+        raise ASRProtocolError('无法确定当前工作空间的热词库查询端点。', 'vocabulary_model_mismatch')
+    response=client.post(base.split(marker,1)[0]+'/api/v1/services/audio/asr/customization',
+        headers=headers,json=dict(model='speech-biasing',input=dict(action='query_vocabulary',
+        vocabulary_id=vocabulary_id)),timeout=(10,60),allow_redirects=False)
+    if response.status_code!=200:
+        raise ASRProtocolError(f'热词库绑定核对HTTP {response.status_code}；未上传或提交音频。', 'vocabulary_model_mismatch')
+    output=response.json().get('output') or {}
+    if output.get('status')!='OK' or output.get('target_model')!=FILETRANS:
+        raise ASRProtocolError('当前工作空间热词库不可用或绑定了其它模型；未提交音频。','vocabulary_model_mismatch')
+    compiled=output.get('vocabulary')
+    if not isinstance(compiled,list) or any(not isinstance(x,dict) or not isinstance(x.get('text'),str) for x in compiled):
+        raise ASRProtocolError('热词库查询结果缺少有效词条。','invalid_response')
+    if len(compiled)+len(vocabulary)>2000:
+        raise ASRProtocolError('预编译与本场热词总计超过2000项，已阻止服务端随机采样。','input_limit')
+    save(root/'vocabulary-binding.json',dict(target_model=output['target_model'],status=output['status'],
+        compiled_count=len(compiled),instantaneous_count=len(vocabulary)))
 
 
 def chunk_ranges(audio, max_seconds=55):
@@ -96,10 +147,8 @@ def transcribe_chunks(audio, endpoint, cache_root, *, check=lambda:None, progres
                 raise
             check();save(path,payload)
         converted=_api_transcription_rows(payload,dict(start=start/16000,end=end/16000))
-        if endpoint.get('speaker_source') in {'native','filetrans'}:
+        if any(row.get('speaker') is not None for row in converted):
             converted=scope_request_speakers(converted,index,len(ranges))
-        else:
-            for row in converted:row.pop('speaker',None)
         rows.extend(converted);progress('completed',index+1,len(ranges))
     return rows
 
@@ -110,12 +159,41 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
     from .asr import _pcm16_wav_bytes, _filetrans_task_url, _filetrans_task_rows, _api_transcription_rows
     from .speaker_evidence import scope_request_speakers
     client=client or network_policy
+    import numpy as np
+    samples = np.asarray(audio)
+    if samples.ndim != 1 or not np.isfinite(samples).all():
+        raise ASRProtocolError('Filetrans输入必须是有效的16kHz单声道分析音频。', 'input_limit')
     duration=len(audio)/16000
     native=endpoint.get('speaker_source') in {'native','filetrans'}
     if endpoint.get('model')!=FILETRANS or not 0 < duration <= 12*3600:
         raise ASRProtocolError('Filetrans模型ID错误或音频超过12小时', 'input_limit')
+    if '/api/v1/' not in str(endpoint.get('url') or ''):
+        raise ASRProtocolError('Filetrans端点缺少当前工作空间API根路径；已阻止使用其它地域默认查询地址。','input_limit')
     if native and duration>2*3600:
-        raise ASRProtocolError('原生分离按官方建议限2小时；请缩小范围或选择外部Nemotron', 'input_limit')
+        raise ASRProtocolError('本模型原生说话人任务限2小时；请先选择不超过2小时的识别范围。', 'input_limit')
+    # The source may be a large video, but the submitted object is our own
+    # 16-bit mono WAV. Validate that exact container before upload/allocation.
+    if len(samples) * 2 + 44 > 2_000_000_000:
+        raise ASRProtocolError('实际提交的WAV超过Filetrans 2GB限制。', 'input_limit')
+    parameters = {'channel_id': [0], 'diarization_enabled': native}
+    for key in ('vocabulary', 'vocabulary_id'):
+        if endpoint.get(key): parameters[key] = endpoint[key]
+    if endpoint.get('vocabulary_id') and endpoint.get('vocabulary_model') != FILETRANS:
+        raise ASRProtocolError('预编译热词库未绑定当前3.1 Filetrans模型。', 'vocabulary_model_mismatch')
+    vocabulary = parameters.get('vocabulary') or {}
+    if not isinstance(vocabulary, dict) or len(vocabulary) > 2000 or any(
+            not isinstance(k,str) or not k or isinstance(v,bool) or v not in (1,2,3,4,5,50)
+            for k,v in vocabulary.items()):
+        raise ASRProtocolError('Filetrans原生热词格式或权重非法。', 'input_limit')
+    context = endpoint.get('filetrans_context') or []
+    if not isinstance(context,list) or len(context) > 5:
+        raise ASRProtocolError('Filetrans上下文消息超过接口限制。', 'input_limit')
+    for message in context:
+        if not isinstance(message,dict) or message.get('role') != 'user' or not isinstance(message.get('content'),list):
+            raise ASRProtocolError('Filetrans领域上下文必须是user/input_text消息。', 'input_limit')
+        pieces=message['content']
+        if any(not isinstance(p,dict) or p.get('type')!='input_text' or not isinstance(p.get('text'),str) for p in pieces) or sum(len(p['text']) for p in pieces)>400:
+            raise ASRProtocolError('Filetrans每轮上下文不得超过400字符，已阻止尾部静默截断。', 'input_limit')
     root=job_root(audio,endpoint,cache_root)
     state_path=root/'task.json';raw_path=root/'result.json'
     state=json.loads(state_path.read_text('utf8')) if state_path.is_file() else {}
@@ -135,6 +213,7 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
             state['status']='UPLOADED';save(state_path,state)
             progress('explicit_restart_terminal',0,1)
         if not state.get('task_id'):
+            verify_compiled_vocabulary(endpoint,vocabulary,client,headers,root)
             progress('uploading',0,1)
             if not state.get('object_key'):
                 stored=storage.upload_audio(_pcm16_wav_bytes(audio),'wav')
@@ -144,8 +223,12 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
             url=storage.create_download_url(state['object_key'],ttl_seconds=86400)
             storage.verify_download_url(url)
             check();state['status']='SUBMITTING';save(state_path,state)
+            inputs={'file_urls':[url]}
+            if context: inputs['context'] = context
+            save(root/'submission-parameters.json',dict(model=FILETRANS, parameters=parameters,
+                 context=context, hint_counts=endpoint.get('hint_counts', {})))
             response=client.post(endpoint['url'],headers={**headers,'X-DashScope-Async':'enable'},
-                json=dict(model=FILETRANS,input={'file_urls':[url]},parameters={'diarization_enabled':native}),
+                json=dict(model=FILETRANS,input=inputs,parameters=parameters),
                 timeout=(10,60),allow_redirects=False)
             if response.status_code!=200:
                 # Explicit auth/limit/validation refusal is safe to retry on a
@@ -173,6 +256,12 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
                 if status not in {'PENDING','RUNNING','SUCCEEDED','FAILED','CANCELED'}:
                     raise ASRProtocolError('Filetrans未知任务状态','invalid_response')
                 state.update(status=status,last_poll_at=time.time());save(state_path,state)
+                from .provider_diagnostics import redact_diagnostics
+                save(root/'last-poll.json',dict(task_id=state['task_id'],status=status,
+                     code=output.get('code'),message=redact_diagnostics(str(output.get('message') or '')),
+                     subtask_statuses=[{'status':r.get('subtask_status'),'code':r.get('code'),
+                                       'message':redact_diagnostics(str(r.get('message') or ''))}
+                                      for r in output.get('results') or []]))
                 progress(status,0,1)
                 if status in {'FAILED','CANCELED'}:
                     raise ASRProtocolError('Filetrans远端任务 '+status,'remote_terminal')
@@ -189,8 +278,7 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
                     if result.status_code!=200:
                         raise ASRProtocolError(f'结果获取HTTP {result.status_code}；保留原task_id','result_fetch_failed')
                     payload=result.json()
-                    if not isinstance(payload.get('transcripts'),list):
-                        raise ASRProtocolError('Filetrans结果缺少transcripts','parse_failed')
+                    validate_filetrans_result(payload,duration)
                     save(raw_path,payload)
                     break
                 for _ in range(20):check();sleep(.1)
@@ -205,14 +293,21 @@ def filetrans(audio, endpoint, cache_root, storage, *, check=lambda:None, progre
                     try:
                         result=client.post(_filetrans_task_url(endpoint,state['task_id'])+'/cancel',
                                            headers=headers,timeout=(5,15),allow_redirects=False)
-                        state['cancel_requested']=result.status_code==200;save(state_path,state)
+                        state['cancel_requested']=result.status_code==200
+                        cancelled_output = result.json().get('output', {}) if result.status_code==200 else {}
+                        state['remote_cancel_confirmed'] = cancelled_output.get('task_status') == 'CANCELED'
+                        if state['remote_cancel_confirmed']: state['status']='CANCELED'
+                        save(state_path,state)
                     except Exception:pass
+                progress('remote_cancel_confirmed' if state.get('remote_cancel_confirmed') else
+                         'local_cancel_remote_unconfirmed',0,1)
             raise
+    validate_filetrans_result(payload,duration)
     converted=_filetrans_task_rows(payload,duration)
+    converted['timestamp_source'] = 'qwen31_native'
     rows=_api_transcription_rows(converted,dict(start=0,end=duration))
-    if native:rows=scope_request_speakers(rows,0,1)
-    else:
-        for row in rows:row.pop('speaker',None)
+    if any(row.get('speaker') is not None for row in rows):
+        rows=scope_request_speakers(rows,0,1)
     # Cleanup only after result is durable and parsed; failed polling never
     # deletes an upload the accepted task may still need to read.
     if auto_delete and state.get('object_key') and not state.get('object_deleted'):

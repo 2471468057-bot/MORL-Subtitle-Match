@@ -37,31 +37,54 @@ def _is_ai_config_failure(error_text) -> bool:
 
 
 def polishing_completion_details(report):
-    """Read persisted task evidence for the completion page and retry action."""
-    polish=report.get('polishing_summary') or {}
-    terms=report.get('terminology_summary') or report.get('terminology_status') or polish.get('terminology') or {}
-    lines=[]
+    """Adapt the shared outcome to the established completion details API."""
+    from .recognition_outcome import normalize_recognition_outcome
+
+    outcome = normalize_recognition_outcome(report)
+    from .i18n import current_language, translate
+
+    language = current_language()
+    lines = list(outcome.localized_detail_lines(language))
+    polish = report.get('polishing_summary') or {}
     if polish:
-        lines.append(f"校对成功 {polish.get('success_batches',0)} 批 / {polish.get('success_cues',0)} 条；"
-                     f"ASR 回退 {polish.get('fallback_batches',0)} 批 / {polish.get('fallback_cues',0)} 条")
-        categories=polish.get('failure_categories') or {}
-        names={'request_too_large':'单条请求超过模型预算','transport_length':'CLI 启动参数超限',
-               'timeout':'超时','rate_limited':'限流','authentication_required':'需要登录',
-               'permission_denied':'权限拒绝','request_error':'请求失败',
-               'structured_output_truncated':'输出不完整','parse_failure':'输出解析失败'}
+        lines.insert(0, translate("AI文字校对：{success_batches} 批 / {success_records} 条处理记录完成；原文回退 {fallback_batches} 批 / {fallback_records} 条处理记录", language).format(
+            success_batches=polish.get('success_batches', 0), success_records=outcome.success_records,
+            fallback_batches=polish.get('fallback_batches', 0), fallback_records=outcome.fallback_records))
+    if outcome.polish_retryable:
+        categories = polish.get('failure_categories') or {}
+        names = {'request_too_large': '请求超过模型预算', 'transport_length': '启动参数超限',
+                 'timeout': '超时', 'rate_limited': '限流', 'authentication_required': '需要登录',
+                 'permission_denied': '权限拒绝', 'request_error': '请求失败',
+                 'structured_output_truncated': '输出不完整', 'parse_failure': '输出解析失败'}
         if categories:
-            lines.append('失败原因：'+'、'.join(f'{names.get(k,k)} {v} 条' for k,v in categories.items()))
-    if terms:
-        state=terms.get('status')
-        label={'success':'已完成联网核验','partial':'联网核验部分完成','failed':'联网核验失败',
-               'not_run':'未执行联网核验'}.get(state,'联网核验状态未知')
-        if terms.get('cached'):
-            label+='（复用已核验结果）'
-        lines.append(f"{label}：已检查 {terms.get('verified_count',0)} 条，未核验 {terms.get('unverified_count',0)} 条")
-    retry=bool(polish.get('fallback_cues')) or terms.get('status') in {'failed','partial'}
+            reasons = '、'.join(translate('{reason} {count} 条处理记录', language).format(reason=translate(names.get(key, key), language), count=count) for key, count in categories.items())
+            lines.append(translate('文字校对失败原因：{reasons}', language).format(reasons=reasons))
+    evidence = completion_stage_evidence(report)
+    retry = bool(evidence['retry_stages'])
     if retry:
-        lines.append('可重试未完成部分；复用已有识别和成功校对缓存。')
-    return lines,retry
+        stages = ' / '.join(translate({'polish': 'AI文字校对', 'terminology': '联网核验'}[stage], language)
+                            for stage in evidence['retry_stages'])
+        lines.append(translate('可重试未完成的{stages}；复用已有识别和成功文字校对缓存。', language).format(stages=stages))
+    return lines, retry
+
+
+def completion_stage_evidence(report):
+    """Keep text retries separate from absent optional search capability."""
+    from .recognition_outcome import normalize_recognition_outcome
+
+    outcome = normalize_recognition_outcome(report)
+    polish = report.get('polishing_summary') or {}
+    terms = report.get('terminology_summary') or report.get('terminology_status') or polish.get('terminology') or {}
+    stages = []
+    if outcome.polish_retryable:
+        stages.append('polish')
+    if outcome.search_retryable:
+        stages.append('terminology')
+    return dict(retry_stages=tuple(stages), polishing=polish, terminology=terms,
+                polish_incomplete=outcome.polish_status == 'partial',
+                verification_incomplete=outcome.search_status in {'not_configured', 'unsupported', 'not_run', 'partial', 'failed', 'timeout', 'insufficient_evidence'},
+                search_unsupported=outcome.search_status in {'not_configured', 'unsupported'},
+                outcome=outcome)
 
 
 def _merge_media_paths(existing, incoming):

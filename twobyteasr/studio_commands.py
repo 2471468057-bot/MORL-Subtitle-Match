@@ -60,7 +60,10 @@ def _commit_mutation(
     changed: ChangedCallback | None,
     selection_after: str | None = None,
     snapshot_cues: bool = True,
+    sync_caption_words: bool = True,
 ) -> None:
+    if project.render_settings.get('_cue_domain') == 'timeline' and dirty & DirtyDomain.CUE_TIMING:
+        dirty |= DirtyDomain.PROJECT_METADATA
     state = state_for(project)
     target_ids = tuple(str(item) for item in cue_ids if str(item))
     target_id_set = set(target_ids)
@@ -83,6 +86,11 @@ def _commit_mutation(
             for cue in project.cues
             if cue.id in target_id_set
         }
+        from .studio_caption_timeline import independent_captions, sync_caption_interval_words
+        if sync_caption_words and independent_captions(project):
+            for cue in project.cues:
+                if cue.id in before_ranges and cue.id in after_ranges and before_ranges[cue.id] != after_ranges[cue.id]:
+                    sync_caption_interval_words(project, cue, before_ranges[cue.id])
         transaction.mark_dirty(
             DirtyDomain.NONE,
             ranges=(*before_ranges.values(), *after_ranges.values()),
@@ -200,7 +208,7 @@ class SetCueFieldsCommand(QUndoCommand):
             self.project,
             action_id=self.text(),
             dirty=_field_domains(values),
-            cue_ids=(self.source_cue_id,),
+            cue_ids=(self.cue_id if self.project.render_settings.get('_cue_domain') == 'timeline' else self.source_cue_id,),
             mutate=mutate,
             changed=self.changed,
         )
@@ -467,6 +475,8 @@ class SpliceCuesCommand(QUndoCommand):
             for cue in project.cues[self.index:self.index + self.removed_count]
         ]
         self._after_cues = [copy.deepcopy(cue) for cue in inserted]
+        from .studio_caption_timeline import caption_replacement_receipts
+        self._caption_before, self._caption_after = caption_replacement_receipts(project, self._before_cues, self._after_cues)
         self.changed = changed
         self.origin = MutationOrigin(origin)
         for cue in self._before_cues + self._after_cues:
@@ -484,7 +494,7 @@ class SpliceCuesCommand(QUndoCommand):
         if duplicates:
             raise ValueError(f"duplicate cue id in splice: {', '.join(sorted(duplicates))}")
 
-    def _apply(self, replacing_count: int, inserted_source: list[StudioCue]) -> None:
+    def _apply(self, replacing_count: int, inserted_source: list[StudioCue], caption_receipts=None) -> None:
         start = self.index
         inserted = [copy.deepcopy(cue) for cue in inserted_source]
         after_ids = {cue.id for cue in inserted}
@@ -517,6 +527,12 @@ class SpliceCuesCommand(QUndoCommand):
 
         def mutate() -> None:
             self.project.cues[start:start + replacing_count] = inserted
+            if caption_receipts is not None:
+                from .studio_caption_timeline import KEY
+                receipts=self.project.studio_state[KEY].setdefault('instances', {})
+                for key,value in caption_receipts.items():
+                    if value is None:receipts.pop(key,None)
+                    else:receipts[key]=copy.deepcopy(value)
 
         _commit_mutation(
             self.project,
@@ -536,13 +552,14 @@ class SpliceCuesCommand(QUndoCommand):
             changed=self.changed,
             selection_after=selection_after,
             snapshot_cues=False,
+            sync_caption_words=caption_receipts is None,
         )
 
     def redo(self) -> None:
-        self._apply(self.removed_count, self._after_cues)
+        self._apply(self.removed_count, self._after_cues, self._caption_after)
 
     def undo(self) -> None:
-        self._apply(len(self._after_cues), self._before_cues)
+        self._apply(len(self._after_cues), self._before_cues, self._caption_before)
 
 
 def _splice_split(
@@ -1140,7 +1157,8 @@ def merge_cues_command(
         dict.fromkeys(ref for item in matches for ref in item.evidence_refs)
     )
     first_index = min(index for index, item in enumerate(project.cues) if item.id in selected)
-    replacement = [copy.deepcopy(item) for item in project.cues if item.id not in selected]
+    # ReplaceCuesCommand deep-copies the replacement itself.
+    replacement = [item for item in project.cues if item.id not in selected]
     replacement.insert(first_index, merged)
     return ReplaceCuesCommand(project, replacement, "Merge subtitles", changed)
 
@@ -1154,7 +1172,8 @@ def delete_cues_command(
     spliced = _splice_delete(project, selected, changed)
     if spliced is not None:
         return spliced
-    replacement = [copy.deepcopy(item) for item in project.cues if item.id not in selected]
+    # ReplaceCuesCommand deep-copies the replacement itself.
+    replacement = [item for item in project.cues if item.id not in selected]
     if len(replacement) == len(project.cues):
         raise ValueError("no matching cues to delete")
     return ReplaceCuesCommand(project, replacement, "Delete subtitles", changed)
@@ -1236,6 +1255,8 @@ class BatchReplaceTextCommand(QUndoCommand):
         origin: MutationOrigin = MutationOrigin.SEARCH_REPLACE,
         learning_observer: TextLearningObserver | None = None,
         learning_meta: Mapping[str, object] | None = None,
+        glossary_ids: Iterable[str] | None = None,
+        review_receipt: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(f"批量替换“{needle}”" if needle else "Batch replace text")
         self.project = project
@@ -1250,9 +1271,109 @@ class BatchReplaceTextCommand(QUndoCommand):
         self.needle = str(needle or "")
         self.learning_observer = learning_observer
         self.learning_meta = dict(learning_meta) if learning_meta else None
+        self.glossary_before = list(project.glossary_ids)
+        self.glossary_after = list(dict.fromkeys(glossary_ids)) if glossary_ids is not None else None
+        self.review_before = copy.deepcopy(project.generation_metadata.get('glossary_review_jobs'))
+        self.review_after = None
+        self.manual_confirmations_before = copy.deepcopy(project.studio_state.get('manual_caption_text', {}))
+        self.manual_confirmations_after = None
+        if review_receipt is not None:
+            receipt = copy.deepcopy(dict(review_receipt))
+            receipt['applied_cue_ids'] = list(self.after)
+            receipt['applied_texts'] = dict(self.after)
+            self.review_after = [*(self.review_before or []), receipt]
+            if receipt.get('source') == 'user_confirmed':
+                self.manual_confirmations_after = {**self.manual_confirmations_before, **self.after}
+        self.word_overrides_before = copy.deepcopy(project.studio_state.get('term_word_overrides', {}))
+        self.word_overrides_after = copy.deepcopy(self.word_overrides_before)
+        if self.glossary_after is not None:
+            from .terminology import remap_words
+            from .models import WordUnit
+            from .cue_word_alignment import cue_words
+            for cue in project.cues:
+                if cue.id not in self.after:
+                    continue
+                # A later case edit cannot turn previously derived or degraded
+                # spans into acoustic evidence. Check the current source before
+                # creating the next override, while its provenance is intact.
+                aligned_words, source_alignment = cue_words(project, cue)
+                previous = self.word_overrides_before.get(cue.id, {})
+                words = previous.get('words', []) if previous.get('text') == cue.text else []
+                if not words and aligned_words:
+                    # cue_words owns clip/independent-caption projection. Raw
+                    # ASR rows use source time, which may differ after edits.
+                    words = [{'text': w.text, 'start_ms': w.start_ms, 'end_ms': w.end_ms}
+                             for w in aligned_words]
+                if not words:
+                    from .studio_caption_timeline import independent_captions
+                    for ref in (() if independent_captions(project) else cue.evidence_refs):
+                        row = project.asr_evidence.get(ref, {})
+                        words.extend(copy.deepcopy(w) for w in row.get('words', [])
+                                     if int(w.get('end_ms', 0)) > cue.start_ms
+                                     and int(w.get('start_ms', 0)) < cue.end_ms)
+                if words:
+                    word_bounds_clipped = any(float(w.get('start_ms', float(w.get('start', 0))*1000)) < cue.start_ms
+                        or float(w.get('end_ms', float(w.get('end', 0))*1000)) > cue.end_ms for w in words)
+                    tokens = [WordUnit(float(w['start_ms']) / 1000 if 'start_ms' in w else float(w.get('start', 0)),
+                                       float(w['end_ms']) / 1000 if 'end_ms' in w else float(w.get('end', 0)),
+                                       str(w.get('text', w.get('word', ''))), float(w.get('probability', 0))) for w in words]
+                    mapped = remap_words(cue.text, self.after[cue.id], tokens, cue.start_ms / 1000, cue.end_ms / 1000)
+                    # Existing independent-caption words can straddle a cut.
+                    # Clip only the outer interval; never invent inner anchors.
+                    for word in mapped:
+                        word.start = max(cue.start_ms / 1000, min(cue.end_ms / 1000, word.start))
+                        word.end = max(word.start, min(cue.end_ms / 1000, word.end))
+                    original_tokens = ''.join(w.text for w in tokens)
+                    verified_tokens = (source_alignment == 'exact_token_text' and not word_bounds_clipped
+                                       and ''.join(original_tokens.split()).casefold() == ''.join(cue.text.split()).casefold())
+                    exact_source = (verified_tokens
+                                    and [(w.start, w.end) for w in mapped] == [(w.start, w.end) for w in tokens])
+                    # Deleting characters (stammer cleanup) leaves every
+                    # remaining character on its own measured interval.
+                    from .terminology import deletion_embedding
+                    compact_text = lambda value: ''.join(value.split())
+                    intervals = {(w.start, w.end) for w in tokens}
+                    deletion_only = (verified_tokens
+                                     and deletion_embedding(compact_text(cue.text), compact_text(self.after[cue.id])) is not None
+                                     and all((w.start, w.end) in intervals for w in mapped))
+                    self.word_overrides_after[cue.id] = {
+                        'text': self.after[cue.id], 'words': [{'text': w.text, 'start_ms': round(w.start*1000),
+                                                             'end_ms': round(w.end*1000)} for w in mapped],
+                        'alignment_provenance': ('case_only' if exact_source and cue.text.casefold() == self.after[cue.id].casefold()
+                                                 else 'deletion_only' if deletion_only else 'term_local_mapping'),
+                        'source_alignment': source_alignment,
+                        'time_domain': 'cue',
+                        'word_bounds_clipped_to_cue': word_bounds_clipped,
+                    }
+                else:
+                    self.word_overrides_after[cue.id] = {
+                        'text': self.after[cue.id], 'words': [],
+                        'alignment_provenance': 'term_local_mapping',
+                        'requires_acoustic_alignment': True,
+                        'source_alignment': source_alignment,
+                        'timing': 'segment-only-no-word-alignment',
+                        'time_domain': 'cue',
+                    }
 
     def _apply(self, values: Mapping[str, str]) -> None:
         def mutate() -> None:
+            if self.manual_confirmations_after is not None:
+                self.project.studio_state['manual_caption_text'] = copy.deepcopy(
+                    self.manual_confirmations_after if values is self.after else self.manual_confirmations_before)
+            if self.review_after is not None:
+                receipt = self.review_after if values is self.after else self.review_before
+                if receipt is None:
+                    self.project.generation_metadata.pop('glossary_review_jobs', None)
+                else:
+                    self.project.generation_metadata['glossary_review_jobs'] = copy.deepcopy(receipt)
+            if self.glossary_after is not None:
+                forward = values is self.after
+                self.project.glossary_ids = list(self.glossary_after if forward else self.glossary_before)
+                overrides = self.word_overrides_after if forward else self.word_overrides_before
+                if overrides:
+                    self.project.studio_state['term_word_overrides'] = copy.deepcopy(overrides)
+                else:
+                    self.project.studio_state.pop('term_word_overrides', None)
             for cue in self.project.cues:
                 if cue.id in values:
                     cue.text = values[cue.id]
@@ -1291,10 +1412,12 @@ class EditCueIntervalsCommand(QUndoCommand):
         # 2026-09-19 P0：values 的键可能是剪辑视图的派生 id（"源id#段id"），
         # 时间是序列域——解析回源 id 并映射回源域；裁边 cue 保持源计时。
         from .studio_edit_sequence import map_timing_to_source, source_cue_id_of
+        from .studio_caption_timeline import independent_captions
+        independent = independent_captions(project)
         source_by_id = {cue.id: cue for cue in project.cues}
         resolved: dict[str, tuple[int, int, str]] = {}
         for key, value in values.items():
-            source_id = source_cue_id_of(str(key))
+            source_id = str(key) if independent else source_cue_id_of(str(key))
             cue = source_by_id.get(source_id)
             if cue is None:
                 raise KeyError(f"edited cue no longer exists: {key}")
@@ -1345,6 +1468,15 @@ class RepairDisplayHandoffsCommand(EditCueIntervalsCommand):
         super().undo()
 
 
+class BridgeShortGapsCommand(EditCueIntervalsCommand):
+    """Undoable end-only bridge of caption gaps of 0.5 s or less (2026-10-10)."""
+    def __init__(self, project, ends, changed=None):
+        from .timeline_cue_gesture import CueInterval
+        values={c.id:CueInterval(c.start_ms,ends[c.id],c.speaker_id) for c in project.cues if c.id in ends}
+        super().__init__(project,values,changed)
+        self.setText("衔接短间隙")
+
+
 class BatchTimingCommand(QUndoCommand):
     def __init__(self, project: SubtitleProject, values: Mapping[str, tuple[int, int]], text: str = "Timing offset", changed: ChangedCallback | None = None) -> None:
         super().__init__(text)
@@ -1352,7 +1484,8 @@ class BatchTimingCommand(QUndoCommand):
         # （输入时间本身来自 project.cues 报告，已是源域，不做映射）。
         from .studio_edit_sequence import source_cue_id_of
         self.project, self.changed = project, changed
-        self.after = {source_cue_id_of(str(k)): tuple(map(int, v)) for k, v in values.items()}
+        independent = project.render_settings.get('_cue_domain') == 'timeline'
+        self.after = {(str(k) if independent else source_cue_id_of(str(k))): tuple(map(int, v)) for k, v in values.items()}
         self.before = {cue.id: (cue.start_ms, cue.end_ms) for cue in project.cues if cue.id in self.after}
         if len(self.before) != len(self.after):
             raise KeyError("one or more cues were not found")

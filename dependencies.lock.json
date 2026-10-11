@@ -2,8 +2,7 @@
   "schema_version": 1,
   "python": {
     "main": "3.10",
-    "moss": "3.12",
-    "nemotron": "3.12"
+    "moss": "3.12"
   },
   "runtime": {
     "torch": "2.11.0",
@@ -994,42 +993,6 @@
       },
       "download_bytes": 88983473
     },
-    "nemotron": {
-      "repository": "nvidia/Nemotron-3-Diarization",
-      "revision": "f667ed73aee57d40cc39428eb768b4fd87a0a29e",
-      "path": "models/Nemotron-3-Diarization",
-      "runtime_environment": ".venv-nemotron",
-      "required_files": [
-        "config.json",
-        "processor_config.json",
-        "model.safetensors"
-      ],
-      "size_bytes": 396956673,
-      "sha256": {
-        "config.json": "dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873",
-        "processor_config.json": "91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e",
-        "model.safetensors": "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6"
-      },
-      "license": "OpenMDW-1.1",
-      "download_bytes": 396956673,
-      "integrity_provenance": {
-        "metadata_url": "https://huggingface.co/api/models/nvidia/Nemotron-3-Diarization/tree/f667ed73aee57d40cc39428eb768b4fd87a0a29e?recursive=true",
-        "files": {
-          "config.json": {
-            "method": "computed after verifying upstream Git blob SHA1; not a published upstream SHA256",
-            "upstream_oid": "d09665951c8d48abe9c74626cd39fbfd615297fe"
-          },
-          "processor_config.json": {
-            "method": "computed after verifying upstream Git blob SHA1; not a published upstream SHA256",
-            "upstream_oid": "5779fbbbb8401983be84e0b4f09a236ad8227dfe"
-          },
-          "model.safetensors": {
-            "method": "upstream LFS SHA256",
-            "upstream_oid": "c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6"
-          }
-        }
-      }
-    },
     "canary_qwen_tokenizer": {
       "repository": "Qwen/Qwen3-1.7B",
       "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
@@ -1120,6 +1083,7 @@
       "torch": "2.11.0",
       "torchaudio": "2.11.0",
       "packages": {
+        "speechbrain": "1.0.3",
         "psutil": "7.2.2",
         "transformers": "4.57.6",
         "huggingface_hub": "0.36.2",
@@ -1159,32 +1123,12 @@
         "sentencepiece": "0.2.2",
         "soundfile": "0.14.0"
       }
-    },
-    "nemotron": {
-      "python": "3.12",
-      "torch": "2.11.0",
-      "torchaudio": "2.11.0",
-      "packages": {
-        "transformers": "5.18.0.dev0",
-        "huggingface_hub": "1.32.0",
-        "tokenizers": "0.23.1",
-        "safetensors": "0.8.0",
-        "librosa": "0.11.0",
-        "numpy": "2.2.6",
-        "soundfile": "0.13.1",
-        "requests": "2.32.5"
-      },
-      "package_sources": {
-        "transformers": "https://github.com/huggingface/transformers/archive/4b28d51d0d5f17ec20c23a187d0475a8e68810c8.zip"
-      },
-      "bootstrap": {
-        "uv_version": "0.11.7",
-        "uv_url": "https://github.com/astral-sh/uv/releases/download/0.11.7/uv-x86_64-pc-windows-msvc.zip",
-        "uv_sha256": "fe0c7815acf4fc45f8a5eff58ed3cf7ae2e15c3cf1dceadbd10c816ec1690cc1",
-        "python_version": "3.12.13",
-        "runtime_id": "py31213-torch211-cu128-tf4b28d51-v6",
-        "torch_tag": "cu128"
-      }
     }
+  },
+  "managed_bootstrap": {
+    "uv_version": "0.11.7",
+    "uv_url": "https://github.com/astral-sh/uv/releases/download/0.11.7/uv-x86_64-pc-windows-msvc.zip",
+    "uv_sha256": "fe0c7815acf4fc45f8a5eff58ed3cf7ae2e15c3cf1dceadbd10c816ec1690cc1",
+    "python_version": "3.12.13"
   }
 }

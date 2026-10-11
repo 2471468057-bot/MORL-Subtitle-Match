@@ -16,7 +16,7 @@ def test_short_explicit_moss_keeps_low_frequency_identities_through_project_expo
     cues = [SimpleNamespace(start=r['start'], end=r['end'], text=r['text'], speaker=r['speaker']) for r in rows]
     p = project_from_runtime_cues(str(tmp_path/'missing.wav'), cues,
         generation_metadata={'speaker_recovery': evidence})
-    expected = {'S01', 'S02'} if mode == 'moss' else {UNIFIED}
+    expected = {'S01', 'S02'}
     assert {c.speaker_id for c in p.cues} == expected
     assert [c.text for c in p.cues] == [r['text'] for r in rows]
     save_project(p, tmp_path/'project.2byteproj')
@@ -46,7 +46,7 @@ def test_parser_preserves_valid_zero_and_distinct_labels():
     assert [parsed_speaker_label(v,1) for v in (0,'[S01]','[S02]')]==['0','S01','S02']
 
 
-def test_moss_task_snapshot_does_not_reenable_closed_settings():
+def test_moss_task_snapshot_retired_closed_setting_cannot_erase_native():
     import json
     from twobyteasr.settings import DEFAULT_SETTINGS
     from twobyteasr.service import RunOptions
@@ -55,4 +55,4 @@ def test_moss_task_snapshot_does_not_reenable_closed_settings():
     settings['models']['speaker_source']='single'
     options=RunOptions(speaker_source='moss', settings_snapshot_json=json.dumps(settings))
     assert options.speaker_source=='moss'
-    assert resolve(settings)=='single'
+    assert resolve(settings)=='moss'

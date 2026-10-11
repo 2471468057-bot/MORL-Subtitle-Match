@@ -25,12 +25,25 @@ def test_subcue_mapping_excludes_parent_prefix_punctuation_and_spaces():
     assert timing==[(100,200),(600,1800)] and not estimated
 
 
-def test_automatic_refuses_inside_token_or_changed_text_without_losing_tail():
+def test_automatic_refuses_inside_token_or_beside_unheard_text_without_losing_tail():
     p=project()
     assert allocate_split_times(p.cues[0],[2],project=p)==([],True)
+    # Edited text is realigned to the heard tokens, not to stale indices.
+    # Unheard text joins both neighbours: no boundary is claimed beside it.
     p.cues[0].text='啊这个FPS60非常好'
-    assert cue_words(p,p.cues[0])[0]==()
-    assert build_replacement_cues(p.cues[0],CueRefineAction('a','split',[1]),project=p)==[]
+    words, reason = cue_words(p,p.cues[0])
+    assert reason == 'derived_term_source_span'
+    assert [(p.cues[0].text[w.char_start:w.char_end], w.start_ms, w.end_ms) for w in words] == [
+        ('啊',100,200),('这个',600,900),('FPS60非常好',950,1550)]
+    assert build_replacement_cues(p.cues[0],CueRefineAction('a','split',[7]),project=p)==[]
+    assert build_replacement_cues(p.cues[0],CueRefineAction('a','split',[9]),project=p)==[]
+    assert allocate_split_times(p.cues[0],[0],project=p)==([(100,200),(600,1800)],False)
+
+
+def test_unrelated_text_is_never_aligned():
+    p=project()
+    p.cues[0].text='完全不同的句子'
+    assert cue_words(p,p.cues[0])==((),'text_changed_or_inside_multi_character_token')
 
 
 @pytest.mark.parametrize('at, left',[(500,'啊，'),(700,'啊，这个 '),(1350,'啊，这个 FPS60 ')])

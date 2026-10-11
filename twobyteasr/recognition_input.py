@@ -36,7 +36,7 @@ def capture_recognition_snapshot(project, project_path=""):
         path = Path(layer["source_path"]).resolve()
         stat = path.stat()
         sources[str(path)] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-    identity = {"version": 1, "duration_ms": duration, "audio_graph": graph,
+    identity = {"version": 2, "duration_ms": duration, "audio_graph": graph,
                 "sequence": sequence_of(project).to_dict(), "sources": sources}
     return {**identity, "fingerprint": _digest(identity), "project": data,
             "project_id": project.project_id, "project_path": str(project_path),
@@ -51,6 +51,20 @@ def project_content_revision(data):
 def prepare_recognition_input(snapshot, cache_root, ffmpeg, *, token=None):
     from .audio_export import audio_mix_arguments
     from .processes import popen_hidden_subprocess, stop_process_tree
+    from .timeline_media import resolve_audio_layers, TIME_CONTRACT
+
+    def cancelled():
+        if token is not None:
+            token.raise_if_cancelled()
+        return False
+
+    # Resolve BEFORE accepting a cached task WAV. v1 cached timestamp-domain
+    # seeks are not compatible even when path, edit list and duration match.
+    layers, timebases = resolve_audio_layers(snapshot['audio_graph']['segments'],
+                                            ffmpeg, cancelled=cancelled)
+    snapshot.update(version=2, media_time_contract=TIME_CONTRACT, media_timebases=timebases)
+    snapshot['fingerprint'] = _digest({k: snapshot[k] for k in
+        ('version', 'duration_ms', 'audio_graph', 'sequence', 'sources', 'media_time_contract', 'media_timebases')})
     root = Path(cache_root) / "timeline-inputs" / snapshot["fingerprint"]
     root.mkdir(parents=True, exist_ok=True)
     target, manifest = root / "timeline.wav", root / "input.json"
@@ -65,14 +79,16 @@ def prepare_recognition_input(snapshot, cache_root, ffmpeg, *, token=None):
             with wave.open(str(target), "rb") as wav:
                 valid = (wav.getnframes() == expected_frames and wav.getframerate() == 16000
                          and wav.getnchannels() == 1 and wav.getsampwidth() == 2)
-            if valid and prior.get("fingerprint") == snapshot["fingerprint"]:
+            if (valid and prior.get("fingerprint") == snapshot["fingerprint"]
+                    and prior.get('media_time_contract') == TIME_CONTRACT
+                    and prior.get('audio_sha256') == _file_sha256(target)):
                 return str(target)
         except (OSError, ValueError, wave.Error):
             pass
     duration = snapshot["duration_ms"] / 1000
     job = SimpleNamespace(start_seconds=0, duration_seconds=duration,
                           video_graph={"duration_ms": snapshot["duration_ms"]})
-    args = audio_mix_arguments(str(ffmpeg), job, snapshot["audio_graph"]["segments"])
+    args = audio_mix_arguments(str(ffmpeg), job, layers)
     if args == ["-an"]:
         args = ["-map", "0:a:0", "-c:a", "pcm_s16le"]
     temporary = root / f"timeline-{uuid.uuid4().hex}.wav"
@@ -104,11 +120,20 @@ def prepare_recognition_input(snapshot, cache_root, ffmpeg, *, token=None):
         os.replace(temporary, target)
         public = {k: v for k, v in snapshot.items() if k != "project"}
         public.update(input_path=str(target), sample_rate=16000, channels=1,
-                      frames=expected_frames, time_domain="timeline")
+                      frames=expected_frames, time_domain="timeline", audio_sha256=_file_sha256(target),
+                      rendered_audio_segments=layers, project_range_ms=[0, snapshot['duration_ms']])
         manifest.write_text(json.dumps(public, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(target)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def attach_timeline_result(result, snapshot):
@@ -138,12 +163,24 @@ def attach_timeline_result(result, snapshot):
     captured.original_outputs = copy.deepcopy(result.original_outputs)
     captured.generation_metadata = {**captured.generation_metadata, **result.generation_metadata,
         "timeline_recognition": {"fingerprint": snapshot["fingerprint"],
+            "media_time_contract": snapshot.get('media_time_contract', 'legacy-v1'),
+            "media_timebases": copy.deepcopy(snapshot.get('media_timebases', {})),
             "source_project_id": snapshot["project_id"],
             "source_project_path": snapshot["project_path"],
             "source_project_revision": snapshot["project_revision"],
             "duration_ms": snapshot["duration_ms"], "sequence": snapshot["sequence"],
             "cue_ids": [cue.id for cue in result.cues],
             "original_cues": original["cues"], "original_speakers": original["speakers"]}}
+    from .caption_source_receipts import initialize_recognition_receipts
+    prior_domain = captured.render_settings.get('_cue_domain')
+    initialize_recognition_receipts(captured, result)
+    if prior_domain != 'timeline':
+        # Retain source-domain projection for legacy consumers until the
+        # existing independent-caption migration runs at Studio open.
+        if prior_domain is None:
+            captured.render_settings.pop('_cue_domain', None)
+        else:
+            captured.render_settings['_cue_domain'] = prior_domain
     return captured
 
 

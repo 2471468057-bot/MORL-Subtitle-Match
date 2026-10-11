@@ -58,8 +58,7 @@ class StudioCueController:
         visibility = getattr(page, '_subtitle_track_visibility', {})
         def eligible(cue):
             return (cue.id in runtime.cue_by_id and cue.end_ms > cue.start_ms
-                    and cue.speaker_id not in hidden and cue.speaker_id not in locked
-                    and visibility.get(cue.speaker_id, True))
+                    and cue.speaker_id not in locked)
         header = getattr(timeline, 'selected_track_header', None)
         speaker = (header[1] if header and header[0] == 'subtitle'
                    else self.session.preferred_subtitle_speaker)
@@ -91,6 +90,8 @@ class StudioCueController:
     def _mirror_clock_selection(self, cue_id: str) -> None:
         """Lightweight selection only: no editor hydration, focus, seek or dirty state."""
         page = self.page
+        if getattr(page.timeline,"_unified_selection",False) and page.timeline.clip_selection().count:
+            return
         self.session.selected_cue_id = cue_id
         page._manual_selection_hold = False
         scope = SelectionScope.explicit((cue_id,), cue_id) if cue_id else SelectionScope.empty()
@@ -361,6 +362,10 @@ class StudioCueController:
         if getattr(page, '_canvas_editor', None) is not None:
             hydrate = False
         previous_id = self.session.selected_cue_id
+        if hasattr(page,"timeline"):
+            page.timeline._unified_selection=False
+            page.timeline.selected_audio_clip_ids.clear()
+            page.timeline.selection_count_changed.emit(0)
         cue_id = str(cue_id or "")
         if not cue_id:
             page._manual_selection_hold = False
@@ -1016,9 +1021,11 @@ class StudioCueController:
         page = self.page
         start = max(0, int(page.timeline.playhead_ms))
         duration = 2_000
-        project_duration = int(project.media.duration_ms or 0)
+        from .studio_edit_sequence import timeline_duration_ms
+        project_duration = int(timeline_duration_ms(project) or project.media.duration_ms or 0)
         if project_duration:
-            start = min(start, max(0, project_duration - duration))
+            start = min(start, max(0, project_duration - 1))
+            duration = min(duration, project_duration - start)
         header = getattr(page.timeline, 'selected_track_header', None)
         speaker_id = header[1] if header and header[0] == 'subtitle' else ""
         if speaker_id in page.timeline.locked_speakers:
@@ -1035,6 +1042,9 @@ class StudioCueController:
                 if ordered
                 else (project.speakers[0].id if project.speakers else "S00")
             )
+        if speaker_id in page.timeline.locked_speakers:
+            bind_text(page.save_state, '轨道已锁定，请先解锁')
+            return
         style_id = "default"
         if selected_id:
             current = self.session._cue_lookup.get(selected_id)
@@ -1144,10 +1154,22 @@ class StudioCueController:
         # snap again here: a second snap pass can shift a few ms and flip the
         # character rounding, producing a cut that differs from the preview.
         from .studio_edit_sequence import map_timing_to_source
+        from .studio_timing import describe_split, SplitBlocked
         view = self.session.runtime.cue_by_id.get(cue_id, cue)
-        preview = resolve_split(view, int(split_ms), project=project)
-        if preview is None:
-            bind_text(self.page.save_state, '切点位于首个或末个词内，无法分成两段文字')
+        preview = describe_split(view, int(split_ms), project=project)
+        shown = getattr(self.page.timeline, 'razor_committed_preview', None)
+        if shown is not None:
+            self.page.timeline.razor_committed_preview = None
+        if isinstance(preview, SplitBlocked):
+            bind_text(self.page.save_state, {
+                'before_first_word': '切点在首字发音之前，前段没有文字，未切分',
+                'after_last_word_onset': '切点在末字开始发音之后，后段没有文字，未切分',
+            }.get(preview.reason, '这条字幕太短，无法在此切分'))
+            return
+        if shown is not None and shown[0] == cue_id and int(shown[1].split_ms) == int(preview.split_ms) and (
+                shown[1].left_text, shown[1].right_text) != (preview.left_text, preview.right_text):
+            # The preview IS the commit: never re-allocate text differently.
+            bind_text(self.page.save_state, '字幕在预览后已改变，未切分；请重新选择切点')
             return
         mapped = map_timing_to_source(project, cue, preview.split_ms, preview.split_ms + 1)
         if mapped is None:
@@ -1163,9 +1185,11 @@ class StudioCueController:
                 self.model_changed,
             )
         )
-        gap = (preview.right_word_start_ms or preview.split_ms) - preview.split_ms
-        note = f' · 后段首词证据在切点后 {gap}ms，请试听' if gap > 0 else ''
-        (bind_text(self.page.save_state, '已按字词分配文字，保留手动切点{value0}', value0=note) if preview.timing_source == 'exact_token_text' else bind_text(self.page.save_state, '缺少可匹配字词时间：文字按比例分配，请试听检查切点'))
+        if preview.measured:
+            bind_text(self.page.save_state, '已按字级时间切分：「{left}」｜「{right}」',
+                      left=preview.left_text[-4:], right=preview.right_text[:4])
+        else:
+            bind_text(self.page.save_state, '此段缺少有效字级对齐：文字分界为估算，请试听核对')
         self.page._studio_trace('RazorTiming', cue_id=cue_id, timeline_cut=preview.split_ms,
                                 stored_cut=mapped[0], source=preview.timing_source,
                                 reason=preview.timing_reason, right_word_start=preview.right_word_start_ms)
@@ -1198,8 +1222,14 @@ class StudioCueController:
         cue_id = self.session.selected_cue_id
         if not project or not cue_id:
             return
+        from .studio_timing import merge_neighbor_allowed
+        anchor = next((cue for cue in project.cues if cue.id == cue_id), None)
+        # Another speaker's caption overlapping the anchor (simultaneous
+        # speech) is never a merge neighbour (2026-10-10, as the merge tool).
         ordered = sorted(
-            project.cues, key=lambda item: (item.start_ms, item.end_ms, item.id)
+            (cue for cue in project.cues
+             if anchor is None or cue.id == anchor.id or merge_neighbor_allowed(anchor, cue)),
+            key=lambda item: (item.start_ms, item.end_ms, item.id),
         )
         index = next(
             (position for position, cue in enumerate(ordered) if cue.id == cue_id),

@@ -86,12 +86,13 @@ def test_detached_audio_and_locked_pair(project):
  assert next(x for x in p.audio_tracks if x.id==a.id).clips
  stack.undo();assert p.av_track_groups[1].linked is False
 
-def test_video_visibility_does_not_change_audio_mix(project):
+def test_disabled_video_lane_excludes_its_owned_audio(project):
  from twobyteasr.audio_graph import capture_audio_graph
  p=project;before=capture_audio_graph(p)['segments'];set_video_track_state(p,'V2',enabled=False)
  after=capture_audio_graph(p)['segments']
- assert len(before)==len(after) and {x['track_id'] for x in before}=={'V1','V2'}
- assert [(x['source_path'],x['source_in_ms'],x['gain_db']) for x in before]==[(x['source_path'],x['source_in_ms'],x['gain_db']) for x in after]
+ assert {x['track_id'] for x in before}=={'V1','V2'}
+ assert {x['track_id'] for x in after}=={'V1'}
+ assert [(x['source_path'],x['source_in_ms'],x['gain_db']) for x in before if x['track_id']=='V1']==[(x['source_path'],x['source_in_ms'],x['gain_db']) for x in after]
 
 def test_new_generate_preflight_visible_identity_and_recovery(app,project,tmp_path,monkeypatch):
  import twobyteasr.studio_ai_flow as module

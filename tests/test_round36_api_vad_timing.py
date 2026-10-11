@@ -88,6 +88,8 @@ def test_api_primary_uses_10s_chunks(monkeypatch):
 
     monkeypatch.setattr(asr, "_transcribe_api_owned", _fake_transcribe)
     monkeypatch.setattr(asr, "decode_audio_to_array", lambda path: _audio(26.0))
+    # 端点检查要求有 Key；用假 Key，不依赖本机保存的真实密钥。
+    monkeypatch.setattr("twobyteasr.llm_config.read_asr_api_key", lambda *_args: ("sk-fixture", "fixture"))
     import subtitle_core
 
     monkeypatch.setattr(subtitle_core, "USE_QWEN_ASR_REFERENCE", True)

@@ -187,25 +187,40 @@ def test_home_content_profile_and_batch_glossary_share_tall_space():
     win.close()
 
 
-def test_expanding_ai_panel_scrolls_configuration_into_view():
+def test_ai_settings_open_in_a_dialog_and_keep_home_in_place():
+    # 2026-10-08 (user): AI segmentation settings open in a dialog with a
+    # scrolling form; the home page keeps its scroll position, and Cancel
+    # restores every control (previously the form expanded in the page).
     app = _app()
     win = _window()
     win.show()
     win.resize(1320, 740)
     app.processEvents()
 
-    win.setting_tiles["ai"].setChecked(False)
-    win.settings_scroll.verticalScrollBar().setValue(0)
-    win.setting_tiles["ai"].setChecked(True)
-    QTest.qWait(win.ai_panel.animation.duration() + 40)
+    scroll_bar = win.settings_scroll.verticalScrollBar()
+    scroll_bar.setValue(min(40, scroll_bar.maximum()))
+    before = scroll_bar.value()
+    polish_before = win.ai_polish.isChecked()
+    QTest.mouseClick(win.ai_settings_button, Qt.MouseButton.LeftButton)
     app.processEvents()
 
-    scroll_bar = win.settings_scroll.verticalScrollBar()
-    editor_top = win.polish_editor.mapTo(win.settings_scroll.viewport(), QPoint(0, 0)).y()
-    assert win.ai_panel.isVisible()
-    assert scroll_bar.maximum() > 0
-    assert scroll_bar.value() > 0
-    assert editor_top < win.settings_scroll.viewport().height()
+    dialog = win._ai_settings_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.isAncestorOf(win.polish_editor)
+    assert not win.settings_page_widget.isAncestorOf(win.ai_panel)
+    assert scroll_bar.value() == before
+
+    win.ai_polish.setChecked(not polish_before)
+    dialog.reject()
+    # SpringDialog fades out before it finishes.
+    for _ in range(100):
+        if win._ai_settings_dialog is None:
+            break
+        QTest.qWait(20)
+    assert win._ai_settings_dialog is None
+    assert win.ai_polish.isChecked() == polish_before
+    assert not win.ai_panel.isVisible()
+    assert scroll_bar.value() == before
     assert win.bottom_bar.isVisible()
     win.close()
 

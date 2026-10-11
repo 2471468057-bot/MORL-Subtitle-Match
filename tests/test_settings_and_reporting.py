@@ -1,4 +1,4 @@
-﻿import json
+import json
 from types import SimpleNamespace
 
 from twobyteasr import reporting
@@ -261,7 +261,7 @@ def test_media_task_report_records_stages_cache_and_no_secret(tmp_path, monkeypa
     assert "已采纳云端校对：1 处" in text_report
     assert "处理倍率：0.40x 实时" in text_report
     assert "云端批次：并行，最多 3 路" in text_report
-    assert "联网术语：已检索 12 条候选，采纳 2 组，实际应用 3 处" in text_report
+    assert "联网术语：联网核验" in text_report
     assert "S03 -> S02 主播B" in text_report
     assert "DASHSCOPE_API_KEY" not in text_report
 

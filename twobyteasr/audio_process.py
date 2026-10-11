@@ -123,7 +123,17 @@ class AudioProcessBridge(QObject):
         def receive():
             try:
                 while not self._closed and connection is self.connection:
-                    message = _receive(connection)
+                    try:
+                        message = _receive(connection)
+                    except TypeError:
+                        # Windows recv_bytes can reach PeekNamedPipe after the
+                        # owning shutdown/_retire cleared its native handle.
+                        # Only a provably retired receiver may end quietly;
+                        # active-session TypeError still surfaces unchanged.
+                        if (self._closed or connection is not self.connection
+                                or generation != self._endpoint_generation):
+                            return
+                        raise
                     if connection is not self.connection or generation!=self._endpoint_generation:return
                     self._last_received_at=time.monotonic()
                     if message.get('kind') == 'telemetry':

@@ -1,4 +1,8 @@
-﻿# Contributing
+# Contributing
+
+## 文档贡献 / Documentation changes
+
+请先读[文档写作与维护约定](docs/WRITING_GUIDE.md)：先用普通人的说法说明前后变化、验证范围和未完成事项，再保留开发细节。修改文档后刷新目录并检查链接。 / Start with the user-visible change, verification scope, and remaining limitations, then provide technical details. Refresh and check the document index after edits.
 
 2ByteASR currently targets Windows 10/11 with an NVIDIA CUDA GPU. Changes that affect subtitle text, speaker assignment, timing, caching, or output paths should include a regression test.
 

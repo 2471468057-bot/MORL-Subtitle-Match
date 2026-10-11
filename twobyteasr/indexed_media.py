@@ -1,10 +1,8 @@
-"""Background, lossless optimized copies for recordings without random access.
+"""Original-first playback with explicit, rebuildable compatibility copies.
 
-FLV sources are remuxed (stream copy, never re-encoded) into an MP4 copy when
-the codec combination is MP4-safe, falling back to MKV when MP4 muxing or its
-validation fails. Only completed and validated files become active. GUI
-requests do no disk work; originals and project paths are preserved, and
-failure keeps using the source.
+mpv/PyAV decode FLV directly. Stream-copy MP4/MKV is reserved for a reported
+compatibility/seek need; measured timestamp gaps may require a continuous
+packet-identical proxy. Canonical project paths and time mapping are preserved.
 """
 from __future__ import annotations
 
@@ -12,8 +10,10 @@ import hashlib
 import json
 import os
 import subprocess
+import shutil
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue
 
@@ -30,7 +30,11 @@ REMUX_TIMEOUT_SECONDS = 1800.0
 class IndexedMediaCache:
     def __init__(self, root=None):
         configured = root or os.environ.get('TWOBYTEASR_SEEK_CACHE_ROOT')
-        self.root = Path(configured) if configured else Path(os.environ.get("LOCALAPPDATA", Path.home())) / "2ByteASR/cache/media/seek"
+        if configured:
+            self.root = Path(configured)
+        else:
+            from .runtime_paths import get_runtime_paths
+            self.root = get_runtime_paths().cache_root / "media" / "seek"
         self._ready = {}
         self._requested = set()
         self._queue: Queue[str] = Queue()
@@ -40,29 +44,91 @@ class IndexedMediaCache:
         # source -> {'state','progress','container','target','error','started_at'}
         self._status = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._cancelled_sources: set[str] = set()
         self._sync_scans: dict[str, bool] = {}
         self._proxy_builds: dict[str, bool] = {}
         # 2026-09-18 P0 残余：构建产物未过时长门的源，一次会话内不再重试
         # （否则 map 命中→排期→构建→拒用→再排期 无限循环）。
         self._proxy_failures: set[str] = set()
+        self._sync_scan_done: set[str] = set()
+        self._media_touched: dict[str, float] = {}
+        self._ready_identities: dict[str, tuple[int, int]] = {}
 
     # ------------------------------------------------------------------ API
 
-    def resolve(self, source: str) -> str:
-        """Non-blocking: kick preparation and return the best available path."""
+    def resolve(self, source: str, *, reason: str = "") -> str:
+        """Use the original; prepare a stream-copy only for an explicit need.
+
+        mpv and PyAV both accept FLV. A suffix alone is not evidence that an
+        entire recording needs another copy. Existing callers that genuinely
+        need an indexed container use ``wait_optimized`` or a reason here.
+        """
         source = str(source)
         if not source.lower().endswith(".flv"):
             return source
         with self._lock:
+            ready = self._ready.get(source)
+            changed = False
+            if ready and source in self._ready_identities and Path(source).is_file():
+                stat = Path(source).stat()
+                changed = self._ready_identities[source] != (stat.st_size, stat.st_mtime_ns)
+            if ready and (changed or not Path(ready).is_file()):
+                self._ready.pop(source, None)
+                self._ready_identities.pop(source, None)
+                self._requested.discard(source)
+                self.errors.pop(source, None)
+                self._sync_scan_done.discard(source)
+                self._proxy_failures.discard(source)
+            if not reason:
+                current = self._ready.get(source, source)
+                if current == source and not Path(source).is_file():
+                    recovered = self._recover_missing_source(source)
+                    if recovered:
+                        self._ready[source] = str(recovered)
+                        return str(recovered)
+                return current
+            if self._status.get(source, {}).get('state') == 'CANCELLED':
+                self._requested.discard(source)
+                self.errors.pop(source, None)
             if source not in self._requested:
                 self._requested.add(source)
                 self._status[source] = dict(self._status.get(source) or {},
-                                            state="PENDING", progress=0.0)
+                                            state="PENDING", progress=0.0, reason=str(reason))
                 self._queue.put(source)
                 if self._thread is None:
                     self._thread = threading.Thread(target=self._run, name="studio-seek-index", daemon=True)
                     self._thread.start()
             return self._ready.get(source, source)
+
+    def _recover_missing_source(self, source: str) -> Path | None:
+        """A validated cache may be the only remaining playable copy."""
+        from .storage_service import safe_path
+        for manifest in self.root.glob('v2/*/ready.json'):
+            try:
+                payload = json.loads(manifest.read_text(encoding='utf-8'))
+                if str(payload.get('source')) != source:
+                    continue
+                container = payload.get('container')
+                if container not in {'mp4', 'mkv'}:
+                    continue
+                target = manifest.parent / f'optimized.{container}'
+                if safe_path(target, (self.root,)) and target.is_file():
+                    self._register_media(target, source, 'compatibility-stream-copy')
+                    return target
+            except (OSError, ValueError, TypeError):
+                continue
+        for manifest in self.root.glob('v2/*/origin.json'):
+            try:
+                payload = json.loads(manifest.read_text(encoding='utf-8'))
+                if payload.get('producer') != 'indexed_media' or payload.get('source') != source:
+                    continue
+                target = manifest.parent / 'continuous.mkv'
+                if safe_path(target, (self.root,)) and target.is_file() and (manifest.parent/'continuous.json').is_file():
+                    self._register_media(target, source, 'timestamp-gap-folding')
+                    return target
+            except (OSError, ValueError, TypeError):
+                continue
+        return None
 
     def status(self, source: str) -> dict:
         with self._lock:
@@ -80,30 +146,48 @@ class IndexedMediaCache:
             return Path(target)
         return None
 
+    def _cache_folder(self, source: str) -> Path | None:
+        target = self.optimized_target(source)
+        if target is not None:
+            return target.parent
+        try:
+            stat = Path(source).stat()
+        except OSError:
+            return None
+        key = hashlib.sha256(
+            f"optimize-v2|{source}|{stat.st_size}|{stat.st_mtime_ns}".encode()
+        ).hexdigest()[:32]
+        return self.root / "v2" / key
+
     def sync_map(self, source: str):
         """Cached AVSyncMap for an FLV source, or None while unknown.
 
-        Kicks (once) a background timestamp scan on the optimized copy when
-        no map is cached yet. The scan is a single sequential demux read —
-        never an extra concurrent reader of the original file.
+        Kicks once a background timestamp scan on the original source (or an
+        explicitly requested compatibility copy). Scanning timestamps does not
+        require a full copy; the persisted map keeps preview/audio sync intact.
         """
         from .avsync import load_sync_map
         source = str(source)
         if not source.lower().endswith(".flv"):
             return None
-        self.resolve(source)
         target = self.optimized_target(source)
-        if target is None:
+        folder = self._cache_folder(source)
+        if folder is None:
             return None
-        cached = load_sync_map(target.parent)
+        from .storage_service import safe_path
+        if not safe_path(folder, (self.root,)):
+            return None
+        cached = load_sync_map(folder)
         if cached is not None:
             # 2026-09-18 P0 残余：map 命中即早退，坏代理被采用门删除后
             # 永远无人重建（用户 6.4GB 工程实测：336s 塌缩产物删了就没了，
             # 长洞 FLV 的连续代理功能一次性丢失）。缓存命中也要排期重建。
             if cached.gaps:
-                self._schedule_continuous_proxy(source, target, cached)
+                self._schedule_continuous_proxy(source, target or Path(source), cached, folder)
             return cached
         with self._lock:
+            if source in self._sync_scan_done:
+                return None
             scanning = self._sync_scans.setdefault(source, False)
             should_scan = not scanning
             if should_scan:
@@ -111,7 +195,7 @@ class IndexedMediaCache:
         if should_scan:
             threading.Thread(
                 target=self._scan_sync_map,
-                args=(source, target),
+                args=(source, target or Path(source), folder),
                 daemon=True,
                 name="studio-avsync-scan",
             ).start()
@@ -124,24 +208,25 @@ class IndexedMediaCache:
             return None, "original"
         self.resolve(source)
         target = self.optimized_target(source)
-        if target is not None:
+        folder = self._cache_folder(source)
+        if folder is not None:
             from .avsync import (
                 continuous_proxy_marker, continuous_proxy_ready,
                 validate_continuous_proxy, write_continuous_proxy_marker,
             )
-            proxy = continuous_proxy_ready(target.parent)
+            proxy = continuous_proxy_ready(folder)
             if proxy is not None:
                 # §20 采用门：只有带 v2 标记（或一次性通过时长验证的旧
                 # 产物）才可投用；验证失败即删除并回退 optimized。
-                if not continuous_proxy_marker(target.parent).is_file():
+                if not continuous_proxy_marker(folder).is_file():
                     from .avsync import load_sync_map
-                    cached = load_sync_map(target.parent)
+                    cached = load_sync_map(folder)
                     expected = int(
                         (cached.content_duration_ms or 0)
                         if cached is not None else 0
                     )
                     ok, reason = validate_continuous_proxy(
-                        target.parent, self._ffprobe_path(),
+                        folder, self._ffprobe_path(),
                         expected_duration_ms=expected,
                     )
                     if not ok:
@@ -156,19 +241,22 @@ class IndexedMediaCache:
                             "at": "adoption",
                         })
                         self.sync_map(source)
-                        return target, "optimized"
+                        return (target, "optimized") if target else (None, "original")
                     write_continuous_proxy_marker(
-                        target.parent,
+                        folder,
                         expected_duration_ms=expected,
                         folded_gaps=len(cached.gaps) if cached is not None else 0,
                         folded_ms=cached.total_gap_ms if cached is not None else 0,
                     )
+                self._register_media(proxy, source, "timestamp-gap-folding")
                 return proxy, "proxy"
             # No proxy yet: make sure the timestamp scan (and, for gappy
             # media, the proxy build) has been kicked — polling this method
             # alone must drive the whole chain.
             self.sync_map(source)
-            return target, "optimized"
+            if target is not None:
+                self._register_media(target, source, "compatibility-stream-copy")
+                return target, "optimized"
         return None, "original"
 
     def _ffprobe_path(self) -> Path:
@@ -177,13 +265,73 @@ class IndexedMediaCache:
             "ffprobe.exe" if os.name == "nt" else "ffprobe"
         )
 
+    def prepare_timeline_source(self, source: str, *, ffmpeg=None, cancelled=None) -> dict:
+        """Resolve one source's content clock for a worker, never the UI thread.
+
+        An export/ASR job may not silently fall back to timestamp addressing
+        while a gappy source's preview uses the continuous proxy. Reuse the
+        preview cache and its generation lock, and fail if that clock cannot
+        be prepared. No clip position is changed and no offset is applied to
+        an already continuous file.
+        """
+        from .avsync import (load_sync_map, save_sync_map, scan_timestamp_gaps,
+                             continuous_proxy_ready, validate_continuous_proxy)
+        source = str(Path(source).resolve())
+        receipt = dict(contract="timeline-content-v2", original_path=source,
+                       path=source, time_domain="content", kind="identity")
+        if cancelled and cancelled():
+            raise InterruptedError("timeline media preparation cancelled")
+        if not source.lower().endswith('.flv'):
+            return receipt
+        folder = self._cache_folder(source)
+        from .storage_service import safe_path
+        if folder is None or not safe_path(folder, (self.root,)):
+            raise OSError("无法准备素材时间映射：" + source)
+        folder.mkdir(parents=True, exist_ok=True)
+        ffprobe = (Path(ffmpeg).with_name('ffprobe.exe' if os.name == 'nt' else 'ffprobe')
+                   if ffmpeg else self._ffprobe_path())
+
+        class Cancellation:
+            def is_set(self):
+                return bool(cancelled and cancelled())
+            def wait(self, seconds):
+                time.sleep(seconds)
+
+        cancel = Cancellation()
+        with self._generation_lock(folder, cancel):
+            sync = load_sync_map(folder)
+            if sync is None:
+                scan = scan_timestamp_gaps(source, ffprobe, cancelled=cancelled)
+                if scan.scanned_packets == 0 or scan.negative_jumps:
+                    raise RuntimeError("素材时间戳无法可靠映射，已停止任务：" + source)
+                sync = scan.map
+                save_sync_map(folder, sync)
+            receipt['sync_map'] = sync.to_dict()
+            if sync.gaps:
+                if continuous_proxy_ready(folder) is None:
+                    self._build_continuous_proxy_locked(source, Path(source), sync, folder, cancel)
+                if cancelled and cancelled():
+                    raise InterruptedError("timeline media preparation cancelled")
+                proxy = continuous_proxy_ready(folder)
+                ok, reason = validate_continuous_proxy(folder, ffprobe,
+                    expected_duration_ms=sync.content_duration_ms)
+                if proxy is None or not ok:
+                    # Preserve the evidence; never recognize/export a different
+                    # clock because proxy preparation failed.
+                    raise RuntimeError(f"连续时间轴媒体不可用，已停止任务：{source} ({reason})")
+                stat = proxy.stat()
+                receipt.update(path=str(proxy), kind="continuous_proxy",
+                    proxy_identity=dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns),
+                    proxy_version=2)
+        return receipt
+
     def next_gap_after(self, source: str, content_ms: int, window_ms: int = 2000):
         """Nearest audio-clock hole within window after content_ms, if any."""
         from .avsync import load_sync_map
-        target = self.optimized_target(str(source))
-        if target is None:
+        folder = self._cache_folder(str(source))
+        if folder is None:
             return None
-        sync_map = load_sync_map(target.parent)
+        sync_map = load_sync_map(folder)
         if sync_map is None:
             return None
         for gap in sync_map.gaps:
@@ -191,7 +339,7 @@ class IndexedMediaCache:
                 return gap
         return None
 
-    def _scan_sync_map(self, source: str, target: Path) -> None:
+    def _scan_sync_map(self, source: str, target: Path, folder: Path | None = None) -> None:
         from .avsync import scan_timestamp_gaps, save_sync_map
         try:
             from .audio_engine import studio_ffmpeg_path
@@ -199,14 +347,15 @@ class IndexedMediaCache:
                 "ffprobe.exe" if os.name == "nt" else "ffprobe"
             )
             result = scan_timestamp_gaps(target, ffprobe)
-            save_sync_map(target.parent, result.map)
+            folder = folder or target.parent
+            save_sync_map(folder, result.map)
             GLOBAL_STUDIO_TRACE.emit("MEDIA_OPTIMIZE", {
                 "source": source, "stage": "av_sync_scan",
                 "status": result.status, "events": result.event_count,
                 "total_gap_ms": result.map.total_gap_ms,
             })
             if result.map.gaps:
-                self._schedule_continuous_proxy(source, target, result.map)
+                self._schedule_continuous_proxy(source, target, result.map, folder)
         except Exception as exc:
             GLOBAL_STUDIO_TRACE.emit("MEDIA_OPTIMIZE", {
                 "source": source, "stage": "av_sync_scan_failed",
@@ -215,11 +364,13 @@ class IndexedMediaCache:
         finally:
             with self._lock:
                 self._sync_scans.pop(source, None)
+                self._sync_scan_done.add(source)
 
-    def _schedule_continuous_proxy(self, source: str, target: Path, sync_map) -> None:
+    def _schedule_continuous_proxy(self, source: str, target: Path, sync_map, folder: Path | None = None) -> None:
         """Fold the joint gaps into a packet-identical continuous preview copy."""
         from .avsync import build_continuous_proxy, continuous_proxy_ready
-        if continuous_proxy_ready(target.parent) is not None:
+        folder = folder or target.parent
+        if continuous_proxy_ready(folder) is not None:
             return
         with self._lock:
             if source in self._proxy_failures:
@@ -230,20 +381,46 @@ class IndexedMediaCache:
             self._proxy_builds[source] = True
         threading.Thread(
             target=self._build_continuous_proxy,
-            args=(source, target, sync_map),
+            args=(source, target, sync_map, folder),
             daemon=True,
             name="studio-continuous-proxy",
         ).start()
 
-    def _build_continuous_proxy(self, source: str, target: Path, sync_map) -> None:
+    def _build_continuous_proxy(self, source: str, target: Path, sync_map, folder: Path | None = None) -> None:
+        folder = folder or target.parent
+        from .storage_service import safe_path
+        if not safe_path(folder, (self.root,)):
+            with self._lock:
+                self._proxy_builds.pop(source, None)
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        cancel = threading.Event()
+        with self._lock:
+            self._cancel_events['proxy:' + source] = cancel
+        try:
+            with self._generation_lock(folder, cancel):
+                from .avsync import continuous_proxy_ready
+                if continuous_proxy_ready(folder) is None:
+                    self._build_continuous_proxy_locked(source, target, sync_map, folder, cancel)
+        except (OSError, InterruptedError) as exc:
+            GLOBAL_STUDIO_TRACE.emit('MEDIA_OPTIMIZE', {'source': source, 'stage': 'proxy_deferred', 'error': str(exc)})
+        finally:
+            with self._lock:
+                self._cancel_events.pop('proxy:' + source, None)
+                self._proxy_builds.pop(source, None)
+
+    def _build_continuous_proxy_locked(self, source: str, target: Path, sync_map, folder: Path, cancel) -> None:
         from .avsync import build_continuous_proxy
         started = time.perf_counter()
         try:
             from .avsync import write_continuous_proxy_marker, validate_continuous_proxy
-            proxy = build_continuous_proxy(target, sync_map, target.parent / "continuous.mkv")
+            folder = folder or target.parent
+            folder.mkdir(parents=True, exist_ok=True)
+            self._check_space(target, folder, copies=2)
+            proxy = build_continuous_proxy(target, sync_map, folder / "continuous.mkv", cancelled=cancel.is_set)
             expected_ms = int(sync_map.content_duration_ms or 0)
             ok, reason = validate_continuous_proxy(
-                target.parent, self._ffprobe_path(), expected_duration_ms=expected_ms
+                folder, self._ffprobe_path(), expected_duration_ms=expected_ms
             )
             if not ok:
                 # §18/§19：比例失衡的代理绝不能投用（8x 折叠=时长塌缩到
@@ -261,11 +438,17 @@ class IndexedMediaCache:
                 })
                 return
             write_continuous_proxy_marker(
-                target.parent,
+                folder,
                 expected_duration_ms=expected_ms,
                 folded_gaps=len(sync_map.gaps),
                 folded_ms=sync_map.total_gap_ms,
             )
+            source_stat = Path(source).stat()
+            (folder/'origin.json').write_text(json.dumps(dict(producer='indexed_media',
+                source=source,size=source_stat.st_size,mtime_ns=source_stat.st_mtime_ns,
+                purpose='timestamp-gap-folding',created_at=time.time(),
+                parameters=dict(codec='copy',folded_gaps=len(sync_map.gaps),folded_ms=sync_map.total_gap_ms))),encoding='utf-8')
+            self._register_media(proxy, source, "timestamp-gap-folding")
             GLOBAL_STUDIO_TRACE.emit("MEDIA_OPTIMIZE", {
                 "source": source, "stage": "continuous_proxy_ready",
                 "target": str(proxy),
@@ -277,9 +460,10 @@ class IndexedMediaCache:
             })
         except Exception as exc:
             with self._lock:
-                self._proxy_failures.add(source)
+                if not isinstance(exc, InterruptedError):
+                    self._proxy_failures.add(source)
             GLOBAL_STUDIO_TRACE.emit("MEDIA_OPTIMIZE", {
-                "source": source, "stage": "continuous_proxy_failed",
+                "source": source, "stage": "continuous_proxy_cancelled" if isinstance(exc, InterruptedError) else "continuous_proxy_failed",
                 "error": str(exc)[-300:],
             })
         finally:
@@ -292,16 +476,23 @@ class IndexedMediaCache:
     ) -> str:
         """Block until preparation finishes; returns the best path (source on failure).
 
-        Used by worker threads (waveform) that can afford to wait while the
-        remux streams the file once. Never waits when the media is not FLV.
+        Explicit compatibility consumers may wait while the remux streams the
+        file once. Direct audio decoding never waits for this copy. Non-FLV
+        media keeps its source path.
         """
         source = str(source)
-        current = self.resolve(source)
+        current = self.resolve(source, reason="compatibility-stream-copy")
         if not source.lower().endswith(".flv"):
             return source
         deadline = time.monotonic() + float(timeout) if timeout else None
         while True:
             if cancelled and cancelled():
+                with self._lock:
+                    event = self._cancel_events.get(source)
+                    if event is not None:
+                        event.set()
+                    else:
+                        self._cancelled_sources.add(source)
                 return current
             with self._lock:
                 done = source in self._ready or source in self.errors
@@ -326,9 +517,12 @@ class IndexedMediaCache:
     def cancel_all(self) -> int:
         with self._lock:
             events = tuple(self._cancel_events.values())
+            pending = {source for source in self._requested
+                       if self._status.get(source, {}).get('state') == 'PENDING'}
+            self._cancelled_sources.update(pending)
         for event in events:
             event.set()
-        return len(events)
+        return len(events) + len(pending)
 
     # ------------------------------------------------------------- worker
 
@@ -338,10 +532,20 @@ class IndexedMediaCache:
             cancel_event = threading.Event()
             with self._lock:
                 self._cancel_events[source] = cancel_event
+                self._status[source] = dict(self._status.get(source) or {}, state="RUNNING")
+                if source in self._cancelled_sources:
+                    cancel_event.set()
             try:
                 target = self._prepare(Path(source), cancel_event)
+                try:
+                    stat = Path(source).stat()
+                    source_identity = (stat.st_size, stat.st_mtime_ns)
+                except OSError:
+                    source_identity = None  # Keep the now-unique validated copy.
                 with self._lock:
                     self._ready[source] = str(target)
+                    if source_identity is not None:
+                        self._ready_identities[source] = source_identity
                     self._status[source] = {
                         "state": "READY", "progress": 1.0,
                         "container": target.suffix.lstrip(".").lower(),
@@ -351,11 +555,13 @@ class IndexedMediaCache:
                 self.errors[source] = str(exc)
                 with self._lock:
                     self._status[source] = {
-                        "state": "FAILED", "progress": 0.0, "error": str(exc),
+                        "state": "CANCELLED" if isinstance(exc, InterruptedError) else "FAILED",
+                        "progress": 0.0, "error": str(exc),
                     }
             finally:
                 with self._lock:
                     self._cancel_events.pop(source, None)
+                    self._cancelled_sources.discard(source)
                 self._queue.task_done()
 
     def _set_progress(self, source: str, progress: float, state: str = "RUNNING") -> None:
@@ -365,7 +571,86 @@ class IndexedMediaCache:
 
     # ------------------------------------------------------------- prepare
 
+    @staticmethod
+    def _check_space(source: Path, folder: Path, *, copies: int = 1) -> None:
+        required = source.stat().st_size * copies + 64 * 1024 * 1024
+        if shutil.disk_usage(folder).free < required:
+            raise OSError(f"中间媒体空间不足：预计需要 {required} 字节")
+
+    def _register_media(self, target: Path, source: str, purpose: str) -> None:
+        key = str(target)
+        now = time.monotonic()
+        if now - self._media_touched.get(key, -60) < 30:
+            return
+        from .storage_service import register_cache, touch_cache
+        try:
+            register_cache(target, "media", source=source, producer="indexed_media",
+                           rebuild="local")
+            touch_cache(target)
+        except Exception as exc:
+            # A storage-index failure does not require a second full remux.
+            # The validated manifest remains recoverable and the unknown
+            # leaf stays protected until registration succeeds on next use.
+            GLOBAL_STUDIO_TRACE.emit('MEDIA_OPTIMIZE', {'source': source,
+                'stage': 'storage_registration_failed', 'error': str(exc)[-300:]})
+            return
+        self._media_touched[key] = now
+
+    @contextmanager
+    def _generation_lock(self, folder: Path, cancel_event: threading.Event):
+        """Only one process may generate this identity; stale owners are checked."""
+        import psutil
+        lock = folder / "generation.lock"
+        process = psutil.Process()
+        owner = {"pid": process.pid, "create_time": process.create_time()}
+        while True:
+            if cancel_event.is_set():
+                raise InterruptedError("optimized media cancelled")
+            try:
+                descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(owner, stream)
+                break
+            except FileExistsError:
+                try:
+                    previous = json.loads(lock.read_text(encoding="utf-8"))
+                    alive = abs(psutil.Process(int(previous["pid"])).create_time()
+                                - float(previous["create_time"])) < .01
+                except psutil.NoSuchProcess:
+                    alive = False
+                except FileNotFoundError:
+                    continue
+                except (KeyError, ValueError, OSError):
+                    # A newly created lock may not have its payload yet. An
+                    # unreadable old owner cannot safely be assumed dead.
+                    if time.time() - lock.stat().st_mtime >= 5:
+                        raise RuntimeError('无法确认中间媒体生成锁归属，请查看存储详情')
+                    alive = True
+                if not alive:
+                    lock.unlink(missing_ok=True)
+                    continue
+                cancel_event.wait(.05)
+        try:
+            yield
+        finally:
+            try:
+                if json.loads(lock.read_text(encoding="utf-8")) == owner:
+                    lock.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
+
     def _prepare(self, source: Path, cancel_event: threading.Event) -> Path:
+        folder = self._cache_folder(str(source))
+        if folder is None:
+            raise FileNotFoundError(source)
+        from .storage_service import safe_path
+        if not safe_path(folder, (self.root,)):
+            raise OSError('中间媒体目录包含越界链接，无法生成缓存')
+        folder.mkdir(parents=True, exist_ok=True)
+        with self._generation_lock(folder, cancel_event):
+            return self._prepare_locked(source, cancel_event)
+
+    def _prepare_locked(self, source: Path, cancel_event: threading.Event) -> Path:
         from .audio_engine import studio_ffmpeg_path
         ffmpeg = studio_ffmpeg_path()
         ffprobe = ffmpeg.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
@@ -387,6 +672,7 @@ class IndexedMediaCache:
                 "source": str(source), "cache_hit": "legacy-v1", "target": str(legacy),
                 "container": "mkv",
             })
+            self._register_media(legacy, str(source), "compatibility-stream-copy")
             return legacy
 
         # Warm v2 cache: skip the (expensive, multi-second on long FLV) probe.
@@ -399,6 +685,7 @@ class IndexedMediaCache:
                         "source": str(source), "cache_hit": True, "target": str(warm),
                         "container": payload.get('container', 'mkv'),
                     })
+                    self._register_media(warm, str(source), "compatibility-stream-copy")
                     return warm
             except (OSError, ValueError):
                 pass
@@ -432,6 +719,7 @@ class IndexedMediaCache:
             order = ["mkv"]
 
         folder.mkdir(parents=True, exist_ok=True)
+        self._check_space(source, folder)
         for stale in folder.glob("optimized.*.partial.*"):
             try:
                 stale.unlink(missing_ok=True)
@@ -440,7 +728,8 @@ class IndexedMediaCache:
         started = time.perf_counter()
         last_error = ""
         for index, container in enumerate(order):
-            cancel_event.clear()
+            if cancel_event.is_set():
+                raise InterruptedError("optimized media cancelled")
             target = folder / f"optimized.{container}"
             partial = folder / f"optimized.{os.getpid()}.partial.{container}"
             try:
@@ -457,7 +746,12 @@ class IndexedMediaCache:
                     'duration_ms': round(duration_s * 1000),
                     'video_codecs': sorted(video_codecs),
                     'audio_codecs': sorted(audio_codecs),
+                    'producer': 'indexed_media', 'purpose': 'compatibility-stream-copy',
+                    'created_at': time.time(),
+                    'parameters': {'copyts': True, 'start_at_zero': True,
+                                   'video': '0:v:0?', 'audio': '0:a?', 'codec': 'copy'},
                 }), encoding="utf-8")
+                self._register_media(target, str(source), "compatibility-stream-copy")
                 GLOBAL_STUDIO_TRACE.emit("MEDIA_OPTIMIZE", {
                     "source": str(source),
                     "video": ",".join(sorted(video_codecs)) or "-",
@@ -490,12 +784,13 @@ class IndexedMediaCache:
         old_start, new_start = float(old_format.get('start_time', 0)), float(new_format.get('start_time', 0))
         if abs(float(old_format['duration']) - old_start - (float(new_format['duration']) - new_start)) > .2:
             raise RuntimeError("Optimized media duration mismatch")
-        old_streams = {s['codec_type']: float(s.get('start_time', old_start)) - old_start
-                       for s in original['streams']}
-        new_streams = {s['codec_type']: float(s.get('start_time', new_start)) - new_start
-                       for s in indexed['streams']}
-        if old_streams.keys() != new_streams.keys() or any(
-                abs(t - new_streams[k]) > .05 for k, t in old_streams.items()):
+        old_streams = [(s['codec_type'], float(s.get('start_time', old_start)) - old_start)
+                       for s in original['streams'] if s['codec_type'] in {'video', 'audio'}]
+        new_streams = [(s['codec_type'], float(s.get('start_time', new_start)) - new_start)
+                       for s in indexed['streams'] if s['codec_type'] in {'video', 'audio'}]
+        if len(old_streams) != len(new_streams) or any(
+                kind != new_kind or abs(t - new_t) > .05
+                for (kind, t), (new_kind, new_t) in zip(old_streams, new_streams)):
             raise RuntimeError("Optimized media stream timing mismatch")
 
     def _remux(self, ffmpeg: Path, source: Path, target: Path, container: str,

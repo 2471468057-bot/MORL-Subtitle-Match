@@ -173,7 +173,7 @@ def video_track_header_action_at(x: float, y=None, row=None) -> str:
 
 def video_track_accent(palette: TimelinePalette, track_id: str) -> QColor:
     if track_id == "V1":
-        return QColor(palette.clip_selected_border)
+        return QColor(palette.video_accent or palette.clip_selected_border)
     accents = palette.speaker_accents or (palette.clip_selected_border,)
     try:
         index = int(track_id.lstrip("V"))

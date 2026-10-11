@@ -45,13 +45,6 @@ def start(window, out):
             page=window.workshop_page
             page._view_model(key)
             QTest.qWait(150)
-            # The production Nemotron probe is asynchronous after a restart.
-            # Wait for its real result, never enable a disabled action in QA.
-            if key == 'nemotron':
-                deadline=time.monotonic()+90
-                while page._model_state(page._cards[key].model)=='checking' and time.monotonic()<deadline:
-                    QTest.qWait(250)
-                page._view_model(key)
             current=dict(key=key, started=time.time(),
                          phase_samples=[],
                          download='NOT VERIFIED', dependencies='NOT VERIFIED', load='NOT VERIFIED', inference='NOT VERIFIED')
@@ -70,8 +63,6 @@ def start(window, out):
             candidates=[x for x in page._download_dialogs if x.model.key==key]
             check('real workshop prepares '+key,len(candidates)==1)
             dialog=candidates[0]
-            if key=='nemotron' and (out/'sample.wav').is_file():
-                dialog.nemotron_sample=str(out/'sample.wav')
             dialog.source_combo.setCurrentIndex(max(0,dialog.source_combo.findData(config.get('source','AUTO'))))
             dialog.show()
             dialog.grab().save(str(out/(key+'-before.png')))
@@ -109,13 +100,6 @@ def start(window, out):
             elif not dialog.model.runtime_available:
                 current.update(dependencies='BLOCKED',load='BLOCKED',inference='BLOCKED',
                     limitation='Windows inference adapter unavailable; validated weights only')
-            if current['key']=='nemotron':
-                from .runtime_registry import resolve_runtime_python
-                receipt=Path(resolve_runtime_python('nemotron')).parent.parent/'nemotron-readiness.json'
-                if receipt.is_file() and dialog._finished_ok and receipt.stat().st_mtime>=current['started']:
-                    proof=json.loads(receipt.read_text('utf8'))
-                    current.update(load='PASS' if proof.get('model_loaded') else 'NOT VERIFIED',
-                        inference='PASS' if proof.get('inference_verified') else 'NOT VERIFIED',readiness_receipt=str(receipt))
             current['summary']=dialog.progress_status.text()
             dialog.grab().save(str(out/(current['key']+'-after.png')))
             dialog.hide();save()

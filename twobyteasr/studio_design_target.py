@@ -43,4 +43,5 @@ class DesignTarget:
 
     @property
     def canonical_id(self):
-        return source_cue_id_of(self.cue.id)
+        from .studio_caption_timeline import independent_captions
+        return self.cue.id if independent_captions(self.project) else source_cue_id_of(self.cue.id)

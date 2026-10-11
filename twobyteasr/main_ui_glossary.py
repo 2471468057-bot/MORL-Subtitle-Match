@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
     QFormLayout,
@@ -26,22 +27,27 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QMenu,
     QPlainTextEdit,
+    QScrollArea,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
     QSizePolicy,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from .glossary_learning import GlossaryLearningStore
+from .glossary_input import parse_term_line, validate_term_records
 from .i18n import current_language, translate
 from .main_ui_branding import _icon
 from .main_ui_helpers import GUI_PROFILE_ENABLED
@@ -60,6 +66,7 @@ from .ui_widgets import AnimatedButton
 from .i18n import bind_text
 
 from .i18n import tr
+from .lazy_pages import existing_page
 
 
 def _sheet_theme():
@@ -80,8 +87,10 @@ def term_library_game_names(legacy, current_game: str = "") -> list[str]:
     if isinstance(profiles, dict):
         candidates.extend(profiles.keys())
     candidates.extend(legacy.load_runtime_game_history())
-    learned_payload = getattr(
-        legacy, "load_learned_term_payload", lambda: {"games": {}}
+    # Read-only: the cached view avoids re-parsing the glossary file per call.
+    learned_payload = (
+        getattr(legacy, "_learned_term_payload_view", None)
+        or getattr(legacy, "load_learned_term_payload", lambda: {"games": {}})
     )()
     learned_games = (
         learned_payload.get("games", {}) if isinstance(learned_payload, dict) else {}
@@ -103,6 +112,45 @@ def term_library_game_names(legacy, current_game: str = "") -> list[str]:
             result.append(game_name)
             seen.add(game_key)
     return result
+
+
+def preview_term_import(text, existing=(), *, mapping_mode=False):
+    """Parse existing quick lines/TSV and JSON without writing any user data."""
+    records = []
+    raw = str(text or "").strip(' \r\n')
+    if raw.startswith(("{", "[")):
+        payload = json.loads(raw)
+        items = payload if isinstance(payload, list) else payload.get("mappings", payload.get("terms", []))
+        if isinstance(payload, dict) and isinstance(payload.get("games"), dict):
+            items = [row for entry in payload["games"].values() if isinstance(entry, dict) for row in entry.get("mappings", [])]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            target = str(item.get("to", item.get("canonical", item.get("term", "")))).strip()
+            source = str(item.get("from", target)).strip()
+            records.append({"from": source, "to": target, "category": str(item.get("category", "其他"))})
+            records.extend({"from": str(alias).strip(), "to": target, "category": str(item.get("category", "其他"))} for alias in item.get("aliases", ()) if str(alias).strip())
+    else:
+        header = None
+        for line_number, line in enumerate(raw.splitlines(), 1):
+            line = line.strip(' \r')
+            if not line or line.startswith(("#", "```")):
+                continue
+            columns = line.split("\t")
+            if columns[0].casefold() in {"term", "canonical", "规范词", "标准词", "术语"}:
+                header = columns
+                continue
+            if header and len(columns) > 1:
+                target = columns[0].strip()
+                category = columns[1].strip() or "其他"
+                records.append({"from": target, "to": target, "category": category})
+                if len(columns) > 2:
+                    records.extend({"from": alias.strip(), "to": target, "category": category} for alias in __import__("re").split(r"[、,，;；|]+", columns[2]) if alias.strip())
+            else:
+                parsed = parse_term_line(line, mapping_mode=mapping_mode)
+                parsed['line'] = line_number
+                records.append(parsed)
+    return validate_term_records(records, existing)
 
 
 class TermGameListRow(QFrame):
@@ -262,6 +310,15 @@ class _TermMappingsModel(QAbstractTableModel):
         return None
 
 
+def _glossary_theme():
+    from .theme_manager import theme_key
+    from .ui_theme import theme_definition
+    return theme_definition(theme_key())
+
+
+from .design.semantic_qss import pill_palette  # noqa: E402
+
+
 class _CategoryPillDelegate(QStyledItemDelegate):
     """Paint a compact category pill without creating a QWidget per row."""
 
@@ -271,13 +328,12 @@ class _CategoryPillDelegate(QStyledItemDelegate):
             index.data(Qt.ItemDataRole.DisplayRole)
             or translate("其他", current_language())
         )
-        bg = QColor("#e6f0df")
-        fg = QColor("#4a7040")
-        br = QColor("#d4e1cf")
+        theme = _glossary_theme()
+        bg, fg, br = (QColor(value) for value in pill_palette(theme)["category"])
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, QColor(GREEN_SUBTLE))
+            painter.fillRect(option.rect, QColor(theme.selected))
         elif option.state & QStyle.StateFlag.State_MouseOver:
-            painter.fillRect(option.rect, QColor("#f3f7ef"))
+            painter.fillRect(option.rect, QColor(theme.selected))
         painter.setFont(option.font)
         fm = painter.fontMetrics()
         pill_width = min(option.rect.width() - 12, max(46, fm.horizontalAdvance(text) + 20))
@@ -320,9 +376,11 @@ class _StatusPillDelegate(QStyledItemDelegate):
         painter.save()
         text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         status = str(index.data(Qt.ItemDataRole.UserRole + 2) or "reference")
-        bg, fg, br = self.PALETTE.get(status, self.PALETTE["reference"])
+        theme = _glossary_theme()
+        palette = pill_palette(theme)
+        bg, fg, br = palette.get(status, palette["reference"])
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, QColor(GREEN_SUBTLE))
+            painter.fillRect(option.rect, QColor(theme.selected))
         painter.setFont(option.font)
         fm = painter.fontMetrics()
         pill_width = min(option.rect.width() - 10, max(44, fm.horizontalAdvance(text) + 18))
@@ -393,6 +451,8 @@ class TermLibraryDialog(QWidget):
     Dialog card shows at final size immediately; only backdrop fades.
     """
 
+    libraries_changed = Signal()
+
     def __init__(
         self,
         owner: "MainWindow",
@@ -415,11 +475,12 @@ class TermLibraryDialog(QWidget):
             return self.legacy.canonicalize_runtime_game_name(str(value or ""))
 
         def game_identity(value):
-            return self.legacy.runtime_game_identity(canonical(value))
+            resolve = getattr(self.legacy, "resolve_glossary_identity", lambda _value: "")
+            return resolve(value) or self.legacy.runtime_game_identity(canonical(value))
 
         self._canonical = canonical
         self._game_identity = game_identity
-        self.state = {"game": "", "mappings": [], "builtin_names": [], "loaded": []}
+        self.state = {"game": "", "library_id": "", "mappings": [], "builtin_names": [], "loaded": []}
         self._task_manager = None
         self._task_manager_wired = False
         self._search_visible = False
@@ -453,6 +514,9 @@ class TermLibraryDialog(QWidget):
             )
         }
         self._build(games)
+        for entry in getattr(self.legacy, "glossary_catalog", lambda: [])():
+            self.add_game_item(entry["name"], library_id=entry["id"])
+        self.libraries_changed.connect(self._notify_owner_library_changed)
         # Do not setCurrentRow(0) here — that triggers sync heavy refresh_current_game.
         # After show(), the owner will kick refresh on next tick. If no games, just enable editor focus later.
         if not self.game_list.count():
@@ -464,8 +528,28 @@ class TermLibraryDialog(QWidget):
     def game_box_text(self) -> str:
         return self.owner.game_box.currentText()
 
+    def _library_key(self, name=None):
+        name = self.state.get("game", "") if name is None else str(name)
+        if name == self.state.get("game") and self.state.get("library_id"):
+            return str(self.state["library_id"])
+        return getattr(self.legacy, "resolve_glossary_identity", lambda _name: "")(name) or name
+
+    def _notify_owner_library_changed(self):
+        refresh = getattr(self.owner, "_refresh_content_choices", None)
+        if callable(refresh):
+            refresh()
+        self._refresh_batch_bar()
+
+    def _notify_library_changed(self):
+        # An explicit mutation signal, never a periodic full-library reload.
+        self._mappings_cache.clear()
+        self._builtin_entry_cache.clear()
+        self.libraries_changed.emit()
+
     def builtin_for_game(self, game_name):
         """(全部参考名, 资料构成, 已隐藏参考名)——统一主列表的数据底座。"""
+        if str(self._library_key(game_name)).startswith("library:"):
+            return [], [], []
         saved = self.legacy.RUNTIME_GAME_NAME
         self.legacy.RUNTIME_GAME_NAME = game_name
         try:
@@ -494,6 +578,8 @@ class TermLibraryDialog(QWidget):
 
     def _reference_entries_for_game(self, game_name):
         """内置参考条目（含隐藏标记与 profile 别名/分类），用于统一主列表。"""
+        if str(self._library_key(game_name)).startswith('library:'):
+            return []
         if game_name in self._builtin_entry_cache:
             return self._builtin_entry_cache[game_name]
         cache = self._builtin_cache.get(game_name, ([], [], []))
@@ -572,12 +658,142 @@ class TermLibraryDialog(QWidget):
 
     @staticmethod
     def parse_term(value):
-        source = target = value.strip()
-        for separator in ("→", "->", "=>", "\t"):
-            if separator in value:
-                source, target = (part.strip() for part in value.split(separator, 1))
-                break
-        return source, target
+        parsed = parse_term_line(value)
+        return parsed['from'], parsed['to']
+
+    def _parsed_quick_terms(self):
+        source, canonical = self.parse_term(self.term_editor.text().strip())
+        aliases = [alias.strip() for alias in __import__("re").split(r"[、,，;；\n]+", self.term_alias_editor.text()) if alias.strip()]
+        if source and source != canonical:
+            aliases.insert(0, source)
+        return canonical, list(dict.fromkeys(aliases))
+
+    def _refresh_term_parse_preview(self, *_args):
+        canonical, aliases = self._parsed_quick_terms()
+        if canonical or aliases:
+            if not getattr(self, '_quick_draft_library_id', ''):
+                self._quick_draft_library_id = self._library_key() or '通用词库'
+        else:
+            self._quick_draft_library_id = ''
+        self.term_parse_preview.setVisible(bool(canonical or aliases))
+        self.term_parse_preview.setText(
+            f"保存到《{getattr(self.legacy, 'glossary_display_name', str)(self._quick_draft_library_id) if (canonical or aliases) else self.state.get('game', '')}》；规范词：{canonical or '（未填写）'}；已确认映射："
+            + ("；".join(f"{alias} → {canonical}" for alias in aliases) if aliases else "无（只规范大小写）"))
+
+    def has_pending_edits(self):
+        return bool(self.term_editor.text().strip() or self.term_alias_editor.text().strip()
+                    or (getattr(self, '_edit_pending', None) and self._edit_pending())
+                    or (getattr(self, '_import_pending', None) and self._import_pending()))
+
+    def prepare_for_task(self):
+        """Resolve visible drafts before navigation or freezing a task snapshot."""
+        if getattr(self, 'pending_draft_dialog', None) is not None:
+            return False
+        if not self.has_pending_edits():
+            return True
+        preview = self.term_parse_preview.text() if (self.term_editor.text().strip()
+                  or self.term_alias_editor.text().strip()) else ''
+        if getattr(self, '_edit_pending', None) and self._edit_pending():
+            preview += ('\n' if preview else '') + self._edit_preview()
+        if getattr(self, '_import_pending', None) and self._import_pending():
+            preview += ('\n' if preview else '') + self.import_preview.toPlainText()
+        message = QMessageBox(self)
+        from .studio_theme import apply_secondary_surface_theme
+        apply_secondary_surface_theme(message)
+        message.setWindowTitle('词库还有未保存的输入')
+        message.setText('确认以下规范词与别名后继续。任务只会读取已保存的词库。')
+        message.setInformativeText(preview)
+        save = message.addButton('保存并继续', QMessageBox.ButtonRole.AcceptRole)
+        discard = message.addButton('放弃输入并继续', QMessageBox.ButtonRole.DestructiveRole)
+        message.addButton('返回编辑', QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save)
+        self.pending_draft_dialog = message
+        try:
+            message.exec()
+            clicked = message.clickedButton()
+        finally:
+            self.pending_draft_dialog = None
+        if clicked is discard:
+            self.term_editor.clear()
+            self.term_alias_editor.clear()
+            if getattr(self, '_edit_cleanup', None):
+                self._edit_cleanup()
+            if getattr(self, '_import_cleanup', None):
+                self._import_cleanup()
+            return True
+        if clicked is not save:
+            return False
+        if getattr(self, '_edit_pending', None) and self._edit_pending():
+            if not self._edit_submit():
+                return False
+        if getattr(self, '_import_pending', None) and self._import_pending():
+            if not self._import_submit():
+                return False
+        if self.term_editor.text().strip() or self.term_alias_editor.text().strip():
+            if not self.add_single_term():
+                return False
+        return not self.has_pending_edits()
+
+    def try_sentence(self):
+        from .terminology import GlossarySnapshot, snapshot_glossaries
+        from .glossary_diagnostics import diagnose_sentence, diagnostic_text
+        from .content_scene import resolve_content_scene
+        from types import SimpleNamespace
+        text = self.term_try_input.text()
+        library_id = self._library_key()
+        browsed = snapshot_glossaries(self.legacy, (library_id,))
+        terms_widget = getattr(self.owner, 'terms', None)
+        terms_active = terms_widget is None or terms_widget.isChecked()
+        enabled = snapshot_glossaries(self.legacy, self.owner._enabled_glossary_ids() if terms_active else ())
+        context = SimpleNamespace(game_name=self.game_box_text(), enable_domain_terms=terms_active,
+            enabled_glossary_ids=self.owner._enabled_glossary_ids())
+        scene = resolve_content_scene(context, enabled)
+        task_snapshot = None
+        options = getattr(getattr(self.owner, 'worker', None), 'options', None)
+        raw_snapshot = getattr(options, 'glossary_snapshot_json', '')
+        if raw_snapshot:
+            try:
+                task_snapshot = GlossarySnapshot.from_dict(json.loads(raw_snapshot))
+            except (TypeError, ValueError, KeyError):
+                pass
+        self.last_sentence_diagnostic = diagnose_sentence(text, browsed, enabled,
+            expected_canonical=self.term_try_expected.text(), scene=scene,
+            task_snapshot=task_snapshot, pending=self.has_pending_edits())
+        self.term_try_panel.show()
+        self.term_try_toggle.setText('收起试用')
+        self.term_try_result.setText(diagnostic_text(self.last_sentence_diagnostic))
+        self.term_try_result.setToolTip('本地词库诊断不调用 AI；后续 AI 建议和拒绝请查看任务详情。')
+        # Wrapped labels otherwise have a near-zero minimum in a crowded
+        # page and can be compressed into the input row by the outer layout.
+        result_height = max(
+            self.term_try_result.fontMetrics().lineSpacing() * 2 + 4,
+            self.term_try_result.heightForWidth(max(120, self.term_try_result.width())),
+        )
+        self.term_try_result.setMinimumHeight(result_height)
+        self.term_try_panel.layout().invalidate()
+        self.term_try_panel.layout().activate()
+        self._refresh_try_layout()
+
+    def _refresh_try_layout(self):
+        # Propagate a wrapped result's changed minimum before the sibling AI
+        # card is positioned. Otherwise a compact button row can leave the
+        # old header geometry valid for one layout pass and overlap the trial.
+        widget = self.term_try_panel
+        while widget is not None and widget is not self:
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            widget.updateGeometry()
+            widget = widget.parentWidget()
+
+    def _toggle_try_panel(self):
+        visible = self.term_try_panel.isHidden()
+        self.term_try_panel.setVisible(visible)
+        self.term_try_toggle.setText('收起试用' if visible else '试一下')
+        self._refresh_try_layout()
+        if visible:
+            self.term_try_input.setFocus()
 
     def _type_labels(self):
         labels = {
@@ -611,6 +827,8 @@ class TermLibraryDialog(QWidget):
         title_row = QHBoxLayout()
         title = QLabel("术语库")
         title.setObjectName("termLibraryTitle")
+        from twobyteasr.ui_navigation import style_workspace_page_title
+        style_workspace_page_title(title)
         title_row.addWidget(title)
         self.library_badge = QLabel()
         self.library_badge.setObjectName("termLibraryBadge")
@@ -730,12 +948,14 @@ class TermLibraryDialog(QWidget):
         content.setObjectName("termLibraryContent")
         self.library_content = content
         content_layout = QVBoxLayout(content)
+        content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
         content_header = QFrame()
         content_header.setObjectName("termLibraryContentHeader")
         content_header_layout = QVBoxLayout(content_header)
+        content_header_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         content_header_layout.setContentsMargins(16, 11, 16, 11)
         content_header_layout.setSpacing(9)
 
@@ -759,6 +979,10 @@ class TermLibraryDialog(QWidget):
         self.delete_game_button.setEnabled(False)
         self.delete_game_button.setFixedSize(30, 30)
         self.delete_game_button.clicked.connect(self.delete_current_game)
+        self.rename_game_button = AnimatedButton("改名")
+        self.rename_game_button.setObjectName("flat")
+        self.rename_game_button.clicked.connect(self.rename_current_game)
+        selected_row.addWidget(self.rename_game_button)
         selected_row.addWidget(self.delete_game_button)
         content_header_layout.addLayout(selected_row)
 
@@ -766,19 +990,51 @@ class TermLibraryDialog(QWidget):
         quick_add_panel = QFrame()
         quick_add_panel.setObjectName("termQuickAdd")
         quick_add = QVBoxLayout(quick_add_panel)
+        quick_add.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         quick_add.setContentsMargins(10, 7, 8, 7)
         quick_add.setSpacing(5)
         quick_add_title = QLabel("添加术语")
         quick_add_title.setObjectName("termQuickAddTitle")
-        quick_add.addWidget(quick_add_title)
+        quick_title_row = QHBoxLayout()
+        quick_title_row.addWidget(quick_add_title, 1)
+        self.term_try_toggle = AnimatedButton('试一下')
+        self.term_try_toggle.setObjectName('flat')
+        self.term_try_toggle.clicked.connect(self._toggle_try_panel)
+        quick_title_row.addWidget(self.term_try_toggle)
+        self.quick_mapping_button = AnimatedButton('快捷纠错 / 批量映射…')
+        self.quick_mapping_button.setObjectName('flat')
+        self.quick_mapping_button.clicked.connect(lambda: self.show_import_dialog(mapping_mode=True))
+        quick_title_row.addWidget(self.quick_mapping_button)
+        quick_add.addLayout(quick_title_row)
         quick_add_row = QHBoxLayout()
         quick_add_row.setSpacing(7)
         self.term_editor = QLineEdit()
-        bind_text(self.term_editor, '专名，或 错词 → 正确词', property='placeholderText')
+        bind_text(self.term_editor, '规范写法 / 最终输出（保留大小写）', property='placeholderText')
+        self.term_editor.setAccessibleName('规范写法 / 最终输出')
         self.term_editor.returnPressed.connect(self.add_single_term)
-        quick_add_row.addWidget(self.term_editor, 1)
+        self.term_alias_editor = QLineEdit()
+        self.term_alias_editor.setPlaceholderText("别名 / 常见错词（可选，顿号分隔）")
+        self.term_alias_editor.setAccessibleName('别名 / 常见错词')
+        self.term_alias_editor.returnPressed.connect(self.add_single_term)
+        for editor, label in ((self.term_alias_editor, '别名 / 常见错词'),
+                              (self.term_editor, '规范写法 / 最终输出')):
+            group = QWidget()
+            group_box = QVBoxLayout(group)
+            group_box.setContentsMargins(0, 0, 0, 0)
+            group_box.setSpacing(3)
+            caption = bind_text(QLabel(), label)
+            caption.setObjectName('muted')
+            caption.setBuddy(editor)
+            group_box.addWidget(caption)
+            group_box.addWidget(editor)
+            quick_add_row.addWidget(group, 1)
+            if editor is self.term_alias_editor:
+                direction = QLabel('→')
+                direction.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                quick_add_row.addWidget(direction)
+        QWidget.setTabOrder(self.term_alias_editor, self.term_editor)
         self.term_category = FramelessPopupCombo()
-        for category in ("角色", "Boss", "物品", "方块", "阵营", "地点", "模型", "人物", "事件", "其他"):
+        for category in ("选手 ID", "人物", "角色", "Boss", "物品", "方块", "阵营", "地点", "模型", "技能", "事件", "其他"):
             self.term_category.addItem(category, category)
         self.term_category.setMaximumWidth(140)  # soft; CN labels must not truncate
         quick_add_row.addWidget(self.term_category)
@@ -786,7 +1042,45 @@ class TermLibraryDialog(QWidget):
         self.add_term_button.setIcon(_icon("fa5s.plus"))
         self.add_term_button.clicked.connect(self.add_single_term)
         quick_add_row.addWidget(self.add_term_button)
+        QWidget.setTabOrder(self.term_editor, self.term_category)
+        QWidget.setTabOrder(self.term_category, self.add_term_button)
         quick_add.addLayout(quick_add_row)
+        self.term_parse_preview = QLabel("规范词原样保存；只有已确认的别名才用于纠错。")
+        self.term_parse_preview.setObjectName("muted")
+        self.term_parse_preview.setWordWrap(True)
+        self.term_editor.textChanged.connect(self._refresh_term_parse_preview)
+        self.term_alias_editor.textChanged.connect(self._refresh_term_parse_preview)
+        quick_add.addWidget(self.term_parse_preview)
+        self.term_parse_preview.hide()
+        self.term_try_panel = QWidget()
+        try_layout = QVBoxLayout(self.term_try_panel)
+        try_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        try_layout.setContentsMargins(0, 0, 0, 0)
+        try_layout.setSpacing(3)
+        try_row = QHBoxLayout()
+        self.term_try_input = QLineEdit()
+        self.term_try_input.setPlaceholderText("输入一句字幕，检查当前本批词库是否实际生效")
+        try_row.addWidget(self.term_try_input, 1)
+        try_button = AnimatedButton("检查")
+        try_button.clicked.connect(self.try_sentence)
+        self.term_try_input.returnPressed.connect(self.try_sentence)
+        try_row.addWidget(try_button)
+        try_layout.addLayout(try_row)
+        association_row = QHBoxLayout()
+        self.term_try_expected = QLineEdit()
+        self.term_try_expected.setPlaceholderText('期望规范词（可选，用于区分缺词条或别名未关联）')
+        association_row.addWidget(self.term_try_expected, 1)
+        self.term_association_button = AnimatedButton('关联别名…')
+        self.term_association_button.clicked.connect(self._show_association_sheet)
+        association_row.addWidget(self.term_association_button)
+        try_layout.addLayout(association_row)
+        self.term_try_result = QLabel()
+        self.term_try_result.setObjectName("muted")
+        self.term_try_result.setWordWrap(True)
+        self.term_try_result.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        try_layout.addWidget(self.term_try_result)
+        quick_add.addWidget(self.term_try_panel)
+        self.term_try_panel.hide()
         content_header_layout.addWidget(quick_add_panel)
 
         # C4b AI 更新：页面直接选 AI（复用已配置凭证，仅本次覆盖）→ 联网建立/更新词库
@@ -810,26 +1104,19 @@ class TermLibraryDialog(QWidget):
         bind_text(self.ai_service_combo, '使用哪个 AI 执行本次检索整理（复用已配置的登录/密钥，不改动全局设置）', property='toolTip')
         self.ai_service_combo.setMaximumWidth(170)
         self.ai_service_combo.currentIndexChanged.connect(self._on_ai_service_changed)
-        ai_row.addWidget(self.ai_service_combo)
+        ai_title_row.insertWidget(1, self.ai_service_combo)
         self.ai_model_combo = FramelessPopupCombo()
         self.ai_model_combo.setEditable(True)
         self.ai_model_combo.setMaximumWidth(190)
         self.ai_model_combo.currentIndexChanged.connect(self._refresh_ai_capability_label)
-        ai_row.addWidget(self.ai_model_combo)
-        self.ai_full_button = AnimatedButton("完整建库…")
+        ai_title_row.insertWidget(2, self.ai_model_combo)
+        self.ai_full_button = AnimatedButton("AI 完整建库")
         self.ai_full_button.setObjectName("outline")
         self.ai_full_button.setIcon(_icon("fa5s.book-open", GREEN))
-        bind_text(self.ai_full_button, '清单式补全：检索官方目录页 → 程序提取名称 → 分批整理 → 社区用语补搜；适合空白/大缺口词库', property='toolTip')
+        bind_text(self.ai_full_button, '查询资料与有效缓存 → AI 提取和梳理 → 补充核对 → 去重与实用筛选 → 选择应用；保留已确认写法', property='toolTip')
         self.ai_full_button.clicked.connect(lambda: self._start_ai_update("full"))
-        build_menu = QMenu(self.ai_full_button)
-        for label, execution in [('资料快速采集（允许有效缓存；不调用 AI）','fast'),
-                                 ('AI 补全与实用筛选','ai'),
-                                 ('重新联网核对（刷新来源）','refresh')]:
-            build_menu.addAction(label).triggered.connect(
-                lambda _checked=False, execution=execution: self._start_ai_update('full', execution_mode=execution))
-        self.ai_full_button.setMenu(build_menu)
         ai_row.addWidget(self.ai_full_button)
-        self.ai_update_button = AnimatedButton("联网更新当前词库")
+        self.ai_update_button = AnimatedButton("日常增量更新")
         self.ai_update_button.setObjectName("primary")
         self.ai_update_button.setIcon(_icon("fa5s.globe", SURFACE))
         bind_text(self.ai_update_button, '版本增量：检索最近版本新增与高频术语（单轮，适合已建库词库）', property='toolTip')
@@ -856,6 +1143,7 @@ class TermLibraryDialog(QWidget):
         content_body = QWidget()
         content_body.setObjectName("termLibraryBody")
         content_body_layout = QVBoxLayout(content_body)
+        content_body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         content_body_layout.setContentsMargins(16, 10, 16, 10)
         content_body_layout.setSpacing(8)
 
@@ -871,6 +1159,10 @@ class TermLibraryDialog(QWidget):
         self.import_terms.setIcon(_icon("fa5s.file-import"))
         self.import_terms.clicked.connect(self.show_import_dialog)
         term_tools.addWidget(self.import_terms)
+        self.export_terms = AnimatedButton("导出词库")
+        self.export_terms.setObjectName("flat")
+        self.export_terms.clicked.connect(self.export_current_library)
+        term_tools.addWidget(self.export_terms)
         term_tools.addStretch(1)
         content_body_layout.addLayout(term_tools)
 
@@ -895,6 +1187,14 @@ class TermLibraryDialog(QWidget):
         self.filter_status.currentIndexChanged.connect(self.apply_filter)
         filter_row.addWidget(self.filter_status)
         filter_row.addStretch(1)
+        self.select_visible = AnimatedButton("全选可见行")
+        self.select_visible.setObjectName("flat")
+        self.select_visible.clicked.connect(lambda: self.listing.selectAll())
+        filter_row.addWidget(self.select_visible)
+        self.clear_selection = AnimatedButton("取消选择")
+        self.clear_selection.setObjectName("flat")
+        self.clear_selection.clicked.connect(lambda: self.listing.clearSelection())
+        filter_row.addWidget(self.clear_selection)
         self.bulk_confirm = AnimatedButton("确认所选参考")
         self.bulk_confirm.setObjectName("outline")
         self.bulk_confirm.setIcon(_icon("fa5s.check", GREEN))
@@ -960,6 +1260,7 @@ class TermLibraryDialog(QWidget):
         self.listing.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.listing.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.listing.setShowGrid(False)
+        self.listing.setMinimumHeight(160)
         self.listing.verticalHeader().hide()
         # Double-click row to edit (no per-cell editors)
         self.listing.doubleClicked.connect(self._on_table_double_click)
@@ -1068,7 +1369,11 @@ class TermLibraryDialog(QWidget):
             actions.addWidget(close)
         footer_layout.addLayout(actions)
         content_layout.addWidget(footer)
-        body.addWidget(content, 1)
+        self.library_content_scroll = QScrollArea()
+        self.library_content_scroll.setWidgetResizable(True)
+        self.library_content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.library_content_scroll.setWidget(content)
+        body.addWidget(self.library_content_scroll, 1)
         layout.addLayout(body, 1)
 
         self.refresh_learning_suggestions()
@@ -1079,6 +1384,8 @@ class TermLibraryDialog(QWidget):
         (bind_text(self.library_badge, f'{self.game_list.count()} games') if current_language() == 'en' else bind_text(self.library_badge, '{value0} 个游戏', value0=self.game_list.count()))
 
     def _close_hosted(self):
+        if not self.prepare_for_task():
+            return
         if self.page_mode:
             self.owner._return_to_settings()
             return
@@ -1113,37 +1420,45 @@ class TermLibraryDialog(QWidget):
 
     # ------------------------------------------------------------ 列表与刷新
 
-    def add_game_item(self, game_name, select=False):
+    def add_game_item(self, game_name, select=False, *, library_id=None):
         game_name = self._canonical(game_name)
-        identity = self._game_identity(game_name)
+        if library_id is None:
+            catalog = getattr(self.legacy, 'glossary_catalog', lambda: [])()
+            matches = [row for row in catalog if self.legacy.runtime_game_identity(row['name']) == self.legacy.runtime_game_identity(game_name)]
+            if len(matches) > 1:
+                return None  # catalog adds each distinct stable ID below
+        identity = str(library_id or self._game_identity(game_name))
         if not game_name or not identity:
             return None
         for index in range(self.game_list.count()):
             item = self.game_list.item(index)
-            if self._game_identity(item.data(Qt.ItemDataRole.UserRole)) == identity:
+            if str(item.data(Qt.ItemDataRole.UserRole + 1) or self._game_identity(item.data(Qt.ItemDataRole.UserRole))) == identity:
+                item.setData(Qt.ItemDataRole.UserRole, game_name)
+                item.setData(Qt.ItemDataRole.UserRole + 1, identity)
                 item.setText("")
                 item.setToolTip(self._game_item_tooltip(game_name))
                 row = self.game_list.itemWidget(item)
                 if isinstance(row, TermGameListRow):
                     row.update_content(
                         game_name,
-                        self._game_term_count(game_name),
-                        self._game_type_label(game_name),
-                        self._game_reference_count(game_name),
+                        self._game_term_count(game_name, identity),
+                        self._game_type_label(game_name, identity),
+                        self._game_reference_count(game_name, identity),
                     )
                 if select:
                     self.game_list.setCurrentItem(item)
                 return item
         item = QListWidgetItem("")
         item.setData(Qt.ItemDataRole.UserRole, game_name)
+        item.setData(Qt.ItemDataRole.UserRole + 1, identity)
         item.setToolTip(self._game_item_tooltip(game_name))
         item.setSizeHint(QSize(0, 58))
         self.game_list.addItem(item)
         row = TermGameListRow(
             game_name,
-            self._game_term_count(game_name),
-            self._game_type_label(game_name),
-            self._game_reference_count(game_name),
+            self._game_term_count(game_name, identity),
+            self._game_type_label(game_name, identity),
+            self._game_reference_count(game_name, identity),
             parent=self.game_list,
         )
         row.clicked.connect(lambda target=item: self.game_list.setCurrentItem(target))
@@ -1152,30 +1467,32 @@ class TermLibraryDialog(QWidget):
             self.game_list.setCurrentItem(item)
         return item
 
-    def _game_term_count(self, game_name):
+    def _game_term_count(self, game_name, library_id=None):
         mappings = (
             getattr(
                 self.legacy,
                 "user_confirmed_mappings_for_game",
                 self.legacy.learned_mappings_for_game,
-            )(game_name)
+            )(library_id or self._library_key(game_name))
             if game_name
             else []
         )
         return len(mappings or [])
 
-    def _game_reference_count(self, game_name):
+    def _game_reference_count(self, game_name, library_id=None):
         if not game_name:
+            return 0
+        if str(library_id or self._library_key(game_name)).startswith('library:'):
             return 0
         if game_name not in self._builtin_cache:
             self._builtin_cache[game_name] = self.builtin_for_game(game_name)
         names, _loaded, hidden = self._builtin_cache[game_name]
         return len([name for name in names if name not in set(hidden)])
 
-    def _game_type_label(self, game_name):
+    def _game_type_label(self, game_name, library_id=None):
         content_type = getattr(
             self.legacy, "learned_content_type", lambda _name: "game"
-        )(game_name)
+        )(library_id or self._library_key(game_name))
         return self._type_labels().get(content_type, translate("其它内容", current_language()))
 
     def _game_item_text(self, game_name):
@@ -1194,6 +1511,7 @@ class TermLibraryDialog(QWidget):
         for index in range(self.game_list.count()):
             item = self.game_list.item(index)
             name = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            identity = str(item.data(Qt.ItemDataRole.UserRole + 1) or self._game_identity(name))
             if not name:
                 continue
             item.setText("")
@@ -1202,9 +1520,9 @@ class TermLibraryDialog(QWidget):
             if isinstance(row, TermGameListRow):
                 row.update_content(
                     name,
-                    self._game_term_count(name),
-                    self._game_type_label(name),
-                    self._game_reference_count(name),
+                    self._game_term_count(name, identity),
+                    self._game_type_label(name, identity),
+                    self._game_reference_count(name, identity),
                 )
 
     def _filter_games(self, text=""):
@@ -1456,7 +1774,7 @@ class TermLibraryDialog(QWidget):
                     self.legacy,
                     "user_confirmed_mappings_for_game",
                     self.legacy.learned_mappings_for_game,
-                )(game_name)
+                )(self._library_key(game_name))
                 if isinstance(item, dict)
             }
             pending = [
@@ -1497,7 +1815,7 @@ class TermLibraryDialog(QWidget):
         selected in the sidebar, so unbound corrections cannot silently land
         in an unrelated library."""
         if mode == "project":
-            project = getattr(getattr(self.owner, "studio_page", None), "project", None)
+            project = getattr(existing_page(self.owner, "studio"), "project", None)
             if project and project.glossary_ids:
                 return str(project.glossary_ids[0])
         if mode == "profile":
@@ -1525,6 +1843,7 @@ class TermLibraryDialog(QWidget):
             destination,
             add_mapping=self.legacy.add_learned_mapping,
         )
+        self._notify_library_changed()
         self._mappings_cache.pop(destination, None)
         self.refresh_learning_suggestions()
         if self._game_identity(destination) == self._game_identity(self.state.get("game", "")):
@@ -1566,7 +1885,7 @@ class TermLibraryDialog(QWidget):
             reference = row.get("reference") or {}
             name = str(reference.get("name") or row.get("source") or "").strip()
             if name and self.legacy.add_learned_mapping(
-                game_name,
+                self._library_key(game_name),
                 name,
                 name,
                 category=str(reference.get("category") or "其他"),
@@ -1574,6 +1893,7 @@ class TermLibraryDialog(QWidget):
             ):
                 added += 1
         if added:
+            self._notify_library_changed()
             self._mappings_cache.pop(game_name, None)
             self._builtin_entry_cache.pop(game_name, None)
             self.refresh_current_game()
@@ -1609,6 +1929,7 @@ class TermLibraryDialog(QWidget):
         if to_restore:
             restored_count = setter(game_name, to_restore, False) or 0
         if hidden_count or restored_count:
+            self._notify_library_changed()
             self._builtin_cache.pop(game_name, None)
             self._builtin_entry_cache.pop(game_name, None)
             self.refresh_current_game()
@@ -1626,6 +1947,7 @@ class TermLibraryDialog(QWidget):
         import time as _t
         _t0 = _t.perf_counter()
         game_name = self.state["game"]
+        library_id = self._library_key(game_name)
         type_labels = self._type_labels()
         selected_type = (
             getattr(self.legacy, "learned_content_type", lambda _name: "game")(game_name)
@@ -1643,9 +1965,9 @@ class TermLibraryDialog(QWidget):
             print(f"[perf] Term switch start game={game_name!r} cached={'yes' if game_name in self._mappings_cache else 'no'}")
         t0 = _t.perf_counter()
         if game_name:
-            if game_name in self._mappings_cache:
+            if library_id in self._mappings_cache:
                 t_lookup0 = _t.perf_counter()
-                self.state["mappings"] = self._mappings_cache[game_name]
+                self.state["mappings"] = self._mappings_cache[library_id]
                 t_lookup1 = _t.perf_counter()
                 if GUI_PROFILE_ENABLED:
                     print(f"[perf] Term mappings cache hit {game_name!r} lookup~{int((t_lookup1-t_lookup0)*1000)}ms")
@@ -1655,10 +1977,10 @@ class TermLibraryDialog(QWidget):
                     self.legacy,
                     "user_confirmed_mappings_for_game",
                     self.legacy.learned_mappings_for_game,
-                )(game_name)
+                )(library_id)
                 t_disk1 = _t.perf_counter()
                 self.state["mappings"] = raw or []
-                self._mappings_cache[game_name] = self.state["mappings"]
+                self._mappings_cache[library_id] = self.state["mappings"]
                 if GUI_PROFILE_ENABLED:
                     print(f"[perf] Term disk+parse {game_name!r} ~{int((t_disk1-t_disk0)*1000)}ms rows={len(self.state['mappings'])}")
                 # "JSON parse" is inside legacy call for this baseline; we log disk+parse combined as requested.
@@ -1721,10 +2043,12 @@ class TermLibraryDialog(QWidget):
             self.filter_category,
             self.filter_status,
             self.term_editor,
+            self.term_alias_editor,
             self.term_category,
             self.add_term_button,
             self.smart_build_button,
             self.import_terms,
+            self.export_terms,
             self.ai_history_button,
         ):
             widget.setEnabled(enabled)
@@ -1737,6 +2061,7 @@ class TermLibraryDialog(QWidget):
         # 删除游戏只对非保护游戏可用（C7 与删除术语分离）
         protected = self._game_identity(game_name) in self.protected_game_ids
         self.delete_game_button.setEnabled(enabled and not protected)
+        self.rename_game_button.setEnabled(enabled and not protected)
         self.delete_game_button.setIcon(
             qta.icon("fa5s.trash-alt", color="#8a5a4c", color_disabled="#8a5a4c")
         )
@@ -1756,6 +2081,7 @@ class TermLibraryDialog(QWidget):
         selected = len(confirmed_rows) + len(reference_rows) + len(hidden_rows)
         ((bind_text(self.remove_terms, f'Delete selected terms ({selected})') if selected else bind_text(self.remove_terms, 'Delete selected terms')) if current_language() == 'en' else (bind_text(self.remove_terms, '删除所选术语（{value0}）', value0=selected) if selected else bind_text(self.remove_terms, '删除所选术语')))
         self.remove_terms.setEnabled(bool(confirmed_rows))
+        self.remove_terms.setToolTip(f"只作用于当前可见表格中选中的 {len(confirmed_rows)} 行；筛选隐藏项不会删除。")
         if hasattr(self, "bulk_confirm"):
             self.bulk_confirm.setEnabled(bool(reference_rows))
         if hasattr(self, "bulk_hide"):
@@ -1772,6 +2098,7 @@ class TermLibraryDialog(QWidget):
                 row.set_selected(item is current)
         game_name = str(current.data(Qt.ItemDataRole.UserRole)) if current else ""
         self.state["game"] = game_name
+        self.state["library_id"] = str(current.data(Qt.ItemDataRole.UserRole + 1) or self._game_identity(game_name)) if current else ""
         self.search.clear()
         # P0 perf: switch header instantly (<100ms feel), defer the 650-row table build.
         type_labels = self._type_labels()
@@ -1814,18 +2141,67 @@ class TermLibraryDialog(QWidget):
         self.search.setFocus()
         self.search.selectAll()
 
+    @glossary_write_errors
     def create_game(self):
         game_name = self._canonical(self.game_input.text())
         if not game_name:
             self.game_input.setFocus()
             return
-        getattr(self.legacy, "ensure_learned_content", lambda *_args: True)(
+        if not getattr(self.legacy, "ensure_learned_content", lambda *_args: True)(
             game_name, str(self.content_type.currentData() or "game")
-        )
+        ):
+            self._show_toast("词库创建未保存，请检查文件写入权限。", 5000)
+            return
+        self._notify_library_changed()
         self.add_game_item(game_name, select=True)
         self.game_input.clear()
         (bind_text(self.library_badge, f'{self.game_list.count()} games') if current_language() == 'en' else bind_text(self.library_badge, '{value0} 个游戏', value0=self.game_list.count()))
         (bind_text(self.owner.term_hint, f'Created the {game_name} term library') if current_language() == 'en' else bind_text(self.owner.term_hint, '已创建《{value0}》术语库', value0=game_name))
+
+    def rename_current_game(self):
+        game = self.state.get("game", "")
+        library_id = self._library_key()
+        if not game or self._game_identity(game) in self.protected_game_ids:
+            self._show_toast("内置词库保持原名称；可另建用户词库。")
+            return
+        sheet = QFrame(self)
+        sheet.setObjectName('termRenameSheet')
+        theme = _sheet_theme()
+        sheet.setStyleSheet(f'QFrame#termRenameSheet {{ background:{theme.surface}; border:1px solid {theme.border}; border-radius:12px; }}')
+        layout = QVBoxLayout(sheet)
+        layout.setContentsMargins(16, 14, 16, 14)
+        label = QLabel('词库显示名称（本批启用的稳定 ID 保持）')
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        editor = QLineEdit(game)
+        layout.addWidget(editor)
+        actions = QHBoxLayout()
+        cancel = QPushButton('取消')
+        save = QPushButton('保存')
+        actions.addStretch(1)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        layout.addLayout(actions)
+        sheet.setGeometry(max(12, (self.width()-460)//2), max(32, (self.height()-150)//2), 460, 150)
+        sheet.show()
+        sheet.raise_()
+        editor.setFocus()
+        editor.selectAll()
+        def apply():
+            if editor.text().strip():
+                self._rename_library(library_id, editor.text().strip())
+                sheet.deleteLater()
+        cancel.clicked.connect(sheet.deleteLater)
+        save.clicked.connect(apply)
+        editor.returnPressed.connect(apply)
+
+    @glossary_write_errors
+    def _rename_library(self, library_id, name):
+        if getattr(self.legacy, "rename_learned_content", lambda *_args: False)(library_id, name):
+            self.state.update({"game": name, "library_id": library_id})
+            self.add_game_item(name, select=True, library_id=library_id)
+            self._notify_library_changed()
+            self.refresh_current_game()
 
     def delete_current_game(self):
         game_name = self.state["game"]
@@ -1901,10 +2277,10 @@ class TermLibraryDialog(QWidget):
         self._del_game_dim = dim
 
         def _confirm():
-            identity = self._game_identity(game_name)
+            identity = self._library_key(game_name)
             learned_deleted = getattr(
                 self.legacy, "delete_learned_game", lambda _name: False
-            )(game_name)
+            )(identity)
             getattr(self.legacy, "delete_runtime_game_history", lambda _name: False)(game_name)
             profile_hidden = False
             if identity in self.profile_game_ids:
@@ -1924,10 +2300,12 @@ class TermLibraryDialog(QWidget):
             # remove from list if present
             for i in range(self.game_list.count()):
                 it = self.game_list.item(i)
-                if it and self._game_identity(it.data(Qt.ItemDataRole.UserRole) or it.text()) == self._game_identity(game_name):
+                if it and str(it.data(Qt.ItemDataRole.UserRole + 1) or self._game_identity(it.data(Qt.ItemDataRole.UserRole) or it.text())) == identity:
                     self.game_list.takeItem(i)
                     break
             self.state["game"] = ""
+            self.state["library_id"] = ""
+            self._notify_library_changed()
             _cleanup()
             if self.game_list.count():
                 self.game_list.setCurrentRow(0)
@@ -1947,24 +2325,44 @@ class TermLibraryDialog(QWidget):
     def add_single_term(self):
         # 2026-09-02：未选择游戏/内容时不再静默返回（表现为"没办法添加词语"）——
         # 落到「通用词库」并提示；输入为空也给 toast 反馈。
-        game_name = str(self.state.get("game") or "").strip()
+        draft_id = getattr(self, '_quick_draft_library_id', '') or self._library_key()
+        game_name = getattr(self.legacy, 'glossary_display_name', str)(draft_id) if draft_id else ''
         if not game_name:
             game_name = "通用词库"
             self._show_toast("未选择游戏/内容，已添加到「通用词库」")
         value = self.term_editor.text().strip()
         if not value:
             self._show_toast("请先输入术语内容（原文或 原文=译名）")
-            return
-        source, target = self.parse_term(value)
+            return False
+        target, aliases = self._parsed_quick_terms()
+        if not target:
+            self._show_toast('规范词不能为空；输入已保留。')
+            return False
         category = str(self.term_category.currentData() or "其他")
-        if self.legacy.add_learned_mapping(
-            game_name,
-            source,
-            target,
-            category=category,
-            origin="手动",
-        ):
+        # A quick arrow alone remains a single mapping for compatibility.
+        source, quick_target = self.parse_term(value)
+        parsed = parse_term_line(value)
+        if parsed.get('parse_error') or not source:
+            self._show_toast('别名或规范词不能为空；输入已保留。')
+            return False
+        pairs = [(target, target)] if source == quick_target or self.term_alias_editor.text().strip() else []
+        pairs.extend((alias, target) for alias in aliases)
+        checked = validate_term_records([{'from': left, 'to': right, 'category': category}
+            for left, right in pairs], self.legacy.learned_mappings_for_game(draft_id or self._library_key(game_name)))
+        if any(row['status'] in {'invalid', 'conflict'} for row in checked):
+            self._show_toast('；'.join(row['reason'] for row in checked if row['status'] in {'invalid', 'conflict'}) + '；输入已保留。')
+            return False
+        added = 0
+        for from_text, to_text in pairs:
+            added += bool(self.legacy.add_learned_mapping(
+                draft_id or self._library_key(game_name), from_text, to_text, category=category, origin="手动"))
+        stored = self.legacy.learned_mappings_for_game(draft_id or self._library_key(game_name))
+        all_saved = all(any(row.get('from') == source and row.get('to') == canonical
+                       and row.get('confirmed', True) for row in stored) for source, canonical in pairs)
+        if added or all_saved:
             self.term_editor.clear()
+            self.term_alias_editor.clear()
+            self._notify_library_changed()
             self._mappings_cache.pop(game_name, None)
             self._builtin_entry_cache.pop(game_name, None)
             if not self.state.get("game"):
@@ -1972,9 +2370,13 @@ class TermLibraryDialog(QWidget):
                 self.add_game_item(game_name, select=True)
             self.refresh_current_game()
             (bind_text(self.owner.term_hint, f'Added term: {target} ({game_name})') if current_language() == 'en' else bind_text(self.owner.term_hint, '已添加术语：{value0}（《{value1}》）', value0=target, value1=game_name))
+            if (draft_id or self._library_key(game_name)) not in self.owner._enabled_glossary_ids():
+                self.owner.term_hint.setText(self.owner.term_hint.text() + '；已保存，尚未用于本批，请点击「用于本批字幕」。')
+            return True
         else:
             # Replace native info with a small warm in-app toast sheet.
             self._show_toast(tr('添加术语失败：该术语已存在或内容为空。'))
+            return False
 
     def _show_toast(self, text: str, ms: int = 1600):
         """Tiny warm toast over current view (no native dialog)."""
@@ -1994,6 +2396,84 @@ class TermLibraryDialog(QWidget):
         except Exception:
             pass
 
+    def _show_association_sheet(self):
+        """Explicit, generic alias association; no suggested hardcoded mappings."""
+        if not self.prepare_for_task():
+            return
+        library_id = self._library_key()
+        if not library_id:
+            self._show_toast('请先选择要保存关联的词库。')
+            return
+        game_name = self.state['game']
+        dialog = QDialog(self)
+        from .studio_theme import apply_secondary_surface_theme
+        apply_secondary_surface_theme(dialog)
+        dialog.setWindowTitle('确认别名关联')
+        layout = QVBoxLayout(dialog)
+        note = QLabel(f'保存到《{game_name}》。规范词保持已有拼写；新增拼写会作为独立词条保存。')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        alias = QLineEdit()
+        alias.setPlaceholderText('请输入字幕中实际出现的昵称或错词')
+        target = QComboBox()
+        target.setEditable(True)
+        existing = self.legacy.learned_mappings_for_game(library_id)
+        target.addItems(list(dict.fromkeys(str(row.get('to', '')) for row in existing if row.get('to'))))
+        target.setCurrentText(self.term_try_expected.text().strip())
+        form.addRow('别名 / 常见错词', alias)
+        form.addRow('规范词（逐字保存）', target)
+        layout.addLayout(form)
+        preview = QLabel()
+        preview.setWordWrap(True)
+        layout.addWidget(preview)
+        actions = QHBoxLayout()
+        cancel = QPushButton('取消')
+        save = QPushButton('确认关联并保存')
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        layout.addLayout(actions)
+        self.association_alias = alias
+        self.association_target = target
+        self.association_preview = preview
+        self.association_save_button = save
+        self.association_dialog = dialog
+        proposed = []
+
+        def update_preview(*_args):
+            nonlocal proposed
+            a, t = alias.text().strip(), target.currentText().strip()
+            proposed = preview_term_import(json.dumps({'mappings': [
+                {'from': t, 'to': t, 'category': str(self.term_category.currentData() or '其他')},
+                {'from': a, 'to': t, 'category': str(self.term_category.currentData() or '其他')}]
+                }, ensure_ascii=False), self.legacy.learned_mappings_for_game(library_id))
+            preview.setText('\n'.join(f"{row['from']} → {row['to']}：{row['reason']}" for row in proposed))
+            save.setEnabled(bool(a and t) and all(row['status'] in {'ready', 'duplicate'} for row in proposed))
+
+        @glossary_write_errors(owner=self)
+        def submit():
+            update_preview()
+            if not save.isEnabled():
+                return
+            for row in proposed:
+                if row['status'] == 'ready':
+                    self.legacy.add_learned_mapping(library_id, row['from'], row['to'],
+                        category=row['category'], origin='用户确认')
+            self._notify_library_changed()
+            self.refresh_current_game()
+            dialog.accept()
+            self.try_sentence()
+
+        alias.textChanged.connect(update_preview)
+        target.currentTextChanged.connect(update_preview)
+        save.clicked.connect(submit)
+        cancel.clicked.connect(dialog.reject)
+        dialog.finished.connect(lambda *_args: setattr(self, 'association_dialog', None))
+        update_preview()
+        dialog.resize(600, dialog.sizeHint().height())
+        dialog.open()
+        alias.setFocus()
+
     # ------------------------- P0: Warm in-app Edit / Delete (no native black dialogs) -------------------------
 
     def _show_edit_sheet(self, mapping: dict):
@@ -2005,7 +2485,7 @@ class TermLibraryDialog(QWidget):
             return
         source = str(mapping.get("from") or "")
         target = str(mapping.get("to") or "")
-        current = target if source == target else f"{source} → {target}"
+        current = target
 
         # Local dim layer + card (child of this content so no new HWND).
         if hasattr(self, "_edit_sheet") and self._edit_sheet is not None:
@@ -2033,7 +2513,7 @@ class TermLibraryDialog(QWidget):
         lay.setSpacing(8)
 
         title = QLabel("编辑术语")
-        title.setStyleSheet("font-weight:700; font-size:14px; color:#292a27;")
+        title.setStyleSheet("font-weight:700; font-size:14px;")
         lay.addWidget(title)
 
         form = QFormLayout()
@@ -2041,11 +2521,16 @@ class TermLibraryDialog(QWidget):
         form.setSpacing(6)
 
         term_edit = QLineEdit(current)
-        bind_text(term_edit, '专名，或 错词 → 正确词', property='placeholderText')
-        form.addRow("术语 / 错词 → 正确词", term_edit)
+        bind_text(term_edit, '最终字幕使用的准确写法（大小写原样保留）', property='placeholderText')
+        form.addRow("规范词", term_edit)
+        alias_edit = QLineEdit("" if source == target else source)
+        alias_edit.setPlaceholderText("别名 / 常见错词（留空表示规范词本身）")
+        form.addRow("别名 / 常见错词", alias_edit)
+        self.edit_canonical = term_edit
+        self.edit_alias = alias_edit
 
         cat = QComboBox()
-        for c in ("角色", "Boss", "物品", "方块", "阵营", "地点", "人物", "模型", "技能", "事件", "其他"):
+        for c in ("选手 ID", "人物", "角色", "Boss", "物品", "方块", "阵营", "地点", "模型", "技能", "事件", "其他"):
             cat.addItem(c, c)
         cur_cat = self._mapping_category(mapping) or "其他"
         idx = cat.findData(cur_cat)
@@ -2059,6 +2544,7 @@ class TermLibraryDialog(QWidget):
         cancel = QPushButton("取消")
         cancel.setObjectName("workshopSecondary")
         save = QPushButton("保存")
+        self.edit_save_button = save
         save.setObjectName("workshopAction")
         row.addWidget(cancel)
         row.addWidget(save)
@@ -2067,7 +2553,7 @@ class TermLibraryDialog(QWidget):
         def _place():
             # center sheet over current view
             pr = self.rect()
-            sw, sh = 420, 180
+            sw, sh = 480, 220
             sheet.setGeometry((pr.width() - sw)//2, max(40, (pr.height() - sh)//2 - 20), sw, sh)
 
         _place()
@@ -2087,40 +2573,36 @@ class TermLibraryDialog(QWidget):
                 pass
             self._edit_sheet = None
             self._edit_dim = None
+            self._edit_pending = None
+            self._edit_submit = None
+            self._edit_preview = None
 
         self._edit_sheet = sheet
         self._edit_dim = dim
-        added_by_this_edit = set()
-
         @glossary_write_errors(owner=self)
         def _save():
             val = term_edit.text().strip()
             if not val:
-                _cleanup()
-                return
-            new_source, new_target = self.parse_term(val)
+                self._show_toast('规范词不能为空；输入已保留。')
+                return False
+            new_target = val
+            new_source = alias_edit.text().strip() or val
             if (new_source, new_target) == (source, target) and (cat.currentData() or "其他") == self._mapping_category(mapping):
                 _cleanup()
-                return
-            key = (new_source, new_target)
-            ok = key in added_by_this_edit
-            if not ok:
-                ok = self.legacy.add_learned_mapping(
-                    game_name, new_source, new_target,
-                    category=str(cat.currentData() or "其他"),
-                    origin=self._mapping_origin(mapping),
-                )
-                if ok:
-                    added_by_this_edit.add(key)
+                return True
+            ok = self.legacy.edit_learned_mapping(
+                self._library_key(game_name), (source, target), new_source, new_target,
+                category=str(cat.currentData() or "其他"), origin=self._mapping_origin(mapping))
             if not ok:
                 # keep simple; surface via owner hint
                 bind_text(self.owner.term_hint, '修改后的术语已存在或内容为空')
-                return
-            self.legacy.delete_learned_mappings(game_name, [(source, target)])
+                return False
             _cleanup()
+            self._notify_library_changed()
             self._mappings_cache.pop(game_name, None)
             self._builtin_entry_cache.pop(game_name, None)
             self.refresh_current_game()
+            return True
 
         def _cancel():
             _cleanup()
@@ -2132,6 +2614,10 @@ class TermLibraryDialog(QWidget):
 
         # keep refs so we can close on resize etc.
         self._edit_cleanup = _cleanup
+        self._edit_pending = lambda: ((alias_edit.text().strip() or term_edit.text().strip(), term_edit.text().strip(),
+            cat.currentData() or '其他') != (source, target, self._mapping_category(mapping)))
+        self._edit_submit = _save
+        self._edit_preview = lambda: f"《{game_name}》：{alias_edit.text().strip() or term_edit.text().strip()} → {term_edit.text().strip()}"
 
     def _show_delete_confirm(self, key):
         """Small warm delete confirm, replacing QMessageBox.question."""
@@ -2209,7 +2695,8 @@ class TermLibraryDialog(QWidget):
         self._del_dim = dim
 
         def _confirm():
-            self.legacy.delete_learned_mappings(game_name, [key])
+            self.legacy.delete_learned_mappings(self._library_key(game_name), [key])
+            self._notify_library_changed()
             _cleanup()
             self.refresh_current_game()
 
@@ -2239,7 +2726,8 @@ class TermLibraryDialog(QWidget):
                 st = (rd.get("source"), rd.get("target"))
                 if st[0] and st[1]:
                     keys.append(st)
-        if keys and self.legacy.delete_learned_mappings(game_name, keys):
+        if keys and self.legacy.delete_learned_mappings(self._library_key(game_name), keys):
+            self._notify_library_changed()
             self.refresh_current_game()
 
     # P0-5: action handlers for the table (no per-row QWidgets)
@@ -2269,12 +2757,13 @@ class TermLibraryDialog(QWidget):
             reference = rd.get("reference") or {}
             name = str(reference.get("name") or rd.get("source") or "").strip()
             if game_name and name and self.legacy.add_learned_mapping(
-                game_name,
+                self._library_key(game_name),
                 name,
                 name,
                 category=str(reference.get("category") or "其他"),
                 origin="用户确认",
             ):
+                self._notify_library_changed()
                 self._mappings_cache.pop(game_name, None)
                 self._builtin_entry_cache.pop(game_name, None)
                 self.refresh_current_game()
@@ -2284,23 +2773,24 @@ class TermLibraryDialog(QWidget):
             name = str((rd.get("reference") or {}).get("name") or rd.get("source") or "")
             setter = getattr(self.legacy, "set_reference_terms_hidden", None)
             if game_name and name and setter and setter(game_name, [name], False):
+                self._notify_library_changed()
                 self._builtin_cache.pop(game_name, None)
                 self._builtin_entry_cache.pop(game_name, None)
                 self.refresh_current_game()
                 self._show_toast(tr('已恢复「{value0}」。', value0=name))
 
-    def show_import_dialog(self):
+    def show_import_dialog(self, *, mapping_mode=False):
         """P0: Warm hosted import sheet inside TermLibrary content (no native SpringDialog)."""
         game_name = self.state["game"]
         if not game_name:
             return
+        library_id = self._library_key(game_name)
 
         # Avoid stacking multiple import sheets
         if hasattr(self, "_import_sheet") and self._import_sheet is not None:
-            try:
-                self._import_sheet.setParent(None)
-            except Exception:
-                pass
+            self._import_sheet.raise_()
+            self.import_editor.setFocus()
+            return
 
         dim = QFrame(self)
         dim.setObjectName("termImportDim")
@@ -2312,7 +2802,7 @@ class TermLibraryDialog(QWidget):
         sheet = QFrame(self)
         sheet.setObjectName("termImportSheet")
         sheet.setStyleSheet(
-            f"QFrame#termImportSheet {{ background:{IVORY}; border:1px solid {LINE}; border-radius:12px; }}"
+            f"QFrame#termImportSheet {{ background:{_sheet_theme().surface}; border:1px solid {_sheet_theme().border}; border-radius:12px; }}"
         )
         sheet.setAutoFillBackground(True)
 
@@ -2321,23 +2811,46 @@ class TermLibraryDialog(QWidget):
         lay.setSpacing(8)
 
         title = bind_text(QLabel(), '批量导入术语｜{game_name}', game_name=game_name)
-        title.setStyleSheet("font-weight:700; font-size:14px; color:#292a27;")
+        title.setStyleSheet("font-weight:700; font-size:14px;")
         lay.addWidget(title)
 
-        hint = QLabel("每行一条。只写“角色名”表示确认正确写法；也可写“常见错词 → 正确词”。")
+        mode = QComboBox()
+        mode.addItem('普通术语（保留完整多词名称）', False)
+        mode.addItem('快捷纠错 / 批量映射（别名 → 规范词）', True)
+        mode.setCurrentIndex(1 if mapping_mode else 0)
+        self.import_mode = mode
+        lay.addWidget(mode)
+        hint = QLabel('快捷映射支持 →、->、=>、两侧有空格的 -、Tab 或两个词之间的空格。多词名称请用引号或明确分隔符；名称内连字符不会自动拆分。可直接编辑下表，冲突不会静默覆盖。')
         hint.setWordWrap(True)
         hint.setObjectName("muted")
         lay.addWidget(hint)
 
         editor = QPlainTextEdit()
-        bind_text(editor, '芙宁娜\n水神 → 芙宁娜\n星见雅', property='placeholderText')
+        editor.setTabChangesFocus(False)
+        bind_text(editor, '别名 -> 规范词\n"多词别名" "多词规范词"', property='placeholderText')
         lay.addWidget(editor, 1)
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(['行', '别名 / 常见错词', '规范写法 / 最终输出', '预览与结果'])
+        table.verticalHeader().hide()
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for column in (1, 2, 3):
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(table, 2)
+        self.import_table = table
+        preview = QPlainTextEdit()
+        preview.setReadOnly(True)
+        preview.setMaximumHeight(70)
+        lay.addWidget(preview)
+        self.import_editor = editor
+        self.import_preview = preview
 
         row = QHBoxLayout()
         row.addStretch(1)
         cancel = QPushButton("取消")
         cancel.setObjectName("workshopSecondary")
-        do_imp = QPushButton("导入")
+        do_imp = QPushButton("确认导入可用项")
+        self.import_save_button = do_imp
         do_imp.setObjectName("workshopAction")
         row.addWidget(cancel)
         row.addWidget(do_imp)
@@ -2345,8 +2858,8 @@ class TermLibraryDialog(QWidget):
 
         def _place():
             pr = self.rect()
-            sw = min(560, max(420, pr.width() - 80))
-            sh = min(420, max(260, pr.height() - 120))
+            sw = min(920, max(340, pr.width() - 48))
+            sh = min(720, max(400, pr.height() - 60))
             sheet.setGeometry((pr.width() - sw)//2, max(24, (pr.height() - sh)//2 - 10), sw, sh)
 
         _place()
@@ -2365,25 +2878,78 @@ class TermLibraryDialog(QWidget):
                 pass
             self._import_sheet = None
             self._import_dim = None
+            self._import_pending = None
+            self._import_submit = None
+            self._import_cleanup = None
 
         self._import_sheet = sheet
         self._import_dim = dim
 
+        def _render_rows(rows):
+            self._import_rows = rows
+            table.blockSignals(True)
+            table.setRowCount(len(rows))
+            for index, record in enumerate(rows):
+                for column, value in enumerate((record.get('line', index+1), record['from'], record['to'], record['reason'])):
+                    item = QTableWidgetItem(str(value))
+                    if column in (0, 3):
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    item.setToolTip(record.get('raw', '') + '\n' + record['reason'])
+                    table.setItem(index, column, item)
+            table.blockSignals(False)
+            preview.setPlainText('\n'.join(f"第{row.get('line', index+1)}行：{row['from']} → {row['to']}｜{row['reason']}"
+                for index, row in enumerate(rows)))
+            do_imp.setEnabled(any(row['status'] == 'ready' for row in rows))
+
+        def _preview():
+            try:
+                _render_rows(preview_term_import(editor.toPlainText(), self.legacy.learned_mappings_for_game(library_id),
+                    mapping_mode=bool(mode.currentData())))
+            except (ValueError, TypeError) as exc:
+                self._import_rows = []
+                table.setRowCount(0)
+                preview.setPlainText("导入格式无效：" + str(exc))
+                do_imp.setEnabled(False)
+        def _edited(item):
+            if item.column() not in (1, 2):
+                return
+            records = [dict(row) for row in self._import_rows]
+            record = records[item.row()]
+            record['from'] = table.item(item.row(), 1).text().strip()
+            record['to'] = table.item(item.row(), 2).text().strip()
+            record.pop('parse_error', None)
+            _render_rows(validate_term_records(records, self.legacy.learned_mappings_for_game(library_id)))
+        table.itemChanged.connect(_edited)
+        editor.textChanged.connect(_preview)
+        mode.currentIndexChanged.connect(_preview)
+        _preview()
+
         @glossary_write_errors(owner=self)
         def _save():
             added = 0
-            for raw in editor.toPlainText().splitlines():
-                value = str(raw or "").strip()
-                if not value or value.startswith("#"):
+            # Finish an in-cell edit, then recheck the exact reviewed rows at
+            # the real store. Re-parsing here would silently discard edits.
+            table.clearFocus()
+            QApplication.processEvents()
+            _render_rows(validate_term_records(self._import_rows, self.legacy.learned_mappings_for_game(library_id)))
+            if not any(row['status'] == 'ready' for row in self._import_rows):
+                self._show_toast('没有可保存的新增内容；请检查逐行预览。')
+                return False
+            skipped = sum(row['status'] != 'ready' for row in self._import_rows)
+            for record in self._import_rows:
+                if record['status'] != 'ready':
                     continue
-                source, target = self.parse_term(value)
                 if self.legacy.add_learned_mapping(
-                    game_name, source, target, category="其他", origin="批量导入"
+                    library_id, record['from'], record['to'], category=record['category'], origin="批量导入"
                 ):
                     added += 1
             _cleanup()
+            self._notify_library_changed()
             self.refresh_current_game()
             (bind_text(self.owner.term_hint, f'Imported {added} terms into {game_name}') if current_language() == 'en' else bind_text(self.owner.term_hint, '已批量导入 {value0} 条术语到《{value1}》', value0=added, value1=game_name))
+            if skipped:
+                self.owner.term_hint.setText(self.owner.term_hint.text() + f"；跳过 {skipped} 条重复或冲突")
+            return True
 
         def _cancel():
             _cleanup()
@@ -2392,21 +2958,43 @@ class TermLibraryDialog(QWidget):
         cancel.clicked.connect(_cancel)
         sheet.installEventFilter(self)
         self._import_cleanup = _cleanup
+        self._import_pending = lambda: bool(editor.toPlainText().strip())
+        self._import_submit = _save
+
+    def export_current_library(self):
+        from PySide6.QtWidgets import QFileDialog
+        game = self.state.get('game', '')
+        if not game:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "导出术语库", f"{game}-术语库.json", "JSON (*.json)")
+        if path:
+            self._export_library_to(path)
+
+    @glossary_write_errors
+    def _export_library_to(self, path):
+        library_id = self._library_key()
+        data = {"library_id": library_id, "name": self.state.get('game', ''),
+                "mappings": self.legacy.learned_mappings_for_game(library_id)}
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        self._show_toast("已导出规范写法与已确认映射。")
 
     def use_selected_game(self):
+        if not self.prepare_for_task():
+            return
         game_name = self.state["game"]
         if not game_name:
             return
-        self.owner.game_box.setCurrentText(game_name)
-        self.owner.terms.setChecked(True)
-        self.legacy.save_runtime_game_history(game_name)
-        identity = self._game_identity(game_name)
+        identity = self._library_key()
         enabled = list(self.owner._enabled_glossary_ids())
         if identity and identity not in enabled:
             enabled.append(identity)
         self.owner.legacy.RUNTIME_SETTINGS.setdefault("glossary", {})
         self.owner.legacy.RUNTIME_SETTINGS["glossary"]["enabled_glossary_ids"] = enabled
+        self.owner.game_box.setCurrentText(game_name)
+        self.owner.terms.setChecked(True)
+        self.legacy.save_runtime_game_history(game_name)
         self.owner._save_glossary_settings()
+        self._notify_library_changed()
         (bind_text(self.owner.term_hint, f'This batch will use the {game_name} term library') if current_language() == 'en' else bind_text(self.owner.term_hint, '本批字幕将使用《{value0}》术语库', value0=game_name))
         self.refresh_current_game()
 
@@ -2414,25 +3002,49 @@ class TermLibraryDialog(QWidget):
         game_name = self.state["game"]
         if not game_name:
             return False
-        identity = self._game_identity(game_name)
+        identity = self._library_key()
         return bool(identity) and identity in self.owner._enabled_glossary_ids()
 
     def _refresh_batch_bar(self):
         enabled_ids = self.owner._enabled_glossary_ids()
         in_batch = self._current_game_in_batch()
+        from .terminology import snapshot_glossaries
+        terms_widget = getattr(self.owner, 'terms', None)
+        terms_active = terms_widget is None or terms_widget.isChecked()
+        snapshot = snapshot_glossaries(self.legacy, enabled_ids if terms_active else ())
+        names = [getattr(item, 'name', '') for item in getattr(snapshot, 'libraries', ())]
+        summary = snapshot.summary()
+        count = int(summary.get('effective_terms', 0))
+        label = f"本批已启用 {len(enabled_ids)} 个词库 · 有效规范词 {count} 个"
+        if enabled_ids and not terms_active:
+            label = f"本批已选择 {len(enabled_ids)} 个词库；术语增强已关闭，实际生效 0 词"
+        if names:
+            label += "：" + "、".join(names)
+        if enabled_ids and terms_active and count == 0:
+            label += "；没有已确认规范词，请添加或确认参考。"
+        if summary.get('conflicts'):
+            label += f"；{len(summary['conflicts'])} 处冲突未执行"
+        if self.state.get('game'):
+            current_summary = snapshot_glossaries(self.legacy, (self._library_key(),)).summary()
+            current_count = int(current_summary.get('effective_terms', 0))
+            if current_count == 0:
+                label += f"；当前浏览《{self.state['game']}》有效 0 词"
+                if in_batch:
+                    label += "（已加入本批，但请先添加或确认词条）"
+        self.batch_status.setText(label)
         if in_batch:
-            bind_text(self.batch_status, translate('当前词库已用于本批', current_language()))
             bind_text(self.batch_toggle, translate('从本批移除', current_language()))
         else:
-            (bind_text(self.batch_status, f'{len(enabled_ids)} term libraries enabled for this batch') if current_language() == 'en' else bind_text(self.batch_status, '本批已启用 {value0} 个词库', value0=len(enabled_ids)))
             bind_text(self.batch_toggle, translate('加入本批', current_language()))
         self.batch_toggle.setEnabled(bool(self.state["game"]))
 
     def toggle_current_game_in_batch(self):
+        if not self.prepare_for_task():
+            return
         game_name = self.state["game"]
         if not game_name:
             return
-        identity = self._game_identity(game_name)
+        identity = self._library_key()
         if not identity:
             return
         enabled = list(self.owner._enabled_glossary_ids())
@@ -2445,6 +3057,7 @@ class TermLibraryDialog(QWidget):
         self.owner.legacy.RUNTIME_SETTINGS.setdefault("glossary", {})
         self.owner.legacy.RUNTIME_SETTINGS["glossary"]["enabled_glossary_ids"] = enabled
         self.owner._save_glossary_settings()
+        self._notify_library_changed()
         self._refresh_batch_bar()
 
     def open_smart_build(self):
@@ -2452,7 +3065,7 @@ class TermLibraryDialog(QWidget):
         if not game_name:
             return
         # P0: host inside ModalHost (no new native window). Content at final size; backdrop fade only.
-        content = SmartGlossaryDialog(self.owner, game_name, self.owner._modal_host.body if hasattr(self.owner, "_modal_host") else self)
+        content = SmartGlossaryDialog(self.owner, game_name, self.owner._modal_host.body if hasattr(self.owner, "_modal_host") else self, library_id=self._library_key())
         mw = self.owner
         if hasattr(mw, "_modal_host"):
             def _after():
@@ -2537,7 +3150,7 @@ class TermLibraryDialog(QWidget):
             self.ai_capability_label.setToolTip(capability["reason"])
         else:
             bind_text(self.ai_capability_label, '○ 无服务端搜索')
-            bind_text(self.ai_capability_label, '{value0}；仍可用智能建词的本地资料整理。', property='toolTip', value0=capability['reason'])
+            bind_text(self.ai_capability_label, '{value0}；AI 完整建库仍可抓取资料并调用模型整理文本。', property='toolTip', value0=capability['reason'])
 
     def _ai_update_settings(self) -> dict:
         from .glossary_skill import settings_with_service_override
@@ -2613,6 +3226,7 @@ class TermLibraryDialog(QWidget):
             service_label=str(detect_search_capability(settings).get("service") or ""),
             model_label=str(detect_search_capability(settings).get("model") or ""),
             resume_task_id=task_id,
+            library_id=task.library_id,
         )
         if created:
             self._show_toast(tr('已从检查点继续「{value0}」完整建库。', value0=task.game))
@@ -2651,6 +3265,11 @@ class TermLibraryDialog(QWidget):
             self.ai_update_status.setText(f'「{game}」'+outcome['message'])
             if game==self.state.get('game'):self._open_update_review(game,result)
             self._show_toast(f'「{game}」'+outcome['message'])
+            return
+        if outcome.get('status') == 'no_changes':
+            if game == self.state.get('game'):
+                self._open_update_review(game, result)
+            self._show_toast(f'「{game}」成功无新增：' + outcome.get('message', '本次核对范围内无变化'))
             return
         diffs = (result or {}).get("diffs", ()) or ()
         new = sum(1 for d in diffs if getattr(d, "change_type", "") == "new")
@@ -2694,15 +3313,15 @@ class TermLibraryDialog(QWidget):
             # 只改同模式按钮；另一模式仍可发起（提交后进队列）
             if pending.mode == "full":
                 self.ai_full_button.setText(label)
-                bind_text(self.ai_update_button, '联网更新当前词库')
+                bind_text(self.ai_update_button, '日常增量更新')
             else:
                 self.ai_update_button.setText(label)
-                bind_text(self.ai_full_button, '完整建库…')
+                bind_text(self.ai_full_button, 'AI 完整建库')
         else:
-            bind_text(self.ai_update_button, '联网更新当前词库')
-            bind_text(self.ai_full_button, '完整建库…')
+            bind_text(self.ai_update_button, '日常增量更新')
+            bind_text(self.ai_full_button, 'AI 完整建库')
 
-    def _start_ai_update(self, mode: str = "incremental", *, execution_mode='auto'):
+    def _start_ai_update(self, mode: str = "incremental", *, execution_mode='full'):
         from .glossary_skill import detect_search_capability
 
         game_name = self.state.get("game", "")
@@ -2714,12 +3333,9 @@ class TermLibraryDialog(QWidget):
         import copy
         settings = copy.deepcopy(settings)
         if mode == 'full':
-            settings.setdefault('models', {})['glossary_execution_mode'] = execution_mode
-            if execution_mode == 'ai':
-                settings['models'].update(glossary_enrich_names=True, glossary_include_community=False,
-                                          glossary_max_model_calls=1, glossary_enrich_batch_size=28)
+            settings.setdefault('models', {})['glossary_execution_mode'] = 'full'
         capability = detect_search_capability(settings)
-        if not capability["provider_search"] and execution_mode not in {'fast','refresh'}:
+        if mode != 'full' and not capability["provider_search"]:
             self._show_toast(
                 "当前 AI 不支持联网检索（缺少服务端搜索）。"
                 "请在左侧选择 Grok/Antigravity CLI 或百炼；或使用智能建词的本地资料整理。"
@@ -2732,6 +3348,7 @@ class TermLibraryDialog(QWidget):
             settings,
             service_label=service_label,
             model_label=str(capability.get("model") or ""),
+            library_id=self._library_key(game_name),
         )
         if not created:
             # 同游戏+同模式去重：点击直接带用户去看任务，而不是抛一句"已有任务"。
@@ -2741,7 +3358,7 @@ class TermLibraryDialog(QWidget):
             elif task is not None:
                 self._open_task_candidates(task)
             return
-        mode_label = "完整建库（清单式分批）" if mode == "full" else "版本增量更新"
+        mode_label = "AI 完整建库" if mode == "full" else "日常增量更新"
         self._show_toast(tr('「{value0}」{value1}已提交。切到其它词库也能在任务栏看到进度。', value0=game_name, value1=tr(mode_label)))
         self._on_task_structure_changed()
 
@@ -2755,6 +3372,7 @@ class TermLibraryDialog(QWidget):
 
         def on_applied(_game, session):
             added, duplicates = session.get("added", 0), session.get("duplicates", 0)
+            self._notify_library_changed()
             self._mappings_cache.pop(game_name, None)
             self._builtin_entry_cache.pop(game_name, None)
             self.refresh_current_game()

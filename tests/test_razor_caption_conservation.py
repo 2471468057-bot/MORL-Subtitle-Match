@@ -93,7 +93,8 @@ def test_reused_source_and_v2_without_selection_are_distinct_instances():
     assert len(v1.clips)==2  # stale detached graph is not mutated
     assert len(p.video_tracks[0].clips)==3 and len(p.video_tracks[1].clips)==2
     assert signature(p)==before
-    assert [c[1:3] for c in signature(p) if c[0]=='跨切点完整字幕']==[(3000,7000),(23000,27000)]
+    # Reusing video does not manufacture a new independent caption object.
+    assert [c[1:3] for c in signature(p) if c[0]=='跨切点完整字幕']==[(3000,7000)]
 
 @pytest.mark.parametrize('action,expected',[
     ('ripple_start',[('字',0,5),('跨切点完整字幕',0,2500),('切点后字幕',3100,7100),('末尾字幕',8500,13000)]),
@@ -102,4 +103,4 @@ def test_qw_delete_only_expected_range_and_preserve_raw_cues(action,expected):
     p=fixture();raw=copy.deepcopy(p.cues)
     playhead_edit_command(p,action,4500).redo()
     assert [(c.text,c.start_ms,c.end_ms) for c in projected_cues(p)]==expected
-    assert p.cues==raw
+    assert p.studio_state['caption_timeline']['source_archive']==[__import__('dataclasses').asdict(c) for c in raw]

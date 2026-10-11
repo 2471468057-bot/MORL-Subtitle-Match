@@ -35,8 +35,9 @@ class StudioStylePanelMixin:
         section = QFrame()
         section.setObjectName("styleSection")
         outer = QVBoxLayout(section)
-        outer.setContentsMargins(4, 2, 4, 6)
-        outer.setSpacing(4)
+        # Tighter sections (2026-10-09, M16): parameters reach the top sooner.
+        outer.setContentsMargins(4, 6, 4, 8)
+        outer.setSpacing(6)
         header = QToolButton()
         header.setObjectName("styleSectionHeader")
         header.setCheckable(True)
@@ -47,7 +48,7 @@ class StudioStylePanelMixin:
         body = QWidget()
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(5)
+        body_layout.setSpacing(6)
 
         def toggle(visible: bool) -> None:
             header.setArrowType(Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow)
@@ -118,7 +119,7 @@ class StudioStylePanelMixin:
         host = QWidget()
         field_layout = QVBoxLayout(host)
         field_layout.setContentsMargins(0, 0, 0, 0)
-        field_layout.setSpacing(2)
+        field_layout.setSpacing(4)
         caption = QLabel(label)
         caption.setObjectName("styleFieldLabel")
         field_layout.addWidget(caption)

@@ -398,10 +398,10 @@ def test_studio_page_flv_waveform_end_to_end(tmp_path, monkeypatch, flv_file):
         # Decoded audio can run a few tens of ms past the container duration
         # (AAC priming/tail samples); that is real coverage, not corruption.
         assert abs(cache.metadata.coverage_end_ms - 8_000) < 500
-        # The optimized copy must exist and be the decode source of record.
-        print('DBG ready=', dict(isolated._ready), 'errors=', dict(isolated.errors), 'requested=', isolated._requested)
+        # Audio extraction no longer copies the entire recording first.
         optimized = isolated.optimized_target(str(flv_file.resolve()))
-        assert optimized is not None and optimized.suffix == ".mp4"
+        assert optimized is None
+        assert isolated._requested == set()
 
         # A second generation must reuse the completed cache instantly.
         page._waveform_generation += 1

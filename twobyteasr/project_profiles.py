@@ -130,6 +130,14 @@ class ProjectProfile:
         self.llm_enabled = bool(self.llm_enabled)
         self.llm_config_ref = str(self.llm_config_ref or "")
         self.asr_config = normalize_asr_config(self.asr_config)
+        # The ASR snapshot owns the same role fields that Home cards restore.
+        for field_name, key in (('primary_asr', 'primary_asr_backend'),
+                                ('timestamp_model', 'firered_asr_backend'),
+                                ('evidence_model', 'qwen_asr_backend')):
+            if key in self.asr_config:
+                if getattr(self, field_name) and getattr(self, field_name) != self.asr_config[key]:
+                    self.recognition_plan = 'custom'
+                setattr(self, field_name, self.asr_config[key])
         self.llm_config = normalize_llm_config(self.llm_config)
         self.glossary_ids = _unique_strings(self.glossary_ids)
         self.language = str(self.language or "zh")
@@ -272,7 +280,14 @@ class ProjectProfileStore:
 
     def update_asr_config(self, profile_id: str, asr_config: dict[str, Any]) -> ProjectProfile:
         """只更新方案的 ASR 快照（隐式保存路径用），不动其他字段语义。"""
-        return self.update(profile_id, asr_config=normalize_asr_config(asr_config))
+        previous = self.get(profile_id)
+        if previous is None:
+            raise KeyError(profile_id)
+        snapshot = normalize_asr_config(asr_config)
+        changed = any(value != previous.asr_config.get(key)
+                      for key, value in snapshot.items() if key != 'speaker_source')
+        return self.update(profile_id, asr_config=snapshot,
+                           recognition_plan='custom' if changed else previous.recognition_plan)
 
     def save_as(self, source_id: str, name: str, **overrides: Any) -> ProjectProfile:
         source = self.get(source_id)

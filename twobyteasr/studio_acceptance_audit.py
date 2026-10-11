@@ -35,14 +35,147 @@ def audit_directory() -> Path | None:
     project = Path(os.environ.get('TWOBYTEASR_STARTUP_PROJECT', '')).resolve()
     if not project.is_file() or not project.is_relative_to(output):
         raise ValueError('Acceptance requires its own copied project')
+    profile_value=os.environ.get('TWOBYTEASR_ACCEPTANCE_PROFILE_DIR','')
+    if profile_value:
+        profile=Path(profile_value).resolve()
+        if (os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')!='unified-studio'
+                or not profile.is_relative_to(audit_tmp_root()) or not output.is_relative_to(profile)
+                or Path(os.environ.get('TWOBYTEASR_TEST_ROOT','')).resolve()!=profile):
+            raise ValueError('Acceptance requires its explicit owned unified tmp profile')
+        for key,leaf in (('LOCALAPPDATA','local'),('APPDATA','roaming')):
+            if Path(os.environ.get(key,'')).resolve()!=profile/leaf:
+                raise ValueError('Acceptance profile app data must match isolated paths exactly')
+        return output
     for key in ('LOCALAPPDATA', 'APPDATA'):
         if not Path(os.environ.get(key, '')).resolve().is_relative_to(output):
             raise ValueError('Acceptance requires isolated app data')
     return output
 
 def isolate_acceptance_settings() -> None:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'seven-issues':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'timeline-sync':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'razor-word-split':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'user-feedback-editor':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'workshop-daily':
+        output = audit_directory()
+        if output is not None:
+            from PySide6.QtCore import QSettings
+            # Keep UI preferences in the owned profile. Stable registered
+            # runtimes/models are allowed without TEST_ROOT's tmp-only filter.
+            QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+            QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(output/'qt-settings'))
+            QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.SystemScope, str(output/'qt-system'))
+            from .blank_project_audit import install_offline_guards
+            install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'unified-studio':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'moss-full-context':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    scenario=os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')
+    if scenario in {'real-glossary-repair','real-glossary-repair-live'}:
+        output=audit_directory()
+        if output is not None:
+            from .real_glossary_repair_audit import install
+            install(output)
+        return
+    if scenario in {'toolbar-scope','storage-media-relink','real-storage-after'}:
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-input','glossary-input-restore'}:
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'storage-settings':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'storage-media':
+        from .media_storage_audit import install_offline_guards
+        install_offline_guards()
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'recognition-correctness':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'five-fix-ui', 'persisted-layout', 'export-target-real'}:
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
     output = audit_directory()
     if output is None: return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-live-home', 'perf-recognition'}:
+        from .glossary_live_resources import install
+        install(output)
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'glossary-live-recheck':
+        from .glossary_live_recheck_audit import install
+        install(output)
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'glossary-review-live':
+        from .glossary_review_live_guard import install
+        install(output)
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'completion-real':
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'login-json-production':
+        # Only the normal Studio review button spends the live test budget.
+        from .ui import EndpointEditor
+        from .studio_ai_flow import StudioAIFlowMixin
+        EndpointEditor._queue_model_discovery=lambda *a:None
+        StudioAIFlowMixin._start_ai_provider_probe=lambda *a,**kw:None
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'full-library-real':
+        from .ui import EndpointEditor
+        from .studio_ai_flow import StudioAIFlowMixin
+        EndpointEditor._queue_model_discovery=lambda *a:None
+        StudioAIFlowMixin._start_ai_provider_probe=lambda *a,**kw:None
+        from . import llm_config
+        source=Path(os.environ['TWOBYTEASR_ACCEPTANCE_CREDENTIAL_SOURCE']).resolve()
+        operator=Path(os.environ['TWOBYTEASR_ACCEPTANCE_OPERATOR_PROFILE']).resolve()
+        if source!=(operator/'AppData/Local/2ByteASR/secrets.dat').resolve():
+            raise ValueError('Real full-build audit only reads the existing application credential store')
+        reader=llm_config._read_secrets
+        llm_config._read_secrets=lambda:reader(read_only_path=source)
+        from .provider_service import ProviderService
+        submit=ProviderService.submit
+        approved_store=json.loads((output/'local/2ByteASR/learned_game_terms.json').read_text('utf8'))
+        approved_names={str(row['to']) for row in approved_store['games']['瓦罗兰特']['mappings']}
+        request_count=[0]
+        def approved_build_submit(service, settings, stage, messages, **kwargs):
+            if kwargs.get('_adapter_stage')!='glossary_update' or request_count[0]>=2:
+                raise RuntimeError('Only two approved full-library model requests are authorized')
+            endpoint=llm_config.endpoint_from_settings(settings,'polish')
+            if endpoint.get('base_url')!='https://api.deepseek.com/v1' or endpoint.get('provider')!='deepseek':
+                raise RuntimeError('Only the approved official DeepSeek destination is authorized')
+            users=[json.loads(row['content']) for row in messages if row.get('role')=='user']
+            for body in users:
+                if set(body)!={'game','documents','existing_terms','collected_terms','phase'} or body['game']!='瓦罗兰特':
+                    raise RuntimeError('Unapproved private/project payload blocked')
+                if not set(body['existing_terms']).issubset(approved_names):
+                    raise RuntimeError('Unapproved existing terms blocked')
+                for document in body['documents']:
+                    from .smart_glossary import is_safe_web_url
+                    if not document['url'].startswith('https://') or not is_safe_web_url(document['url'])[0]:
+                        raise RuntimeError('Only actual public source documents are authorized')
+            request_count[0]+=1
+            (output/f'approved-model-input-{request_count[0]}.json').write_text(json.dumps(messages,ensure_ascii=False,indent=2),'utf8')
+            return submit(service,settings,stage,messages,**kwargs)
+        ProviderService.submit=approved_build_submit
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'project-entity-confirmation', 'external-project-entry', 'blank-project', 'terminology-effective', 'terminology-restore', 'real-correction-copy', 'full-library-replay', 'glossary-manual-case', 'glossary-manual-case-restore', 'glossary-chain', 'glossary-chain-restore', 'glossary-chain-apply', 'glossary-review-real', 'overlap-review-real'}:
+        from .blank_project_audit import install_offline_guards
+        install_offline_guards()
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'macos-desktop', 'home-release-flow'}:
         from .ui import EndpointEditor
         from .studio_ai_flow import StudioAIFlowMixin
@@ -59,7 +192,7 @@ def isolate_acceptance_settings() -> None:
         def deny_cue_audit_provider(*a, **kw):
             raise RuntimeError('No provider calls authorized in cue/affix acceptance')
         ProviderService.submit=deny_cue_audit_provider
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'moss-cue-paging','config-audio-fidelity','installer-model-qa','artifact-speaker','nemotron-workshop','glossary-execution','glossary-layout'}:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'moss-cue-paging','config-audio-fidelity','installer-model-qa','glossary-execution','glossary-layout'}:
         from .ui import EndpointEditor
         from .studio_ai_flow import StudioAIFlowMixin
         from .provider_service import ProviderService
@@ -81,13 +214,13 @@ def isolate_acceptance_settings() -> None:
     phase=os.environ.get('TWOBYTEASR_NORMAL_AI_PHASE','audit')
     _audit_fault_stream=(output/(phase+'-native-fault.log')).open('w',encoding='utf8')
     faulthandler.enable(file=_audit_fault_stream,all_threads=True)
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'release-blockers','workflow-fixes','workflow-sustained-audio','workflow-glossary-selection'}:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'primary-native-home','audio-output-workflow','independent-caption-workflow','selection-transitions-workflow','release-blockers','workflow-fixes','workflow-sustained-audio','workflow-glossary-selection'}:
         from .ui import EndpointEditor
         EndpointEditor._queue_model_discovery = lambda *a: None
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')=='single-track-recognition':
         from .studio_ai_flow import StudioAIFlowMixin
         StudioAIFlowMixin._start_ai_provider_probe=lambda *args,**kwargs:None
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'cue-affix-checks','moss-cue-paging','multisource','workflow-glossary-selection','workflow-sustained-audio','workflow-fixes','release-blockers','timeline-delivery', 'export-sync', 'gradient-word','cut-range-frame','cover-editor','cover-workflow','cover-gimp','cover-frame','workshop-playhead'}:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'primary-native-home','audio-output-workflow','independent-caption-workflow','selection-transitions-workflow','cue-affix-checks','moss-cue-paging','multisource','workflow-glossary-selection','workflow-sustained-audio','workflow-fixes','release-blockers','timeline-delivery', 'export-sync', 'gradient-word','cut-range-frame','cover-editor','cover-workflow','cover-gimp','cover-frame','workshop-playhead'}:
         from .studio_ai_flow import StudioAIFlowMixin
         StudioAIFlowMixin._start_ai_provider_probe=lambda *args,**kwargs:None
         import socket
@@ -127,7 +260,7 @@ def isolate_acceptance_settings() -> None:
         # budget through an automatic readiness probe.
         from .studio_ai_flow import StudioAIFlowMixin
         StudioAIFlowMixin._start_ai_provider_probe=lambda *args,**kwargs:None
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'artifact-speaker','speaker-workflow', 'caption-runtime', 'p62-regression','selection-geometry','caption-boundary','user-failures','support-entry','gpl-migration'}:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'speaker-workflow', 'caption-runtime', 'p62-regression','selection-geometry','caption-boundary','user-failures','support-entry','gpl-migration'}:
         import socket
         connect = socket.socket.connect
         def local_only(sock, address):
@@ -149,10 +282,11 @@ def isolate_acceptance_settings() -> None:
     settings.stable_settings_root = lambda: output/'config'
     from . import studio_project
     preferences=output/'studio-settings.json'
-    preferences.write_text(json.dumps({'recent_projects': [], 'project_root': str(output/'projects'),
-        'studio_preferences': {'autosave_enabled': False,
-            'auto_cover': os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'workflow-fixes',
-            'recovery_policy': 'official'}}))
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') != 'external-project-entry' or not preferences.is_file():
+        preferences.write_text(json.dumps({'recent_projects': [], 'project_root': str(output/'projects'),
+            'studio_preferences': {'autosave_enabled': False,
+                'auto_cover': os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'workflow-fixes',
+                'recovery_policy': 'official'}}))
     studio_project.studio_settings_path=lambda *a:preferences
     studio_project.project_library_root=lambda *a:output/'projects'
     if os.environ.get('TWOBYTEASR_READINESS_VISUAL')=='1':
@@ -174,6 +308,191 @@ def isolate_acceptance_settings() -> None:
         StudioReadiness.mark,StudioReadiness.fail=mark,fail
 
 def start_acceptance(window) -> None:
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'update-flow':
+        from .update_flow_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'perf-regression':
+        from .perf_regression_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'perf-recognition':
+        from .perf_recognition_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'seven-issues':
+        from .studio_seven_issues_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'razor-word-split':
+        from .razor_split_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'timeline-sync':
+        from .timeline_sync_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'user-feedback-editor':
+        from .user_feedback_editor_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'workshop-daily':
+        from .unified_studio_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'unified-studio':
+        from .unified_studio_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'moss-full-context':
+        from .moss_progress_ui_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    scenario=os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')
+    if scenario in {'real-glossary-repair','real-glossary-repair-live','toolbar-scope','storage-media-relink','real-storage-after'}:
+        output=audit_directory()
+        if output is not None:
+            if scenario == 'toolbar-scope':
+                from .toolbar_scope_audit import start
+            elif scenario == 'storage-media-relink':
+                from .storage_media_relink_audit import start
+            elif scenario == 'real-storage-after':
+                from .real_storage_after_audit import start
+            else:
+                from .real_glossary_repair_audit import start
+            start(window,output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-input','glossary-input-restore'}:
+        from .glossary_input_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'storage-settings':
+        from .storage_settings_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'storage-media':
+        from .media_storage_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'recognition-correctness':
+        from .recognition_correctness_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'export-target-real':
+        from .export_target_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'project-entity-confirmation':
+        from .project_entity_confirmation_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'five-fix-ui':
+        from .five_fix_ui_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'persisted-layout':
+        from .persisted_layout_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'login-json-production':
+        from .login_json_production_audit import start
+        output = audit_directory()
+        if output is not None:
+            start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'external-project-entry':
+        from .external_project_entry_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'overlap-review-real':
+        from .overlap_review_real_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-review-real', 'glossary-review-live'}:
+        from .glossary_review_real_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'completion-real':
+        from .completion_real_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-manual-case', 'glossary-manual-case-restore'}:
+        from .glossary_manual_case_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'full-library-replay':
+        from .full_library_replay_audit import start
+        output=audit_directory()
+        if output is not None:start(window,output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'real-correction-copy':
+        from .real_correction_copy_audit import start
+        output=audit_directory()
+        if output is not None:start(window,output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'full-library-real':
+        from .full_library_flow_audit import start
+        output=audit_directory()
+        if output is not None:start(window,output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'terminology-restore':
+        from .terminology_effective_studio_audit import start_restore
+        output = audit_directory()
+        if output is not None: start_restore(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'terminology-effective':
+        from .terminology_effective_studio_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in {'glossary-chain', 'glossary-chain-restore'}:
+        from .glossary_chain_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'glossary-live-home':
+        from .glossary_live_home_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'glossary-live-recheck':
+        from .glossary_live_recheck_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'glossary-chain-apply':
+        from .glossary_chain_apply_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'blank-project':
+        from .blank_project_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'macos-desktop':
         from .macos_desktop_audit import start
         output=audit_directory()
@@ -229,6 +548,17 @@ def start_acceptance(window) -> None:
         if output is not None:
             start(window, output)
         return
+    scenario = os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')
+    if scenario in {'primary-native-home', 'audio-output-workflow', 'independent-caption-workflow', 'selection-transitions-workflow'}:
+        from importlib import import_module
+        modules = {'primary-native-home': 'primary_native_home_audit',
+                   'audio-output-workflow': 'audio_output_workflow_audit',
+                   'independent-caption-workflow': 'independent_caption_workflow_audit',
+                   'selection-transitions-workflow': 'selection_transitions_workflow_audit'}
+        output = audit_directory()
+        if output is not None:
+            import_module('.' + modules[scenario], __package__).start(window, output)
+        return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'multisource':
         from .studio_multisource_audit import start
         output = audit_directory()
@@ -247,14 +577,8 @@ def start_acceptance(window) -> None:
         return
     output = audit_directory()
     if output is None: return
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')=='artifact-speaker':
-        from .artifact_speaker_audit import start
-        start(window,output);return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')=='glossary-layout':
         from .glossary_layout_audit import start
-        start(window,output);return
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')=='nemotron-workshop':
-        from .nemotron_workshop_audit import start
         start(window,output);return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO')=='glossary-execution':
         from .glossary_execution_audit import start
@@ -286,6 +610,26 @@ def start_acceptance(window) -> None:
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'workshop-playhead':
         from .workshop_playhead_audit import start
         start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'compact-overlap':
+        from .compact_overlap_audit import start
+        start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'window-proofread':
+        from .window_proofread_audit import start
+        start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'proofread-workspace':
+        from .proofread_workspace_audit import start
+        start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'proofread-open':
+        from .proofread_open_audit import start
+        start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'cover-edit-performance':
+        from .cover_edit_performance_audit import start
+        start(window,output)
         return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'cover-frame':
         from .cover_frame_audit import start
@@ -555,8 +899,6 @@ def start_acceptance(window) -> None:
                 capture_launch_transition()
             def capture_launch_transition():
                 window._switch_page(1)
-                from .ui_motion import recognition_launch_cue
-                recognition_launch_cue(window.pages.currentWidget())
                 def capture_launch():
                     window.grab().save(str(output/'launch-transition.png'))
                     window._return_to_settings()

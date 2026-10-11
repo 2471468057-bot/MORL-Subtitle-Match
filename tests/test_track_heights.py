@@ -35,14 +35,44 @@ def timeline(app):
 
 def test_default_heights_unchanged(timeline):
     assert timeline._video_track_height() == 58
-    assert timeline._audio_track_height() == 36
+    assert timeline.AUDIO_TRACK_HEIGHT == 36
     assert timeline._speaker_track_height() in (52, 68, 84, 96)
+
+
+def test_spare_height_grows_waveform_then_subtitles_and_stays_below(app):
+    """2026-10-09 (M16): lanes start right under the ruler; spare height
+    first makes the waveform easier to read (36 → 72), then steps the
+    subtitle lanes up; what is left stays below the last lane."""
+    from twobyteasr.studio_timeline import WaveformTimeline
+
+    widget = WaveformTimeline()
+    try:
+        widget.resize(1600, widget.minimumHeight())
+        assert widget._audio_track_height() <= widget.AUDIO_TRACK_HEIGHT + 2  # almost no spare: base height
+        widget.resize(1600, 900)
+        assert widget._audio_track_height() == widget.AUDIO_TRACK_AUTO_MAX
+        assert widget._speaker_track_height() == 96
+        video = widget._video_track_rects()["V1"]
+        audio = widget._audio_track_rects()["A1"]
+        stack_bottom = audio.bottom()
+        assert widget._track_viewport().top() == widget.RULER_HEIGHT  # top-anchored
+        assert stack_bottom < widget._canvas_bottom() - 100  # spare stays below
+        assert audio.top() == pytest.approx(video.bottom())
+        # The widget minimum never follows the grown (auto) heights.
+        widget._sync_track_minimum_height()
+        minimum = widget.minimumHeight()
+        widget.resize(1600, 1400)
+        widget._sync_track_minimum_height()
+        assert widget.minimumHeight() == minimum
+    finally:
+        widget.close()
 
 
 def test_heights_independent_and_clamped(timeline):
     timeline.set_track_height("video", 120)
     assert timeline._video_track_rects()["V1"].height() == 120
-    assert timeline._audio_track_rects()["A1"].height() == 36  # 音频不联动
+    assert "audio" not in timeline.track_heights()  # 音频不联动（仍为自动高度）
+    assert timeline._audio_track_rects()["A1"].height() == timeline._auto_track_heights()[1]
     timeline.set_track_height("audio", 90)
     assert timeline._audio_track_rects()["A1"].height() == 90
     assert timeline._video_track_rects()["V1"].height() == 120  # 视频不联动
@@ -92,9 +122,9 @@ def test_boundary_drag_resizes_track_live(timeline):
     assert timeline._track_resize_boundary_at(QPoint(100, bottom)) is None
     timeline.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 800, bottom))
     assert timeline._track_resize_drag is not None
-    timeline.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 800, bottom - 44))
-    assert timeline._video_track_height() == 58 + 44  # 上拖=调高，实时反馈
-    timeline.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 800, bottom - 44))
+    timeline.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 800, bottom + 44))
+    assert timeline._video_track_height() == 58 + 44  # 下边下拖=调高（轨道自上而下排列），实时反馈
+    timeline.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 800, bottom + 44))
     assert timeline._track_resize_drag is None
     assert timeline._video_track_rects()["V1"].height() == 102
 
@@ -120,7 +150,7 @@ def test_double_click_on_boundary_resets_kind(timeline):
     audio_bottom = round(next(iter(timeline._audio_track_rects().values())).bottom())
     strip_x = timeline.width() - timeline._track_height_strip_width() // 2
     timeline.mouseDoubleClickEvent(_mouse(QEvent.Type.MouseButtonDblClick, strip_x, audio_bottom))
-    assert timeline._audio_track_height() == 36
+    assert "audio" not in timeline.track_heights()  # 恢复为自动高度
 
 
 def test_grips_paint_low_contrast_and_emphasized(timeline):

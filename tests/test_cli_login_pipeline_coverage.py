@@ -156,7 +156,7 @@ def test_domain_terms_unsupported_search_does_not_send_request(monkeypatch):
     monkeypatch.setattr(ai_providers,'provider_for_stage',lambda *a,**k:provider)
     result=domain_terms_module.discover_global_domain_term_mappings(
         [_segment(1,'听桥的声音')],'测试游戏',[],[],[{'term':'听潮'}])
-    assert result.status=='failed' and not provider.calls
+    assert result.status=='unsupported' and not result.failures and not provider.calls
 
 
 def test_domain_terms_http_without_search_cannot_claim_official_verification(monkeypatch):
@@ -186,7 +186,7 @@ def test_domain_terms_http_without_search_cannot_claim_official_verification(mon
     result=domain_terms_module.discover_global_domain_term_mappings(
         [_segment(1, "听桥的声音")], "测试游戏", [], [], [{"term": "听潮"}]
     )
-    assert http_calls==[] and result.status=='failed'
+    assert http_calls==[] and result.status=='unsupported' and not result.failures
 
 
 # ------------------------------------------------- 断句二轮校验（只移竖线）

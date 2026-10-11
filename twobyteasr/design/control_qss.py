@@ -37,6 +37,8 @@ def build_control_qss(theme: ThemeDefinition) -> str:
     disabled = theme.disabled
     accent = theme.accent
     accent_soft = theme.accent_soft
+    ring = theme.focus
+    border_hover = theme.border_strong if theme.key == 'warm' else theme.text_muted
     assets = Path(__file__).resolve().parents[2] / 'assets' / 'controls'
     foreground = 'dark' if theme.key == 'warm' else 'light'
     on_accent = 'light' if theme.key in {'warm', 'grape'} else 'dark'
@@ -45,7 +47,9 @@ def build_control_qss(theme: ThemeDefinition) -> str:
     check = (assets / f'check-{on_accent}.svg').as_posix()
     dot = (assets / f'dot-{on_accent}.svg').as_posix()
     return f"""
-/* P9A control system — SURFACE_3 sits above panel/card. */
+/* P9A control system — SURFACE_3 sits above panel/card. 2026-10-07: inputs
+   change border (not fill) on hover; keyboard focus uses the info ring;
+   selection is a neutral lift, never a brand/status wash. */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractSpinBox {{
     background: {bg3};
     color: {text};
@@ -68,12 +72,11 @@ QPlainTextEdit, QTextEdit {{
 }}
 QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover,
 QAbstractSpinBox:hover, QPlainTextEdit:hover, QTextEdit:hover {{
-    border-color: {focus};
-    background: {hover};
+    border-color: {border_hover};
 }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
 QAbstractSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
-    border: 1px solid {focus};
+    border: 1px solid {ring};
     background: {bg3};
 }}
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled,
@@ -97,7 +100,7 @@ QComboBox QAbstractItemView, QComboBox QListView, QComboBox QTreeView {{
     color: {text};
     border: 1px solid {border_d};
     outline: 0;
-    selection-background-color: {accent_soft};
+    selection-background-color: {hover};
     selection-color: {text};
 }}
 QComboBox QAbstractItemView::item, QComboBox QListView::item {{
@@ -111,7 +114,7 @@ QComboBox QAbstractItemView::item:hover, QComboBox QListView::item:hover {{
     color: {text};
 }}
 QComboBox QAbstractItemView::item:selected, QComboBox QListView::item:selected {{
-    background: {accent_soft};
+    background: {hover};
     color: {text};
 }}
 QAbstractItemView, QListView, QTreeView, QListWidget, QTreeWidget {{
@@ -119,7 +122,7 @@ QAbstractItemView, QListView, QTreeView, QListWidget, QTreeWidget {{
     color: {text};
     border: 1px solid {border};
     outline: 0;
-    selection-background-color: {accent_soft};
+    selection-background-color: {hover};
     selection-color: {text};
     alternate-background-color: {bg1};
 }}
@@ -130,7 +133,7 @@ QListWidget::item:hover, QTreeWidget::item:hover {{
 }}
 QAbstractItemView::item:selected, QListView::item:selected, QTreeView::item:selected,
 QListWidget::item:selected, QTreeWidget::item:selected {{
-    background: {accent_soft};
+    background: {hover};
     color: {text};
 }}
 QHeaderView::section {{
@@ -138,24 +141,27 @@ QHeaderView::section {{
     color: {muted};
     border: 0;
     border-bottom: 1px solid {border};
-    padding: 8px 4px;
-    font-weight: 600;
+    padding: 8px 6px;
+    font-size: 12px;
+    font-weight: 500;
 }}
 QMenu {{
     background: {popup};
     color: {text};
     border: 1px solid {border_d};
-    padding: 4px;
+    border-radius: {RADIUS_SCALE['control']}px;
+    padding: 5px;
     font-family: {UI_FONT_STACK}; font-size: 13px; font-weight: 500;
 }}
 QMenu::item {{
     background: transparent;
     color: {text};
-    padding: 6px 12px;
+    padding: 6px 24px 6px 12px;
     min-height: 24px;
+    border-radius: 6px;
 }}
 QMenu::item:selected {{
-    background: {accent_soft};
+    background: {hover};
     color: {text};
 }}
 QMenu::item:disabled {{
@@ -171,7 +177,8 @@ QToolTip {{
     background: {popup};
     color: {text};
     border: 1px solid {border_d};
-    padding: 4px 8px;
+    padding: 6px 10px;
+    font-family: {UI_FONT_STACK}; font-size: 12px; font-weight: 500;
 }}
 QDialog, QMessageBox {{
     background: {modal};
@@ -187,12 +194,13 @@ QScrollBar:vertical {{
     border: 0;
 }}
 QScrollBar::handle:vertical {{
-    background: {border};
-    min-height: 24px;
-    border-radius: 4px;
+    background: {border_d};
+    min-height: 28px;
+    border-radius: 3px;
+    margin: 2px 1px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: {border_d};
+    background: {muted};
 }}
 QScrollBar:horizontal {{
     background: transparent;
@@ -201,12 +209,13 @@ QScrollBar:horizontal {{
     border: 0;
 }}
 QScrollBar::handle:horizontal {{
-    background: {border};
-    min-width: 24px;
-    border-radius: 4px;
+    background: {border_d};
+    min-width: 28px;
+    border-radius: 3px;
+    margin: 1px 2px;
 }}
 QScrollBar::handle:horizontal:hover {{
-    background: {border_d};
+    background: {muted};
 }}
 QScrollBar::add-line, QScrollBar::sub-line {{
     width: 0;
@@ -230,7 +239,7 @@ QToolButton#studioTool:hover {{
     border-color: {border};
 }}
 QToolButton#studioTool:checked, QToolButton#studioTool:pressed {{
-    background: {pressed};
+    background: {theme.accent_tint};
     border-color: {accent};
 }}
 QTabWidget#contextDrawer QTabBar::tab {{
@@ -247,10 +256,28 @@ QTabWidget#contextDrawer QTabBar::tab:hover {{
 }}
 QTabWidget#contextDrawer QTabBar::tab:selected {{
     color: {text};
-    font-weight: 700;
-    background: {pressed};
+    font-weight: 600;
+    background: transparent;
     border-bottom: 2px solid {accent};
 }}
+QTabWidget::pane {{
+    background: {bg2};
+    border: 1px solid {border};
+    border-radius: {RADIUS_SCALE['control']}px;
+    top: -1px;
+}}
+QTabBar::tab {{
+    background: transparent;
+    color: {theme.text_secondary};
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: 7px 14px;
+    margin-right: 2px;
+    font-family: {UI_FONT_STACK}; font-size: 13px; font-weight: 500;
+}}
+QTabBar::tab:hover {{ color: {text}; background: {hover}; }}
+QTabBar::tab:selected {{ color: {text}; border-bottom: 2px solid {accent}; font-weight: 600; }}
+QTabBar::tab:disabled {{ color: {disabled}; }}
 QCheckBox, QRadioButton {{
     color: {text};
     spacing: 8px;
@@ -263,7 +290,7 @@ QCheckBox::indicator, QRadioButton::indicator {{
     border: 1px solid {border_d};
 }}
 QCheckBox::indicator {{
-    border-radius: 3px;
+    border-radius: 4px;
 }}
 QRadioButton::indicator {{
     border-radius: 8px;
@@ -293,36 +320,58 @@ QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
     background: {bg1};
     border-color: {border};
 }}
+/* Check boxes inside list rows share the same indicator as QCheckBox. */
+QListView::indicator, QListWidget::indicator, QTreeView::indicator, QTableView::indicator {{
+    width: 16px; height: 16px; border-radius: 4px;
+    background: {bg3}; border: 1px solid {border_d};
+}}
+QListView::indicator:hover, QListWidget::indicator:hover, QTreeView::indicator:hover,
+QTableView::indicator:hover {{ border-color: {border_hover}; }}
+QListView::indicator:checked, QListWidget::indicator:checked, QTreeView::indicator:checked,
+QTableView::indicator:checked {{ background: {accent}; border-color: {accent}; image: url({check}); }}
 """ + build_button_qss(theme)
 
 
 def build_button_qss(t) -> str:
-    """All variants and legacy semantic names share one state specification."""
+    """All variants and legacy semantic names share one state specification.
+
+    Weight rule (2026-10-07): primary 600, every other role 500. The bundled
+    UI face is Medium; 600 is the single synthetic emphasis and Heavy is
+    reserved for display titles, so buttons never mix three "bold" looks.
+    """
+    from ..ui_theme import blend_hex
     sheet = []
+    # Danger stays findable but quiet at rest: half-strength outline, full
+    # colour and a soft wash only on hover/press.
+    danger_rest = blend_hex(t.surface, t.danger, 0.55)
     variants = {
         "primary": (t.accent, t.text_on_accent, t.accent, t.accent_hover, t.accent_pressed),
-        "secondary": (t.surface_elevated, t.text, t.border, t.selected, t.accent_soft),
-        "ghost": ("transparent", t.text_secondary, "transparent", t.selected, t.accent_soft),
-        "danger": (t.danger_soft, t.danger, t.danger, t.danger_soft, t.selected),
-        "icon": ("transparent", t.text, "transparent", t.selected, t.accent_soft),
-        "toolbar": ("transparent", t.text_secondary, "transparent", t.selected, t.accent_soft),
-        "toggle": ("transparent", t.text_secondary, "transparent", t.selected, t.accent_soft),
+        "secondary": (t.surface_elevated, t.text, t.border_strong, t.selected, t.border),
+        "ghost": ("transparent", t.text_secondary, "transparent", t.selected, t.border),
+        "danger": ("transparent", t.danger, danger_rest, t.danger_soft, t.danger_soft),
+        "icon": ("transparent", t.text, "transparent", t.selected, t.border),
+        "toolbar": ("transparent", t.text_secondary, "transparent", t.selected, t.border),
+        "toggle": ("transparent", t.text_secondary, "transparent", t.selected, t.border),
     }
+    hover_border = {"primary": t.accent_hover, "danger": t.danger, "secondary": t.text_muted}
     # Plain Qt buttons inherit the secondary rule; variants follow it.
-    sheet.append(f"QPushButton {{ background: {t.surface_elevated}; color: {t.text}; border: 1px solid {t.border}; border-radius: 8px; min-height: 28px; padding: 0 12px; font-size: 13px; font-weight: 500; }}")
+    sheet.append(f"QPushButton {{ background: {t.surface_elevated}; color: {t.text}; border: 1px solid {t.border_strong}; border-radius: 8px; min-height: 28px; padding: 0 12px; font-size: 13px; font-weight: 500; }}")
     for role, (bg, fg, border, hover, pressed) in variants.items():
         selectors=[f'{kind}[buttonRole="{role}"]' for kind in ('QPushButton','QToolButton')]
         selectors += [f'{kind}#{name}' for name in BUTTON_ALIASES.get(role,()) for kind in ('QPushButton','QToolButton')]
         def rules(state, values):
             sheet.append(', '.join(s+state for s in selectors)+' { '+values+' }')
         padding = '0 4px' if role in {'icon','toolbar','toggle'} else '0 12px'
-        weight = WEIGHT_SCALE['bold' if role == 'primary' else 'semibold' if role == 'danger' else 'medium']
+        weight = WEIGHT_SCALE['semibold' if role == 'primary' else 'medium']
+        active_fg = t.text if role in {'ghost', 'toolbar', 'toggle'} else fg
         rules('',f'background: {bg}; color: {fg}; border: 1px solid {border}; border-radius: 8px; min-height: 28px; padding: {padding}; font-size: {14 if role == "primary" else 13}px; font-weight: {weight};')
-        rules(':hover',f'background: {hover}; color: {fg}; border-color: {t.accent if role == "primary" else t.border_strong};')
-        rules(':pressed',f'background: {pressed}; color: {fg}; border-color: {t.accent};')
-        rules(':checked',f'background: {pressed}; color: {fg if role == "primary" else t.text}; border-color: {t.accent};')
-        rules(':focus',f'border-color: {t.focus};')
-        rules(':disabled',f'background: {t.panel}; color: {t.disabled}; border-color: {t.border};')
+        rules(':hover',f'background: {hover}; color: {active_fg}; border-color: {hover_border.get(role, "transparent")};')
+        rules(':pressed',f'background: {pressed}; color: {active_fg}; border-color: {t.accent_pressed if role == "primary" else hover_border.get(role, "transparent")};')
+        rules(':checked',f'background: {t.accent_pressed if role == "primary" else t.accent_tint}; color: {fg if role == "primary" else t.text}; border-color: {t.accent};')
+        # Keyboard focus: info ring; on the berry primary a light brand ring
+        # reads as focus without clashing with the fill.
+        rules(':focus',f'border-color: {t.accent_text if role == "primary" else t.focus};')
+        rules(':disabled',f'background: {t.panel if role in {"primary", "secondary"} else "transparent"}; color: {t.disabled}; border-color: {t.border if role in {"primary", "secondary", "danger"} else "transparent"};')
         # A lone [controlSize] selector loses to legacy #primary/#studioTool
         # rules. Qualify the same selectors so explicit sizes actually win.
         for size, (height, font_size, horizontal_padding) in BUTTON_SIZES.items():

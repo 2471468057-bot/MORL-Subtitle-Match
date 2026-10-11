@@ -38,11 +38,13 @@ def test_flash_nested_envelope_keeps_outer_cumulative_text():
     assert state.result(5)['text']=='前一句。后一句。'
 
 
-def test_protocol_deadline_and_unsupported_native_fail_before_dispatch(tmp_path):
+def test_protocol_deadline_and_non_diarizing_primary_remains_valid(tmp_path):
     from twobyteasr.cloud_asr_jobs import transcribe_chunks,worker_timeout
-    with pytest.raises(ASRProtocolError,match='没有供应商原生'):
-        transcribe_chunks(np.zeros(16000),dict(model=MODEL,speaker_source='native'),tmp_path,
-            caller=lambda *a,**kw:pytest.fail('unsupported native must not upload'))
+    from twobyteasr.cloud_asr_jobs import validate_speaker_strategy
+    # Choosing a non-diarizing primary remains valid; no independent model is
+    # selected and genuine native labels returned by any provider are retained.
+    endpoint=dict(model=MODEL,speaker_source='native')
+    assert validate_speaker_strategy(endpoint) is endpoint
     assert worker_timeout(MODEL,7200*16000)>7200
     assert worker_timeout(FILETRANS,16000)>7200
 
@@ -145,7 +147,7 @@ def test_filetrans_resume_same_remote_task_and_word_speaker_precedence(tmp_path)
     class Client:
         @staticmethod
         def post(url,**kw):
-            calls.append(('post',url));assert kw['json']['parameters']=={'diarization_enabled':True}
+            calls.append(('post',url));assert kw['json']['parameters']=={'channel_id':[0],'diarization_enabled':True}
             return Response({'output':{'task_id':'id1','task_status':'PENDING'}})
         @staticmethod
         def get(url,**kw):
@@ -161,6 +163,7 @@ def test_filetrans_resume_same_remote_task_and_word_speaker_precedence(tmp_path)
     rows=filetrans(audio,endpoint,tmp_path,storage,client=Client)
     assert len([c for c in calls if c[0]=='post'])==1 and storage.uploads==1 and storage.deletes==1
     assert rows[0]['speaker']=='API_S02' and rows[0]['tokens'][0]['end']==.9
+    assert rows[0]['timestamp_source']=='qwen31_native_word' and rows[0]['native_timing_owner']
     disk=''.join(p.read_text('utf8') for p in tmp_path.rglob('*.json'))
     assert '?sig=' not in disk and 'secret=signature' not in disk and 'Bearer' not in disk
 
@@ -200,14 +203,100 @@ def test_owned_worker_uses_frozen_settings_and_endpoint(monkeypatch,tmp_path):
     from twobyteasr import asr_api_process,asr
     from twobyteasr.runtime import RuntimeContext,activate_runtime_context
     captured=[]
-    endpoint=dict(model=FLASH,provider='qwen31_flash',protocol='dashscope_asr_flash',url='https://example.com',api_key='private')
+    endpoint=dict(model=FILETRANS,provider='qwen31_filetrans',protocol='dashscope_filetrans',url='https://example.com',api_key='private')
     context=RuntimeContext(asr_endpoint_snapshot=endpoint,asr_settings_snapshot={'models':{'oss_bucket':'frozen-bucket'}},speaker_source='native')
     monkeypatch.setattr(asr,'_legacy_runtime_value',lambda *a:{'models':{'oss_bucket':'changed-bucket'}})
     monkeypatch.setattr(asr,'build_qwen_asr_context',lambda *a:'')
+    monkeypatch.setattr('twobyteasr.terminology.runtime_snapshot',lambda:SimpleNamespace(canonical_terms=['S0pp']))
+    monkeypatch.setattr('twobyteasr.llm_config.read_oss_credentials',lambda:('frozen-id','frozen-secret'))
     monkeypatch.setattr('twobyteasr.runtime_registry.resolve_runtime_python',lambda *a:'python')
     def run(*a,**kw):captured.append(json.loads(kw['input_text']));return {'results':[]}
     monkeypatch.setattr(asr,'_run_isolated_asr_worker',run)
     with activate_runtime_context(context):
         asr_api_process.transcribe('fixture.wav',[dict(start=0,end=1,audio=(np.zeros(16000),16000))])
     assert captured[0]['settings']['models']['oss_bucket']=='frozen-bucket'
-    assert captured[0]['endpoint']['model']==FLASH
+    assert captured[0]['endpoint']['model']==FILETRANS
+    assert captured[0]['storage_credentials']==['frozen-id','frozen-secret']
+    assert captured[0]['endpoint']['vocabulary']=={'S0pp':2}
+
+
+def test_filetrans_hints_preserve_canonical_spelling_and_pack_without_silent_tail_cut():
+    from twobyteasr.qwen31_asr import filetrans_hints
+    terms=['S0pp','BerLIN','Zhe']+[f'Player{i:04d}' for i in range(100)]
+    hints=filetrans_hints(terms)
+    assert [hints['vocabulary'][x] for x in terms]==[2]*len(terms)
+    assert 'sopp' not in hints['vocabulary'] and 'Berlin' not in hints['vocabulary']
+    message=hints['filetrans_context'][0]
+    assert message['role']=='user' and message['content'][0]['type']=='input_text'
+    assert len(message['content'][0]['text'])<=400
+    assert hints['hint_counts']['context_omitted_terms']>0
+    with pytest.raises(ASRProtocolError,match='15字符'):
+        filetrans_hints(['中文'*8])
+
+
+def test_compiled_vocabulary_real_binding_is_checked_before_audio_upload(tmp_path):
+    from twobyteasr.cloud_asr_jobs import filetrans
+    storage=Storage();calls=[]
+    endpoint=dict(model=FILETRANS,provider='qwen31_filetrans',protocol='dashscope_filetrans',
+        url='https://my-workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/asr/transcription',
+        api_key='key',vocabulary_id='owned-library',vocabulary_model=FILETRANS,vocabulary={'S0pp':2})
+    class Client:
+        @staticmethod
+        def post(url,**kw):
+            calls.append(url)
+            assert url.startswith('https://my-workspace.') and url.endswith('/asr/customization')
+            assert kw['json']['input']['action']=='query_vocabulary'
+            return Response({'output':{'status':'OK','target_model':'qwen-audio-3.0-asr-flash-filetrans','vocabulary':[]}})
+    with pytest.raises(ASRProtocolError,match='绑定了其它模型'):
+        filetrans(np.zeros(16000),endpoint,tmp_path,storage,client=Client)
+    assert storage.uploads==0 and len(calls)==1
+
+
+def test_filetrans_rejects_succeeded_failed_subtask_without_result_fetch_or_reupload(tmp_path):
+    from twobyteasr.cloud_asr_jobs import filetrans
+    storage=Storage();posts=[];gets=[]
+    class Client:
+        @staticmethod
+        def post(*a,**kw):posts.append(1);return Response({'output':{'task_id':'same','task_status':'PENDING'}})
+        @staticmethod
+        def get(url,**kw):
+            gets.append(url)
+            return Response({'output':{'task_status':'SUCCEEDED','results':[{'subtask_status':'FAILED','code':'InvalidAudio'}]}})
+    endpoint=dict(model=FILETRANS,provider='qwen31_filetrans',protocol='dashscope_filetrans',
+        url='https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription',api_key='key')
+    for _ in range(2):
+        with pytest.raises(ASRProtocolError,match='子任务未成功'):
+            filetrans(np.zeros(16000),endpoint,tmp_path,storage,client=Client)
+    assert storage.uploads==1 and storage.deletes==0 and len(posts)==1 and len(gets)==2
+
+
+@pytest.mark.parametrize('remote_status',['PENDING','RUNNING'])
+def test_local_cancel_preserves_remote_task_and_does_not_claim_cancellation(tmp_path,remote_status):
+    from twobyteasr.cloud_asr_jobs import filetrans
+    storage=Storage();posts=[];cancelled=[False]
+    class Client:
+        @staticmethod
+        def post(url,**kw):
+            posts.append(url)
+            return Response({'output':{'task_id':'same','task_status':'PENDING'}})
+        @staticmethod
+        def get(*a,**kw):return Response({'output':{'task_status':remote_status}})
+    def check():
+        if cancelled[0]:raise RuntimeError('local cancel')
+    def progress(state,*a):
+        if state==remote_status:cancelled[0]=True
+    endpoint=dict(model=FILETRANS,provider='qwen31_filetrans',protocol='dashscope_filetrans',
+        url='https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription',api_key='key')
+    with pytest.raises(RuntimeError,match='local cancel'):
+        filetrans(np.zeros(16000),endpoint,tmp_path,storage,client=Client,check=check,progress=progress)
+    state=json.loads(next(tmp_path.rglob('task.json')).read_text('utf8'))
+    assert state['local_cancel_requested'] and state['task_id']=='same' and state['status']==remote_status
+    assert not state.get('remote_cancel_confirmed') and storage.deletes==0
+    assert len(posts)==(2 if remote_status=='PENDING' else 1)
+
+
+def test_filetrans_native_bad_word_timing_is_rejected_before_clamping():
+    from twobyteasr.cloud_asr_jobs import validate_filetrans_result
+    payload={'transcripts':[{'sentences':[sentence(words=[{'begin_time':500,'end_time':400}])]}]}
+    with pytest.raises(ASRProtocolError,match='词时间非法'):
+        validate_filetrans_result(payload,1)

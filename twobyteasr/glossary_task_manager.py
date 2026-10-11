@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import itertools
+import copy
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -44,6 +45,11 @@ class GlossaryTaskState:
     model_label: str
     started_at: float
     game_id: str = ""
+    library_id: str = ""
+    glossary_snapshot: dict = field(default_factory=dict)
+    target_known: bool = False
+    learned_payload: dict = field(default_factory=dict)
+    profiles_snapshot: dict = field(default_factory=dict)
     status: str = "queued"        # queued / running / finished / failed / cancelled
     stage: str = ""
     stage_note: str = ""
@@ -84,7 +90,9 @@ class GlossaryTaskState:
             diffs = (self.result or {}).get("diffs", ()) or ()
             new = sum(1 for d in diffs if getattr(d, "change_type", "") == "new")
             alias = sum(1 for d in diffs if getattr(d, "change_type", "") == "alias_supplement")
-            return f"完成：候选 {self.candidates} · 新增 {new} · 别名补充 {alias}"
+            if ((self.result or {}).get('outcome') or {}).get('status') == 'no_changes':
+                return '成功无新增：' + (self.result.get('quality_status') or '本次实际核对范围内无变化')
+            return f"成功：候选 {self.candidates} · 新增 {new} · 别名补充 {alias}"
         if self.status == 'partial':
             return f"部分完成：候选 {self.candidates} · {(self.result or {}).get('quality_status', '可继续补齐')}"
         if self.status == "cancelled":
@@ -111,6 +119,59 @@ class GlossaryTaskState:
         return label + note
 
 
+class _TaskGlossaryView:
+    """Task-owned readonly evidence; page navigation cannot retarget a worker."""
+    def __init__(self, legacy, task, settings):
+        self._legacy = legacy
+        self._task = task
+        self.RUNTIME_GAME_NAME = task.game
+        self.RUNTIME_SETTINGS = copy.deepcopy(settings)
+        from .terminology import GlossarySnapshot
+        self._snapshot = GlossarySnapshot.from_dict(task.glossary_snapshot)
+
+    def __getattr__(self, name):
+        return getattr(self._legacy, name)
+
+    def load_learned_term_payload(self, **_kwargs):
+        return copy.deepcopy(self._task.learned_payload)
+
+    def load_game_profiles(self):
+        return copy.deepcopy(self._task.profiles_snapshot)
+
+    def learned_mappings_for_game(self, *_args):
+        return [{"from": alias or term.canonical, "to": term.canonical, "confirmed": term.confirmed,
+                 "provenance": term.provenance, "category": term.category, "origin": term.origin}
+                for library in self._snapshot.libraries for term in library.terms
+                if term.provenance != 'builtin' for alias in (term.aliases or (term.canonical,))]
+
+    def user_confirmed_mappings_for_game(self, *_args):
+        return [row for row in self.learned_mappings_for_game()
+                if row['confirmed'] and row['provenance'] == 'user_confirmed']
+
+    def learned_canonical_terms(self, *_args):
+        return list(self._snapshot.canonical_terms)
+
+    def builtin_reference_terms_for_game(self, *_args, **_kwargs):
+        return list(dict.fromkeys([*(name for library in self._snapshot.libraries for name in library.reference_terms),
+                                  *(term.canonical for library in self._snapshot.libraries for term in library.terms if term.provenance == 'builtin')]))
+
+    def load_active_game_lexicon_names(self, **_kwargs):
+        return self.builtin_reference_terms_for_game(), []
+
+    def active_profile_lexicon_paths(self):
+        return []
+
+    def hidden_reference_terms_for_game(self, *_args):
+        entry = next((row for key, row in self._task.learned_payload.get('games', {}).items()
+                      if str(row.get('library_id', key)) == self._task.library_id), {})
+        return set(entry.get('hidden_reference_terms', entry.get('hidden_references', ())))
+
+    def learned_content_type(self, *_args):
+        entry = next((row for key, row in self._task.learned_payload.get('games', {}).items()
+                      if str(row.get('library_id', key)) == self._task.library_id), {})
+        return str(entry.get('content_type', 'game'))
+
+
 class GlossaryTaskRunner(QThread):
     """执行单个任务（manager 串行调度）；重活全在 run() 里。"""
 
@@ -125,8 +186,10 @@ class GlossaryTaskRunner(QThread):
         super().__init__(parent)
         self.legacy = legacy
         self.task = task
-        self.settings = dict(settings) if isinstance(settings, Mapping) else {}
-        self.resume = resume
+        self.settings = copy.deepcopy(dict(settings)) if isinstance(settings, Mapping) else {}
+        self.resume = copy.deepcopy(resume)
+        if task.glossary_snapshot:
+            self.legacy = _TaskGlossaryView(legacy, task, self.settings)
         self._cancelled = False
 
     def cancel(self):
@@ -178,7 +241,8 @@ class GlossaryTaskRunner(QThread):
                     report=report,
                     cancel_check=lambda: self._cancelled,
                     resume=self.resume,
-                    checkpoint_writer=lambda payload: save_task_checkpoint(task.task_id, payload),
+                    checkpoint_writer=lambda payload: save_task_checkpoint(task.task_id,
+                        dict(payload, library_id=task.library_id, game_id=task.game_id)),
                     on_candidates=push_candidates,
                     on_event=on_event,
                 )
@@ -199,11 +263,20 @@ class GlossaryTaskRunner(QThread):
                 self.failed.emit(task.task_id, task.game, "cancelled", "已取消（已完成批次保留在检查点）。")
                 return
             result['task_id']=task.task_id
+            result['library_id'] = task.library_id
+            result['target_known'] = task.target_known
+            result['task_glossary_snapshot'] = copy.deepcopy(task.glossary_snapshot)
             self.finished_ok.emit(task.task_id, task.game, result)
         except GlossarySearchError as exc:
-            self.failed.emit(task.task_id, task.game, exc.code, exc.detail)
+            from .provider_diagnostics import cli_failure
+            upgrade = cli_failure(exc.detail)
+            self.failed.emit(task.task_id, task.game, 'upgrade_required' if upgrade else exc.code,
+                             upgrade['message'] if upgrade else exc.detail)
         except Exception as exc:  # noqa: BLE001 - 线程必须上报可用错误
-            self.failed.emit(task.task_id, task.game, "unexpected", " ".join(str(exc).split())[:240])
+            from .provider_diagnostics import cli_failure
+            upgrade = cli_failure(str(exc))
+            self.failed.emit(task.task_id, task.game, 'upgrade_required' if upgrade else "unexpected",
+                             upgrade['message'] if upgrade else " ".join(str(exc).split())[:240])
 
 
 class GlossaryUpdateManager(QObject):
@@ -251,12 +324,15 @@ class GlossaryUpdateManager(QObject):
         service_label: str = "",
         model_label: str = "",
         resume_task_id: str = "",
+        library_id: str = "",
     ) -> tuple[str, bool]:
         """提交任务；相同词库身份的 queued/running 跨模式去重。"""
         game_name = str(game_name or "").strip()
         canonicalize = getattr(self.legacy, 'canonicalize_runtime_game_name', str)
         game_name = str(canonicalize(game_name))
         game_id = self._game_identity(game_name)
+        if library_id:
+            game_id = str(library_id)
         mode = "full" if mode == "full" else "incremental"
         for task in self._tasks.values():
             if (task.game_id or self._game_identity(task.game)) == game_id and task.status in {"queued", "running"}:
@@ -271,9 +347,19 @@ class GlossaryUpdateManager(QObject):
             model_label=str(model_label or ""),
             started_at=time.time(),
             game_id=game_id,
+            library_id=game_id,
         )
+        if hasattr(self.legacy, 'load_learned_term_payload'):
+            from .terminology import snapshot_glossaries
+            snapshot = snapshot_glossaries(self.legacy, (game_id,))
+            state.glossary_snapshot = snapshot.to_dict()
+            state.target_known = any(library.found for library in snapshot.libraries)
+            state.learned_payload = copy.deepcopy(self.legacy.load_learned_term_payload())
+            state.profiles_snapshot = copy.deepcopy(getattr(self.legacy, 'load_game_profiles', lambda: {})())
         self._tasks[task_id] = state
-        self._settings_by_task[task_id] = dict(settings) if isinstance(settings, Mapping) else {}
+        self._settings_by_task[task_id] = copy.deepcopy(dict(settings)) if isinstance(settings, Mapping) else {}
+        if mode == 'full':
+            self._settings_by_task[task_id].setdefault('models', {})['glossary_execution_mode'] = 'full'
         self._queue.append(task_id)
         if resume_task_id:
             self._resume_by_task[task_id] = str(resume_task_id)
@@ -327,6 +413,9 @@ class GlossaryUpdateManager(QObject):
         return None
 
     def _game_identity(self, name):
+        resolved = getattr(self.legacy, 'resolve_glossary_identity', lambda _name: '')(name)
+        if resolved:
+            return str(resolved)
         canonicalize = getattr(self.legacy, 'canonicalize_runtime_game_name', str)
         identity = getattr(self.legacy, 'runtime_game_identity', lambda value:value.strip().casefold())
         return str(identity(canonicalize(str(name or ''))))
@@ -372,6 +461,8 @@ class GlossaryUpdateManager(QObject):
                 from .glossary_build import load_task_checkpoint
 
                 resume = load_task_checkpoint(resume_task_id)
+                if resume and resume.get('library_id') and resume['library_id'] != task.library_id:
+                    resume = None  # Never reuse another stable library's candidates.
             runner = GlossaryTaskRunner(
                 self.legacy, task, self._settings_by_task.get(task_id, {}), resume, self
             )
@@ -443,6 +534,7 @@ class GlossaryUpdateManager(QObject):
             task.error_code = outcome['status']
             task.error = outcome.get('message', '')
         task.finished_at = time.time()
+        task.waiting_note = ""
         task.candidates = int((result or {}).get("candidate_count", 0) or 0)
         task.result = result
         result['review_choices'] = task.review_choices
@@ -457,6 +549,7 @@ class GlossaryUpdateManager(QObject):
             return  # 迟到回调防护
         task.status = "cancelled" if code == "cancelled" else "failed"
         task.finished_at = time.time()
+        task.waiting_note = ""
         from .provider_diagnostics import redact_diagnostics
         task.error = redact_diagnostics(message)
         task.error_code = code

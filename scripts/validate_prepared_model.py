@@ -17,6 +17,13 @@ import traceback
 import wave
 
 
+def moss_has_speech(output):
+    """The full-context worker (2026-10-06) reports segments per chunk; older ones at the top level."""
+    segments=list(output.get('segments') or [])+[s for chunk in output.get('chunks') or []
+                                                 for s in chunk.get('segments') or []]
+    return any(x.get('text') and x.get('speaker') for x in segments)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--root',type=Path,required=True)
@@ -71,7 +78,10 @@ def main():
         elif model=='whisper_turbo':
             output=asr.transcribe_whisper_reference(str(sample),[dict(start=0.,end=duration)],shared_audio=audio)
         elif model=='qwen_asr':
-            output=asr._transcribe_qwen_worker(audio,chunks,asr.resolve_qwen_asr_local_source())
+            # Same keyword contract as the production call (no glossary context for the readiness sample).
+            with tempfile.TemporaryDirectory(prefix='qwen_readiness_') as evidence_root:
+                output=asr._transcribe_qwen_worker(audio,chunks,asr.resolve_qwen_asr_local_source(),
+                                                   context='',evidence_root=evidence_root)
         elif model=='qwen_aligner':
             import subtitle_core
             subtitle_core.FIRERED_ASR_BACKEND='qwen_aligner'
@@ -106,7 +116,7 @@ def main():
                 else:raise RuntimeError('没有正式 readiness adapter: '+model)
                 subprocess.run(command,check=True,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                 output=json.loads(output_path.read_text('utf8'))
-                if model=='moss' and not any(x.get('text') and x.get('speaker') for x in output.get('segments',[])):
+                if model=='moss' and not moss_has_speech(output):
                     raise RuntimeError('MOSS 没有返回实际文字与说话人分段')
                 if model=='speaker_embedding' and not all(len(v)>10 and .99<float(np.linalg.norm(v))<1.01 for v in output.values()):
                     raise RuntimeError('说话人向量维度或归一化不正确')

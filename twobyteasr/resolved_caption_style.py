@@ -52,6 +52,34 @@ def layout_caption(text,family,bold,size,spacing,max_width,scale_x,weight=0,styl
     return face.full_name,not reason,result,(sum(font.getmetrics())/1000*size)
 
 
+@lru_cache(maxsize=4096)
+def visible_glyph_size(text, family, bold, size, spacing, weight=0,
+                       style_name='', filename='', face_index=0):
+    """Ink bounds of the actual face, excluding ascent/descent line-box slack.
+
+    Newlines retain the face's baseline advance.  This is the same anchoring
+    contract as LIVE's glyph path, before stroke/shadow/background outsets.
+    No selection-frame padding or preview-widget scale enters this measure.
+    """
+    from PIL import ImageFont
+    from .font_metadata import resolve_local_face
+    face, _ = resolve_local_face(family, weight, style_name, bold, filename, face_index)
+    font = ImageFont.truetype(face.file, 1000, index=face.index)
+    advance = sum(font.getmetrics())
+    boxes = []
+    for index, line in enumerate(str(text).split('\n')):
+        if not line.strip():
+            continue
+        left, top, right, bottom = font.getbbox(line)
+        boxes.append((left, top + index * advance,
+                      right + max(0, len(line)-1) * spacing * 1000 / max(1, size),
+                      bottom + index * advance))
+    if not boxes:
+        return 0., 0.
+    return ((max(b[2] for b in boxes)-min(b[0] for b in boxes))*size/1000,
+            (max(b[3] for b in boxes)-min(b[1] for b in boxes))*size/1000)
+
+
 @dataclass(frozen=True,slots=True)
 class ResolvedCaptionStyle:
     style_json: str

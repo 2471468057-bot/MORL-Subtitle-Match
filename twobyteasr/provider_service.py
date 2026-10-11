@@ -32,6 +32,7 @@ class ProviderHealthState(str, Enum):
     DEGRADED = "DEGRADED"
     UNAVAILABLE = "UNAVAILABLE"
     RATE_LIMITED = "RATE_LIMITED"
+    UPGRADE_REQUIRED = "UPGRADE_REQUIRED"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ class ProviderCapabilityManifest:
     tool_calling: bool = False
     max_context: int | None = None
     models: tuple[str, ...] = ()
+    outer_json: bool | None = None
+    native_schema: bool | None = None
+    capability_state: str = 'unverified'
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,11 @@ class ProviderHealth:
     message: str
     checked_monotonic: float
     models: tuple[str, ...] = ()
+    category: str = ''
+    authenticated: bool | None = None
+    request_succeeded: bool | None = None
+    auth_evidence: str = ''
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -70,6 +79,7 @@ class _ProviderRuntime:
     circuit_open_until: float = 0.0
     probe_lock: Any = field(default_factory=threading.Lock)
     login_lock: Any = field(default_factory=threading.Lock)
+    executable_identity: Any = None
 
 
 @dataclass
@@ -133,7 +143,8 @@ class AIClient(AIProvider):
         self.transport = transport_for_stage(settings, stage)
         models = settings.get("models", {}) if isinstance(settings, Mapping) else {}
         from .llm_config import endpoint_from_settings
-        self.model = str(endpoint_from_settings(dict(settings),stage).get('model') or '')
+        effective_endpoint = endpoint_from_settings(dict(settings), stage)
+        self.model = str(effective_endpoint.get('model') or '')
         if self.transport is AITransport.ANTIGRAVITY_CLI:
             self.provider_id = "google_antigravity"
         elif self.transport is AITransport.GROK_CLI:
@@ -141,7 +152,7 @@ class AIClient(AIProvider):
         elif self.transport is AITransport.CODEX_CLI:
             self.provider_id = "openai_codex_cli"
         else:
-            self.provider_id = str(models.get(f"{stage}_provider") or "custom")
+            self.provider_id = str(effective_endpoint.get('provider') or "custom")
         self.last_timings: dict[str, float | bool] = {}
 
     def capabilities(self) -> ProviderCapabilityManifest:
@@ -184,10 +195,69 @@ class AIClient(AIProvider):
         }
         return ProviderStatus(
             health.state not in {ProviderHealthState.UNAVAILABLE},
-            health.state is ProviderHealthState.READY,
+            health.authenticated if health.authenticated is not None else health.state is ProviderHealthState.READY,
             health.message,
             health.models,
+            category=health.category, request_succeeded=health.request_succeeded,
+            auth_evidence=health.auth_evidence, diagnostics=health.diagnostics,
         )
+
+    def cli_diagnostics(self):
+        runtime = self._service._runtime_for(self._settings, self._stage, self._sender)
+        getter = getattr(runtime.adapter, 'cli_diagnostics', None)
+        return getter() if callable(getter) else {}
+
+    def json_capabilities(self, *, probe=False, cancel_check=None):
+        return self._service.json_capabilities(self._settings, self._stage,
+            sender=self._sender, probe=probe, cancel_check=cancel_check)
+
+    def cli_update_plan(self):
+        runtime = self._service._runtime_for(self._settings, self._stage, self._sender)
+        action = getattr(runtime.adapter, 'cli_update_plan', None)
+        if not callable(action):
+            raise AIProviderError('当前适配器没有已验证的自更新流程。', category='unsupported')
+        self._service._claim_probe(runtime)
+        try:
+            return action()
+        finally:
+            runtime.probe_lock.release()
+
+    def update_cli(self, plan, *, user_confirmed=False, cancel_check=None):
+        runtime = self._service._runtime_for(self._settings, self._stage, self._sender)
+        action = getattr(runtime.adapter, 'update_cli', None)
+        if not callable(action):
+            raise AIProviderError('当前适配器没有已验证的自更新流程。', category='unsupported')
+        if not user_confirmed:
+            raise AIProviderError('请先确认更新目标路径和动作。', category='explicit_update_required')
+        with self._service._lock:
+            self._service._assert_not_updating(runtime)
+            peers = [other for other in self._service._runtimes.values() if other.transport is runtime.transport]
+            provider_ids = {str(getattr(other.adapter, 'provider_id', 'unavailable')) for other in peers}
+            busy = any(h.provider_id in provider_ids for h in self._service._handles.values()) or any(
+                other.login_lock.locked() or other.probe_lock.locked() for other in peers)
+            if busy:
+                raise AIProviderError('这份 CLI 仍有任务、检测或登录流程，请完成或取消后更新。', category='provider_busy')
+            # Reservation and busy checks share submit/login's registration
+            # lock. New work cannot slip between the check and the updater.
+            self._service._updating_transports.add(runtime.transport)
+        try:
+            try:
+                status = action(plan, user_confirmed=user_confirmed, cancel_check=cancel_check)
+            except BaseException as exc:
+                self._service.invalidate_cli(runtime.transport, preserve_adapter=runtime.adapter)
+                category = getattr(exc, 'category', 'cli_update_failed')
+                runtime.health = ProviderHealth(ProviderHealthState.UPGRADE_REQUIRED if category == 'upgrade_required'
+                    else ProviderHealthState.UNKNOWN, str(exc), time.monotonic(), category=category,
+                    request_succeeded=False, diagnostics=getattr(runtime.adapter, 'cli_diagnostics', lambda: {})())
+                raise
+            self._service.invalidate_cli(runtime.transport, preserve_adapter=runtime.adapter)
+            runtime.health = ProviderHealth(self._service._health_from_status(status), status.message, time.monotonic(),
+                tuple(status.models), category=status.category, authenticated=status.authenticated,
+                request_succeeded=status.request_succeeded, auth_evidence=status.auth_evidence, diagnostics=status.diagnostics)
+            return status
+        finally:
+            with self._service._lock:
+                self._service._updating_transports.discard(runtime.transport)
 
     def cached_health(self):
         return self._service._runtime_for(self._settings,self._stage,self._sender).health
@@ -226,6 +296,15 @@ class AIClient(AIProvider):
                     if time.monotonic() >= handle.deadline_monotonic:
                         handle.cancel()
                         diagnostics = kwargs.get("request_diagnostics")
+                        cleanup_deadline = getattr(policy, 'cleanup_deadline_monotonic', None)
+                        if cleanup_deadline is not None:
+                            cleanup_started = time.monotonic()
+                            handle._event.wait(max(0., cleanup_deadline-cleanup_started))
+                            if diagnostics is not None:
+                                cleanup_pending = bool(diagnostics.get('cleanup_pending')) or not handle._event.is_set()
+                                diagnostics.update(cleanup_wait_ms=round((time.monotonic()-cleanup_started)*1000,3),
+                                    cleanup_complete=handle._event.is_set() and not cleanup_pending,
+                                    cleanup_pending=cleanup_pending)
                         if diagnostics is not None and handle.timeout_category == "queue_timeout":
                             diagnostics["queue_wait_ms"] = round((time.monotonic()-handle.submitted_monotonic)*1000, 3)
                         raise AIProviderError("AI 请求超时。", category=handle.timeout_category)
@@ -274,6 +353,13 @@ class AIClient(AIProvider):
         adapter_stage = kwargs.pop("stage", "")
         seconds = max(timeout) if isinstance(timeout, tuple) else float(timeout)
         started = time.monotonic()
+        from .llm_config import active_service_values
+        selected = active_service_values(dict(self._settings), stage=self._stage)
+        from .asr_provider_snapshot import snapshot_in_settings
+        snapshot = snapshot_in_settings(self._settings)
+        if self.transport is not AITransport.OPENAI_COMPATIBLE:
+            kwargs.setdefault('native_structured_output', snapshot.structured_output if snapshot is not None
+                              else bool(selected.get('structured_output', True)))
         self._last_request_trace = {}
         handle = self._service.submit(
             self._settings,
@@ -315,7 +401,14 @@ class AIClient(AIProvider):
         runtime = self._service._runtime_for(self._settings,self._stage,self._sender)
         action = getattr(runtime.adapter,"logout",None)
         if not callable(action):raise AIProviderError("当前服务不支持退出登录。",category="unsupported")
-        status = action(cancel_check=cancel_check)
+        with self._service._lock:
+            self._service._assert_not_updating(runtime)
+            if not runtime.login_lock.acquire(blocking=False):
+                raise AIProviderError('当前登录操作尚未结束。', category='login_in_progress')
+        try:
+            status = action(cancel_check=cancel_check)
+        finally:
+            runtime.login_lock.release()
         runtime.health = ProviderHealth(ProviderHealthState.AUTH_REQUIRED,status.message,time.monotonic())
         return status
 
@@ -375,8 +468,35 @@ class ProviderService:
         self._queue: queue.PriorityQueue[_QueuedProviderRequest] = queue.PriorityQueue()
         self._threads: list[threading.Thread] = []
         self._handles: dict[str, ProviderRequestHandle] = {}
+        self._updating_transports: set[AITransport] = set()
         self._sequence = 0
         self._telemetry: list[dict[str, Any]] = []
+
+    def scheduling_capacity(self) -> dict[str, Any]:
+        """Expose local admission limits; account/server concurrency is unknown."""
+        snapshot = self._governor.snapshot()
+        limit = min(self._workers_requested, snapshot.background_limit)
+        if snapshot.playback or snapshot.dragging:
+            limit = min(limit, 1)
+        return {"effective_workers": max(1, limit), "broker_workers": self._workers_requested,
+                "background_limit": snapshot.background_limit,
+                "interactive_limit": bool(snapshot.playback or snapshot.dragging),
+                "account_limit": None, "source": "local_broker_and_resource_governor"}
+
+    def _assert_not_updating(self, runtime):
+        """Call while holding _lock, together with registering the operation."""
+        if runtime.transport in self._updating_transports:
+            raise AIProviderError('这份 CLI 正在更新，请更新完成后重试。', category='provider_busy')
+
+    def _claim_probe(self, runtime, cancel_check=None):
+        while True:
+            with self._lock:
+                self._assert_not_updating(runtime)
+                if runtime.probe_lock.acquire(blocking=False):
+                    return
+            if cancel_check and cancel_check():
+                raise AIProviderError('AI 检测已取消。', category='cancelled')
+            time.sleep(.05)
 
     @staticmethod
     def _config_key(
@@ -392,7 +512,9 @@ class ProviderService:
         if transport is not AITransport.OPENAI_COMPATIBLE:
             # API-only checkbox state and catalogue contents cannot split the
             # same official CLI session. Use the actual invocation identity.
-            material = [transport.value, endpoint.get("model") or '']
+            selected = active_service_values(dict(settings), stage=stage)
+            material = [transport.value, endpoint.get("model") or '',
+                        selected.get('json_mode', True), selected.get('structured_output', True)]
         else:
             material = [transport.value, endpoint,
                 {name:model_settings.get(f"{stage}_{name}") for name in ("capabilities","max_context")}]
@@ -414,7 +536,7 @@ class ProviderService:
         max_context = models.get(f"{stage}_max_context")
         from .llm_config import endpoint_from_settings
         model = str(endpoint_from_settings(dict(settings),stage).get('model') or '')
-        protocol = str(models.get(f"{stage}_protocol") or "").casefold()
+        protocol = str(endpoint_from_settings(dict(settings), stage).get('protocol') or '').casefold()
         if transport is not AITransport.OPENAI_COMPATIBLE:
             structured_mode = "TEXT_JSON"
         elif protocol == "responses":
@@ -444,6 +566,12 @@ class ProviderService:
         with self._lock:
             existing = self._runtimes.get(key)
             if existing is not None:
+                identity = getattr(existing.adapter, 'executable_identity', lambda: None)()
+                if identity != existing.executable_identity:
+                    existing.executable_identity = identity
+                    existing.health = ProviderHealth(ProviderHealthState.UNKNOWN, 'CLI 已变化，请重新检测。', 0)
+                    existing.failure_count = 0
+                    existing.circuit_open_until = 0
                 return existing
         transport = transport_for_stage(settings, stage)
         error = ""
@@ -459,6 +587,7 @@ class ProviderService:
             adapter=adapter,
             manifest=self._manifest(settings, stage, transport),
             configuration_error=error,
+            executable_identity=getattr(adapter, 'executable_identity', lambda: None)(),
         )
         if error and any(token in error.casefold() for token in ("api key", "密钥", "credential")):
             runtime.health = ProviderHealth(
@@ -471,14 +600,39 @@ class ProviderService:
 
     @staticmethod
     def _health_from_status(status: ProviderStatus) -> ProviderHealthState:
+        if getattr(status, 'category', '') == 'upgrade_required':
+            return ProviderHealthState.UPGRADE_REQUIRED
         message = str(status.message or "").casefold()
         if "timed out" in message or "超时" in message:
             return ProviderHealthState.UNKNOWN
         if status.available and status.authenticated:
+            if getattr(status, 'auth_evidence', '') == 'model_catalog' and getattr(status, 'request_succeeded', None) is not True:
+                return ProviderHealthState.UNKNOWN
             return ProviderHealthState.READY
         if status.available:
             return ProviderHealthState.AUTH_REQUIRED
         return ProviderHealthState.UNAVAILABLE
+
+    def invalidate_cli(self, transport, *, preserve_adapter=None):
+        """Version/login/request caches expire together after explicit updates."""
+        with self._lock:
+            for runtime in self._runtimes.values():
+                if runtime.transport is transport:
+                    invalidate = getattr(runtime.adapter, 'invalidate_status_cache', None)
+                    if callable(invalidate):
+                        invalidate()
+                    refresh = getattr(runtime.adapter, 'refresh_executable', None)
+                    if callable(refresh):
+                        refresh()
+                    if runtime.adapter is not preserve_adapter:
+                        for attribute, empty in (('cli_version', ''), ('auth_evidence', ''), ('request_succeeded', None),
+                                                 ('failure_category', ''), ('last_cli_failure', {}), ('last_tested_at', '')):
+                            if hasattr(runtime.adapter, attribute):
+                                setattr(runtime.adapter, attribute, copy.deepcopy(empty))
+                    runtime.executable_identity = getattr(runtime.adapter, 'executable_identity', lambda: None)()
+                    runtime.health = ProviderHealth(ProviderHealthState.UNKNOWN, 'CLI 状态已失效，请重新检测。', 0)
+                    runtime.failure_count = 0
+                    runtime.circuit_open_until = 0
 
     def client_for_stage(
         self,
@@ -500,7 +654,20 @@ class ProviderService:
         getter = getattr(runtime.adapter,"runtime_capabilities",None)
         if callable(getter):
             runtime.manifest = ProviderCapabilityManifest(**{**runtime.manifest.__dict__,**getter()})
+        json_getter = getattr(runtime.adapter, 'json_capabilities', None)
+        if callable(json_getter):
+            evidence = json_getter()
+            runtime.manifest = ProviderCapabilityManifest(**{**runtime.manifest.__dict__,
+                'outer_json': evidence.get('outer_json'), 'native_schema': evidence.get('native_schema'),
+                'capability_state': evidence.get('state', 'unverified'),
+                'structured_output_mode': ('STRICT_JSON_SCHEMA' if evidence.get('native_schema') else
+                    'TEXT_JSON' if evidence.get('native_schema') is False else 'UNVERIFIED')})
         return runtime.manifest
+
+    def json_capabilities(self, settings, stage, *, sender=None, probe=False, cancel_check=None):
+        runtime = self._runtime_for(settings, stage, sender)
+        getter = getattr(runtime.adapter, 'json_capabilities', None)
+        return getter(probe=probe, cancel_check=cancel_check) if callable(getter) else {}
 
     def invocation_trace(
         self,
@@ -545,16 +712,23 @@ class ProviderService:
                 runtime.health.checked_monotonic,
                 runtime.health.models,
             )
-        if not refresh and runtime.health.state is not ProviderHealthState.UNKNOWN and now_mono-runtime.health.checked_monotonic<480:
+        if not refresh and (runtime.health.state is not ProviderHealthState.UNKNOWN
+                            or runtime.health.auth_evidence == 'model_catalog') and now_mono-runtime.health.checked_monotonic<480:
             return runtime.health
         if cancel_check is not None and cancel_check():
             raise AIProviderError("AI 检测已取消。", category="cancelled")
         assert runtime.adapter is not None
         started = time.monotonic()
+        self._claim_probe(runtime, cancel_check)
         try:
-            while not runtime.probe_lock.acquire(timeout=.05):
-                if cancel_check and cancel_check():
-                    raise AIProviderError("AI 检测已取消。",category="cancelled")
+            if refresh:
+                resolver = getattr(runtime.adapter, 'refresh_executable', None)
+                if callable(resolver):
+                    resolver()
+                    runtime.executable_identity = getattr(runtime.adapter, 'executable_identity', lambda: None)()
+                invalidate = getattr(runtime.adapter, 'invalidate_status_cache', None)
+                if callable(invalidate):
+                    invalidate()
             try:
                 # Another UI may have completed the same probe while we waited.
                 reuse = runtime.health.checked_monotonic > started
@@ -565,28 +739,32 @@ class ProviderService:
                     cancel_check=cancel_check,use_cache=not refresh)
             finally:
                 runtime.adapter._probe_progress = None
-                runtime.probe_lock.release()
+            state = self._health_from_status(status)
+            if state is ProviderHealthState.UNKNOWN and getattr(status, 'auth_evidence', '') != 'model_catalog':
+                invalidate = getattr(runtime.adapter, "invalidate_status_cache", None)
+                if callable(invalidate):
+                    invalidate()
+            runtime.health = ProviderHealth(state, status.message, time.monotonic(), tuple(status.models),
+                category=getattr(status, 'category', ''), authenticated=status.authenticated,
+                request_succeeded=getattr(status, 'request_succeeded', None), auth_evidence=getattr(status, 'auth_evidence', ''),
+                diagnostics=getattr(status, 'diagnostics', {}))
+            if status.models:
+                from .llm_config import active_service_values, cache_service_models
+                cache_service_models(active_service_values(dict(settings),stage=stage).get('service'),status.models,settings=dict(settings))
+            self._record(runtime, "health", {
+                "status": state.value,
+                "total_ms": round((time.monotonic() - started) * 1000.0, 3),
+            })
+            return runtime.health
         except Exception as exc:
-            if getattr(exc,'category','')=='cancelled':
+            if getattr(exc,'category','') in ('cancelled', 'provider_busy'):
                 raise
             runtime.health = ProviderHealth(
                 ProviderHealthState.UNAVAILABLE, str(exc), time.monotonic(),
             )
             return runtime.health
-        state = self._health_from_status(status)
-        if state is ProviderHealthState.UNKNOWN:
-            invalidate = getattr(runtime.adapter, "invalidate_status_cache", None)
-            if callable(invalidate):
-                invalidate()
-        runtime.health = ProviderHealth(state, status.message, time.monotonic(), tuple(status.models))
-        if status.models:
-            from .llm_config import active_service_values, cache_service_models
-            cache_service_models(active_service_values(dict(settings),stage=stage).get('service'),status.models,settings=dict(settings))
-        self._record(runtime, "health", {
-            "status": state.value,
-            "total_ms": round((time.monotonic() - started) * 1000.0, 3),
-        })
-        return runtime.health
+        finally:
+            runtime.probe_lock.release()
 
     def login(
         self,
@@ -605,8 +783,10 @@ class ProviderService:
         login = getattr(runtime.adapter, "login", None)
         if not callable(login):
             return ProviderStatus(False, False, "当前服务不支持 OAuth CLI 登录")
-        if not runtime.login_lock.acquire(blocking=False):
-            raise AIProviderError("官方登录窗口正在等待认证，请回到已打开的登录流程。", category="login_in_progress")
+        with self._lock:
+            self._assert_not_updating(runtime)
+            if not runtime.login_lock.acquire(blocking=False):
+                raise AIProviderError("官方登录窗口正在等待认证，请回到已打开的登录流程。", category="login_in_progress")
         previous = runtime.health
         try:
             kwargs = {"timeout": timeout, "on_progress": on_progress}
@@ -636,10 +816,13 @@ class ProviderService:
         finally:
             runtime.login_lock.release()
         runtime.health = ProviderHealth(
-            ProviderHealthState.READY if status.authenticated else ProviderHealthState.AUTH_REQUIRED,
+            self._health_from_status(status),
             status.message,
             time.monotonic(),
             tuple(status.models),
+            category=getattr(status, 'category', ''), authenticated=status.authenticated,
+            request_succeeded=getattr(status, 'request_succeeded', None), auth_evidence=getattr(status, 'auth_evidence', ''),
+            diagnostics=getattr(status, 'diagnostics', {}),
         )
         return status
 
@@ -660,32 +843,39 @@ class ProviderService:
                 category="model_discovery",
             )
         started = time.monotonic()
-        models = runtime.adapter.discover_models(
-            timeout=timeout,
-            cancel_check=cancel_check,
-            refresh=refresh,
-        )
-        runtime.manifest = ProviderCapabilityManifest(
-            **{
-                **runtime.manifest.__dict__,
-                "models": tuple(models),
-            }
-        )
-        runtime.health = ProviderHealth(
-            runtime.health.state,
-            runtime.health.message,
-            time.monotonic(),
-            tuple(models),
-        )
-        from .llm_config import active_service_values, cache_service_models
-        cache_service_models(active_service_values(dict(settings),stage=stage).get('service'),models,settings=dict(settings))
-        self._record(runtime, "model_discovery", {
-            "status": "OK",
-            "model_count": len(models),
-            "total_ms": round((time.monotonic() - started) * 1000.0, 3),
-            "refresh": bool(refresh),
-        })
-        return tuple(models)
+        self._claim_probe(runtime, cancel_check)
+        try:
+            models = runtime.adapter.discover_models(
+                timeout=timeout,
+                cancel_check=cancel_check,
+                refresh=refresh,
+            )
+            runtime.manifest = ProviderCapabilityManifest(
+                **{
+                    **runtime.manifest.__dict__,
+                    "models": tuple(models),
+                }
+            )
+            runtime.health = ProviderHealth(
+                runtime.health.state,
+                runtime.health.message,
+                time.monotonic(),
+                tuple(models),
+                category=runtime.health.category, authenticated=runtime.health.authenticated,
+                request_succeeded=runtime.health.request_succeeded, auth_evidence=runtime.health.auth_evidence,
+                diagnostics=runtime.health.diagnostics,
+            )
+            from .llm_config import active_service_values, cache_service_models
+            cache_service_models(active_service_values(dict(settings),stage=stage).get('service'),models,settings=dict(settings))
+            self._record(runtime, "model_discovery", {
+                "status": "OK",
+                "model_count": len(models),
+                "total_ms": round((time.monotonic() - started) * 1000.0, 3),
+                "refresh": bool(refresh),
+            })
+            return tuple(models)
+        finally:
+            runtime.probe_lock.release()
 
     def _ensure_workers(self) -> None:
         with self._lock:
@@ -749,6 +939,7 @@ class ProviderService:
             if callable(callback := kwargs.pop(name, None))
         }
         with self._lock:
+            self._assert_not_updating(runtime)
             self._sequence += 1
             sequence = self._sequence
             self._handles[request_id] = handle
@@ -783,6 +974,10 @@ class ProviderService:
             except BaseException as exc:
                 handle._error = exc
             finally:
+                diagnostics = request.kwargs.get('request_diagnostics')
+                if diagnostics is not None:
+                    diagnostics.update(provider_submitted_monotonic=handle.submitted_monotonic,
+                                       provider_finished_monotonic=time.monotonic())
                 handle._event.set()
                 with self._lock:
                     self._handles.pop(handle.request_id, None)
@@ -817,6 +1012,9 @@ class ProviderService:
 
     def _execute(self, request: _QueuedProviderRequest) -> Any:
         runtime, handle = request.runtime, request.handle
+        failure_scope = request.kwargs.get('_task_failure_scope')
+        if failure_scope is not None:
+            failure_scope[0].raise_if_rejected(*failure_scope[1:])
         started = time.monotonic()
         health = runtime.health
         policy = request.kwargs.get("_timeout_policy")
@@ -866,6 +1064,8 @@ class ProviderService:
                 runtime.health = health
         if health.state is ProviderHealthState.AUTH_REQUIRED:
             raise AIProviderError("需要登录当前 AI Provider。", category="authentication_required")
+        if health.state is ProviderHealthState.UPGRADE_REQUIRED:
+            raise AIProviderError(health.message, category='upgrade_required')
         if health.state in {
             ProviderHealthState.UNAVAILABLE,
             ProviderHealthState.DEGRADED,
@@ -883,9 +1083,10 @@ class ProviderService:
             handle.timeout_category = "total_timeout"
             diagnostics = request.kwargs.get("request_diagnostics")
             if diagnostics is not None:
-                diagnostics["queue_wait_ms"] = round(
-                    float(diagnostics.get("queue_wait_ms") or 0) + (time.monotonic()-handle.submitted_monotonic)*1000, 3)
+                diagnostics["provider_queue_wait_ms"] = round((time.monotonic()-handle.submitted_monotonic)*1000, 3)
+                diagnostics["queue_wait_ms"] = diagnostics["provider_queue_wait_ms"]
                 diagnostics["transport_started_monotonic"] = time.monotonic()
+                diagnostics['provider_submitted_monotonic'] = handle.submitted_monotonic
         callback = request.callbacks.get("on_start")
         if callback:
             callback(handle.request_id)
@@ -903,9 +1104,13 @@ class ProviderService:
             )
             kwargs = dict(request.kwargs)
             kwargs.pop("_timeout_policy", None)
+            kwargs.pop('_task_failure_scope', None)
             kwargs["timeout"] = (min(policy.connect, remaining), min(policy.read_idle, remaining)) if policy is not None and runtime.transport is AITransport.OPENAI_COMPATIBLE else remaining
             if policy is not None:
                 kwargs["_total_deadline"] = handle.deadline_monotonic
+                cleanup_deadline = getattr(policy, 'cleanup_deadline_monotonic', None)
+                if cleanup_deadline is not None and kwargs.get('request_diagnostics') is not None:
+                    kwargs['request_diagnostics']['cleanup_deadline_monotonic'] = cleanup_deadline
             kwargs["cancel_check"] = cancel_check
             kwargs["stage"] = kwargs.pop("_adapter_stage", "")
             diagnostics = kwargs.get('request_diagnostics')
@@ -916,6 +1121,8 @@ class ProviderService:
                 stream_callback('request_identity', json.dumps({'provider_request_id':handle.request_id,
                     'attempt':retry_count+1,'transport':runtime.transport.value}))
             try:
+                if failure_scope is not None:
+                    failure_scope[0].raise_if_rejected(*failure_scope[1:])
                 if request.schema is not None:
                     value = adapter.structured_complete(
                         request.messages, request.schema, **kwargs,
@@ -949,7 +1156,14 @@ class ProviderService:
                 return value
             except BaseException as exc:
                 last_error = exc
+                if failure_scope is not None:
+                    failure_scope[0].reject_snapshot(*failure_scope[1:], exc)
                 category = str(getattr(exc, "category", "provider_error"))
+                if category == 'upgrade_required':
+                    runtime.health = ProviderHealth(ProviderHealthState.UPGRADE_REQUIRED, str(exc), time.monotonic(),
+                        category=category, request_succeeded=False,
+                        diagnostics=getattr(adapter, 'cli_diagnostics', lambda: {})())
+                    runtime.adapter.invalidate_status_cache()
                 if category == "authentication_required":
                     runtime.health = ProviderHealth(
                         ProviderHealthState.AUTH_REQUIRED, str(exc), time.monotonic(),
@@ -965,6 +1179,8 @@ class ProviderService:
                     break
                 retry_count += 1
             finally:
+                if diagnostics is not None:
+                    diagnostics['transport_finished_monotonic'] = time.monotonic()
                 handle.trace = copy.deepcopy(getattr(adapter, 'last_invocation_trace', {}))
                 handle.trace['timings'] = copy.deepcopy(getattr(adapter, 'last_timings', {}))
                 handle.trace['provider_request_id'] = handle.trace.get('request_id')
@@ -974,6 +1190,10 @@ class ProviderService:
                     # ownership or mutable dictionaries from a live request.
                     runtime.adapter.last_invocation_trace = copy.deepcopy(handle.trace)
                     runtime.adapter.last_timings = copy.deepcopy(handle.trace['timings'])
+                    for attribute in ('cli_version', 'auth_evidence', 'request_succeeded', 'failure_category',
+                                      'last_cli_failure', 'last_tested_at'):
+                        if hasattr(adapter, attribute):
+                            setattr(runtime.adapter, attribute, copy.deepcopy(getattr(adapter, attribute)))
         assert last_error is not None
         category = str(getattr(last_error, "category", "provider_error"))
         if category not in {
@@ -989,6 +1209,8 @@ class ProviderService:
             "empty_response", "format_mismatch", "parse_failure", "text_mutation_rejected",
             "request_too_large", "payload_too_large", "transport_length", "permission_denied",
             "unsupported_search",
+            "upgrade_required",
+            "unknown_model", "model_unavailable", "configuration_error",
         }:
             runtime.failure_count += 1
             if runtime.failure_count >= self._circuit_failures:

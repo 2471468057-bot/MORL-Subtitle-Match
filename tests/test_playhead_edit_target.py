@@ -113,3 +113,53 @@ def test_cut_sequence_resolves_project_time_to_stable_source_id():
     state_for(page.project).reindex_cues(page.project)
     StudioCanvasEditMixin._edit_subtitle_at_playhead(page)
     assert source_cue_id_of(calls[-1][1])=='a'
+
+
+@pytest.mark.parametrize('timeline_ms,source_ms,expected', [
+    (10500, 641657, 'a'), (15100, 646257, 'b'),
+])
+def test_e_maps_deep_source_clock_into_cut_timeline(timeline_ms, source_ms, expected):
+    from twobyteasr.studio_edit_sequence import ensure_edit_sequence, replace_runtime_sequence
+    page, calls = page_at(timeline_ms)
+    for cue in page.project.cues:
+        cue.start_ms += 631157
+        cue.end_ms += 631157
+    page.project.media.duration_ms += 631157
+    sequence = ensure_edit_sequence(page.project)
+    sequence.segments[0].source_in_ms = 631157
+    sequence.segments[0].source_out_ms = 661157
+    sequence.segments[0].timeline_out_ms = 30000
+    replace_runtime_sequence(page.project, sequence)
+    state_for(page.project).reindex_cues(page.project)
+    page._playback_mode = 'mapped'
+    page._mapped_sequence_segment = lambda: sequence.segments[0]
+    page.video.playback_position_snapshot = lambda: SimpleNamespace(presentation_media_ms=source_ms)
+    StudioCanvasEditMixin._edit_subtitle_at_playhead(page)
+    from twobyteasr.studio_edit_sequence import source_cue_id_of
+    assert source_cue_id_of(calls[-1][1]) == expected
+
+
+def test_e_maps_rate_and_repeated_source_using_active_segment():
+    from twobyteasr.studio_edit_sequence import ensure_edit_sequence, replace_runtime_sequence, VideoSegment
+    page, calls = page_at(15500)
+    sequence = ensure_edit_sequence(page.project)
+    sequence.segments = [VideoSegment('first', sequence.source_path, 10000, 12000, 0, 1000),
+                         VideoSegment('repeat', sequence.source_path, 10000, 12000, 15000, 16000)]
+    replace_runtime_sequence(page.project, sequence)
+    state_for(page.project).reindex_cues(page.project)
+    page._playback_mode = 'mapped'
+    page._mapped_sequence_segment = lambda: sequence.segments[1]
+    page.video.playback_position_snapshot = lambda: SimpleNamespace(presentation_media_ms=11000)
+    StudioCanvasEditMixin._edit_subtitle_at_playhead(page)
+    assert 'repeat' in calls[-1][1]
+
+
+def test_e_outside_mapped_segment_does_not_edit_unrelated_tail():
+    page, calls = page_at(15100)
+    from twobyteasr.studio_edit_sequence import ensure_edit_sequence
+    sequence = ensure_edit_sequence(page.project)
+    page._playback_mode = 'mapped'
+    page._mapped_sequence_segment = lambda: sequence.segments[0]
+    page.video.playback_position_snapshot = lambda: SimpleNamespace(presentation_media_ms=1000000)
+    StudioCanvasEditMixin._edit_subtitle_at_playhead(page)
+    assert calls[-1][0] == 'status'

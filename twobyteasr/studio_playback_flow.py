@@ -20,6 +20,147 @@ class _CaptionFrameBridge(QObject):
 class StudioPlaybackFlowMixin:
     """Feature-domain mixin; host class provides widgets and state."""
 
+    def _invalidate_audio_tail(self):
+        self._owned_audio_tail = None
+        self._audio_tail_seek_pending = None
+        self.video._playback_clock.set_presentation_hold(False)
+        self.video.set_external_clock_enabled(bool(self.project is not None
+            and not getattr(self, '_close_requested', False)
+            and not getattr(self.video, '_media_has_video', True)))
+
+    def _owned_tail_sample(self, *, paused):
+        from .owned_audio_tail import owned_audio_sample
+        engine = getattr(self, 'audio_engine', None)
+        if engine is None:
+            return None
+        payload = engine.clock_observation()
+        source = str(getattr(self, '_active_video_preview_source_path', ''))
+        rate = float(self.video._playback_rate) * float(getattr(self.video, '_source_rate_multiplier', 1.))
+        if owned_audio_sample(payload, engine._last_payload,
+                generation=self.video._playback_clock.generation,
+                session=engine._session_generation, source=source, paused=paused, rate=rate):
+            return payload
+        return None
+
+    def _begin_audio_tail(self, *, paused=False):
+        from .owned_audio_tail import OwnedAudioTail, audio_pcm_drained
+        payload = self._owned_tail_sample(paused=paused)
+        if payload is None or (not paused and audio_pcm_drained(payload)):
+            return False
+        active = str(getattr(self, '_active_video_preview_clip_id', ''))
+        clip = next((c for t in self.project.video_tracks for c in t.clips if c.id == active), None)
+        if clip is None or int(self.timeline.playhead_ms) >= clip.timeline_out_ms:
+            return False
+        self._owned_audio_tail = OwnedAudioTail(id(self.project),
+            str(self._active_video_preview_key), active, str(self._active_video_preview_source_path),
+            self.video._playback_clock.generation, self.audio_engine._session_generation,
+            tuple(payload['transport_generation']), int(payload.get('source_generation') or 0),
+            clip.timeline_out_ms, paused, float(payload['effective_rate']))
+        self._audio_tail_seek_pending = None
+        self.video._playback_clock.set_presentation_hold(False)
+        self._audio_only_subtitle_active = True
+        self.video.set_external_clock_enabled(True)
+        self._studio_trace('VIDEO_EOF_AUDIO_TAIL', paused=paused,
+            generation=self.video._playback_clock.generation,
+            source_ms=payload.get('estimated_source_ms'), clip_id=active)
+        return True
+
+    def _prepare_audio_tail_seek(self, source_seconds, project_ms, *, transition=False):
+        """A seek beyond the last video frame waits for real, owned audio PCM."""
+        receipt = getattr(self, '_owned_audio_tail', None) if transition else None
+        payload = self._owned_tail_sample(paused=bool(self.video._paused)) if receipt is not None else None
+        if payload is None or not receipt.matches(project=self.project,
+                key=str(self._active_video_preview_key), clip=str(self._active_video_preview_clip_id),
+                generation=self.video._playback_clock.generation, payload=payload):
+            receipt = None
+        self._invalidate_audio_tail()
+        if self.project is None or not getattr(self.video, '_media_has_video', True):
+            return
+        from .media_service import GLOBAL_MEDIA_SERVICE
+        try:
+            metadata = GLOBAL_MEDIA_SERVICE.metadata(self._active_video_preview_source_path)
+        except (OSError, RuntimeError, ValueError):
+            return
+        end = float(metadata.video_stream_end_ms or 0)
+        source_ms = float(source_seconds) * 1000
+        if not metadata.has_audio or end <= 0 or source_ms < end:
+            return
+        from .owned_audio_tail import AudioTailWait
+        self._audio_tail_seek_pending = AudioTailWait(id(self.project),
+            str(self._active_video_preview_key), str(self._active_video_preview_clip_id),
+            str(self._active_video_preview_source_path), self.video._playback_clock.generation,
+            self.audio_engine._session_generation,
+            float(self.video._playback_rate) * float(getattr(self.video, '_source_rate_multiplier', 1.)),
+            int(project_ms), source_ms, receipt)
+        import time
+        self._audio_tail_seek_started = time.monotonic()
+        self.video._playback_clock.set_presentation_hold(True)
+
+    def _refresh_audio_tail_clock(self):
+        if self.project is None or getattr(self, '_close_requested', False):
+            self._invalidate_audio_tail()
+            return False
+        pending = getattr(self, '_audio_tail_seek_pending', None)
+        if pending is not None:
+            if (not self._audio_tail_waiting()
+                    or (pending.visual_receipt is not None and not self._audio_tail_visual_active())):
+                self._invalidate_audio_tail()
+                return False
+            self._begin_audio_tail(paused=bool(self.video._paused))
+        token = getattr(self, '_owned_audio_tail', None)
+        if token is None:
+            return False
+        payload = self._owned_tail_sample(paused=bool(self.video._paused))
+        if payload is None or not token.matches(project=self.project,
+                key=str(self._active_video_preview_key), clip=str(self._active_video_preview_clip_id),
+                generation=self.video._playback_clock.generation, payload=payload):
+            self._invalidate_audio_tail()
+            return False
+        from .owned_audio_tail import audio_pcm_drained
+        if not self.video._paused and audio_pcm_drained(payload):
+            self._studio_trace('VIDEO_AUDIO_TAIL_DRAINED', source_ms=payload.get('estimated_source_ms'))
+            self._invalidate_audio_tail()
+            self._advance_project_boundary(token.boundary_ms)
+            return False
+        self._audio_only_subtitle_active = True
+        self.video.set_external_clock_enabled(True)
+        return True
+
+    def _audio_tail_waiting(self):
+        pending = getattr(self, '_audio_tail_seek_pending', None)
+        import time
+        return bool(pending is not None and self.project is not None
+            and not getattr(self, '_close_requested', False)
+            and time.monotonic() - self._audio_tail_seek_started <= 10.
+            and pending.matches(project=self.project, key=str(self._active_video_preview_key),
+                clip=str(self._active_video_preview_clip_id), source=str(self._active_video_preview_source_path),
+                generation=self.video._playback_clock.generation, session=self.audio_engine._session_generation,
+                rate=float(self.video._playback_rate) * float(getattr(self.video, '_source_rate_multiplier', 1.))))
+
+    def _audio_tail_visual_active(self):
+        if getattr(self, '_owned_audio_tail', None) is not None:
+            return True
+        if not self._audio_tail_waiting():
+            return False
+        pending = self._audio_tail_seek_pending
+        from .owned_audio_tail import held_video_frame_ready
+        controller = self.video.controller
+        return bool(pending.may_hold_visual(self.audio_engine._last_payload)
+            and held_video_frame_ready(pending.visual_receipt,
+                generation=self.video._playback_clock.generation,
+                attached=self.video._media_attached, running=controller is not None and controller.running,
+                frame=getattr(controller, 'observed_position', lambda:{})(),
+                properties=getattr(controller, 'observed_properties', lambda:{})()))
+
+    def _audio_tail_startup_caption_ready(self):
+        from .caption_scene import active_cues
+        from .owned_audio_tail import tail_caption_publication_ready
+        expected = tuple(c.id for c in active_cues(self, self._caption_sample_ms()))
+        self._present_caption_scene()
+        return tail_caption_publication_ready(getattr(self, '_caption_scene', None),
+            project=self.project, generation=self.video._playback_clock.generation,
+            expected=expected, publications=getattr(self.video, '_prepared_caption_publications', ()))
+
     def _finish_project_playback(self):
         if self.video._eof_reached:
             return
@@ -52,6 +193,10 @@ class StudioPlaybackFlowMixin:
             return True  # ignore the previous load/seek's late EOF
         if self.video._paused:
             return True  # EOF must never override an explicit user pause
+        if self._audio_tail_waiting():
+            return True  # a resumed tail waits for this epoch's unpaused PCM
+        if self._refresh_audio_tail_clock() or self._begin_audio_tail():
+            return True
         active = getattr(self, '_active_video_preview_clip_id', '')
         clip = next((c for t in self.project.video_tracks for c in t.clips if c.id == active), None)
         boundary = clip.timeline_out_ms if clip else timeline_duration_ms(self.project)
@@ -107,7 +252,8 @@ class StudioPlaybackFlowMixin:
             # second independent 16 ms timer delayed cue identity one frame.
             and getattr(getattr(clock,'snapshot',lambda:None)(),'source','')!='visual_tick'
         ):
-            self._playhead_ui_pending = (seconds, defer_follow)
+            self._playhead_ui_pending = (seconds, defer_follow, clock.generation,
+                                         getattr(self, '_playback_mode', 'source'))
             timer = self._ensure_playhead_flush_timer()
             if timer is not None and not timer.isActive():
                 timer.start()
@@ -173,8 +319,11 @@ class StudioPlaybackFlowMixin:
         import time as _time
 
         self._playhead_ui_last_ts = _time.monotonic()
-        seconds, defer_follow = pending
+        seconds, defer_follow, generation, mode = pending
         clock=getattr(self.video,'_playback_clock',None)
+        if clock is not None and (generation != clock.generation
+                or mode != getattr(self, '_playback_mode', 'source')):
+            return
         if clock is not None and not self.video._paused and not clock.exact_seek_pending:
             # The GUI can be busy switching a cue. Its queued position is then
             # old, while the independent follower has already extrapolated
@@ -453,6 +602,7 @@ class StudioPlaybackFlowMixin:
         if getattr(self, "_empty_playback_state", False) or not self.video.controller:
             return
         timeline_ms = round(seconds * 1000)
+        self._invalidate_audio_tail()
         self.cue_controller.sync_playhead_target(timeline_ms, force=True)
         visual_expectation = self._prepare_visual_route_for_time(timeline_ms)
         try:
@@ -638,9 +788,11 @@ class StudioPlaybackFlowMixin:
             and len(self._multitrack_preview_layers(target_ms)) >= 2
             and not canonical_advanced
         )
-        advanced = canonical_advanced or compositor_promotion
+        from .studio_caption_timeline import independent_captions
+        independent = independent_captions(project)
+        advanced = canonical_advanced or compositor_promotion or independent
         self.video.set_native_subtitle_visible(not advanced)
-        if advanced and cue is not None:
+        if advanced and cue is not None and not independent:
             # 2026-09-18 III：跳转目标是 advanced cue 时在 seek 当拍就预约其
             # 视觉渲染——此前要等 playhead tick 链经 ensure_active 才排程，
             # 冷 cue 多付一段 tick+排程空转（用户"跳转后字幕 1-2s 才对"）。

@@ -15,6 +15,8 @@ def audio_mix_arguments(ffmpeg, job, layers):
 
 
 def compile_audio_mix(ffmpeg, job, layers, *, input_offset=1):
+    from .timeline_media import resolve_audio_layers
+    layers, _ = resolve_audio_layers(layers, ffmpeg)
     from .audio_engine import _atempo_chain
     from .studio_render import media_has_audio
     start = float(job.start_seconds or 0.)
@@ -38,9 +40,11 @@ def compile_audio_mix(ffmpeg, job, layers, *, input_offset=1):
         head = f'atrim=start={source_start:.6f},' if 0 < source_start < .25 else ''
         label = f'gain{index}'
         tempo_padding = 'apad=pad_dur=0.1,' if abs(rate-1.) > .001 else ''
-        filters.append(f'[{index}:a:0]{head}asetpts=PTS-STARTPTS,{tempo_padding}{_atempo_chain(rate)},'
+        from .audio_envelope import envelope_filter
+        envelope=envelope_filter(layer.get('audio_envelopes',()),origin_ms=a*1000)
+        filters.append(f'[{index}:a:{int(layer.get("stream_index",0))}]{head}asetpts=PTS-STARTPTS,{tempo_padding}{_atempo_chain(rate)},'
             f'asetpts=N/SR/TB,atrim=duration={b-a:.6f},volume={gain_amplitude(layer["gain_db"]):.9f},aresample=48000,'
-            'apad=pad_dur=0.1,'
+            f'{envelope}apad=pad_dur=0.1,'
             f'adelay={round((a-start)*48000)}S:all=1,asetpts=N/SR/TB[{label}]')
         labels.append(f'[{label}]')
     if not labels:

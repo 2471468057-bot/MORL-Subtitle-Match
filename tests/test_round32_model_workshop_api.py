@@ -2,7 +2,7 @@
 
 - 「在线 API」tab 必须显示全部 API 卡（原先 _model_roles 永不产生 "api"，
   tab 永远空白，API 卡反而混进主力转写/文字复核）。
-- 新预设 openrouter/azure/dashscope_qwen_audio 过三处协议白名单；
+- 当前 openrouter_word/azure/qwen31_filetrans 预设通过协议白名单；
   azure_transcription 走 api-key 头（非 Bearer）。
 """
 
@@ -34,8 +34,9 @@ def test_api_tab_shows_all_online_models():
     api_tab = {key for key in by_key if "api" in _browser_groups(by_key[key])}
     online = {model.key for model in MODELS if model_is_online(model)}
     assert api_tab == online, f"API tab 与在线模型集不一致：{api_tab ^ online}"
-    assert {"qwen_api", "groq_api", "openai_api", "custom_asr_api",
-            "mai_transcribe_2_word", "qwen_audio_asr_flash"} <= api_tab
+    assert {"groq_api", "openai_api", "custom_asr_api",
+            "mai_latest", "qwen31_filetrans"} <= api_tab
+    assert not {"qwen_api", "mai_transcribe_2_word", "qwen_audio_asr_flash", "qwen31_flash", "qwen_filetrans"} & api_tab
 
 
 def test_role_tabs_exclude_online_cards():
@@ -51,9 +52,8 @@ def test_role_picker_still_offers_api_models():
     by_key = {model.key: model for model in MODELS}
     # picker 用 _model_roles（能力语义）：API 卡仍可被选为主力/复核
     # （三十八轮：旧 multipart 卡删除，OpenRouter 只剩字级通道卡）
-    assert "primary" in _model_roles(by_key["qwen_api"])
-    assert "primary" in _model_roles(by_key["mai_transcribe_2_word"])
-    assert "primary" in _model_roles(by_key["qwen_audio_asr_flash"])
+    assert "primary" in _model_roles(by_key["mai_latest"])
+    assert "primary" in _model_roles(by_key["qwen31_filetrans"])
 
 
 def test_new_api_presets_registered():
@@ -63,11 +63,14 @@ def test_new_api_presets_registered():
     assert ASR_API_PRESETS["openrouter_word"]["protocol"] == "openrouter_verbose_json"
     assert "openrouter" not in ASR_API_PRESETS, "旧 multipart 通道已删除（三十八轮）"
     assert ASR_API_PRESETS["azure"]["protocol"] == "azure_transcription"
-    assert ASR_API_PRESETS["dashscope_qwen_audio"]["model"] == "qwen-audio-3.0-asr-flash"
-    assert ASR_API_PRESETS["dashscope_qwen_audio"]["protocol"] == "dashscope_multimodal"
+    assert ASR_API_PRESETS["qwen31_filetrans"]["model"] == "qwen-audio-3.1-asr-flash-filetrans"
+    assert ASR_API_PRESETS["qwen31_filetrans"]["protocol"] == "dashscope_filetrans"
+    assert ASR_API_PRESETS["openrouter_word"]["model"] == ""  # No unverified MAI 2.1 ID.
+    assert "dashscope_qwen_audio" not in ASR_API_PRESETS
+    assert "dashscope" not in ASR_API_PRESETS
     by_key = {model.key: model for model in MODELS}
-    assert by_key["mai_transcribe_2_word"].api_preset == "openrouter_word"
-    assert by_key["qwen_audio_asr_flash"].api_preset == "dashscope_qwen_audio"
+    assert by_key["mai_latest"].api_preset == "openrouter_word"
+    assert by_key["qwen31_filetrans"].api_preset == "qwen31_filetrans"
 
 
 def test_azure_protocol_passes_whitelists():

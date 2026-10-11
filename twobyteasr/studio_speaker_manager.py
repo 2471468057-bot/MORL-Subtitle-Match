@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import weakref
 
 from PySide6.QtCore import Qt, QTimer, QPointF, QSize, QEvent
 from PySide6.QtGui import QColor, QTextLayout, QTextOption, QPalette, QBrush
@@ -106,6 +107,10 @@ class SpeakerManagerDialog(QDialog):
     def __init__(self, page: "SubtitleStudioPage"):
         super().__init__(page)
         self.page = page
+        self._editor_speaker_id = ""
+        self._loading_editor = False
+        self._committing_name = False
+        self._name_preedit = False
         bind_text(self, '说话人管理', property='windowTitle')
         self.setObjectName("toolDialog")
         self.setMinimumSize(720, 480)
@@ -132,7 +137,7 @@ class SpeakerManagerDialog(QDialog):
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(("选择", "ID", "名称", "字幕数", "总时长", "默认样式"))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._checking_rows = False
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
@@ -141,8 +146,7 @@ class SpeakerManagerDialog(QDialog):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self.table.itemSelectionChanged.connect(self._load_selected)
-        self.table.itemSelectionChanged.connect(self._selection_checks)
+        self.table.currentCellChanged.connect(lambda *_: self._load_selected())
         self.table.itemChanged.connect(self._checkbox_selection)
         self.table.installEventFilter(self)
         selection = QHBoxLayout()
@@ -176,7 +180,15 @@ class SpeakerManagerDialog(QDialog):
         editor.setVerticalSpacing(7)
         editor.addWidget(QLabel("名称"), 0, 0)
         self.name_edit = QLineEdit()
+        self.name_edit.installEventFilter(self)
+        self.name_edit.returnPressed.connect(self._commit_name)
+        self.name_edit.editingFinished.connect(self._commit_name)
         editor.addWidget(self.name_edit, 0, 1)
+        self.name_error = QLabel()
+        self.name_error.setWordWrap(True)
+        self.name_error.setObjectName("statusWarn")
+        self.name_error.hide()
+        editor.addWidget(self.name_error, 2, 1, 1, 2)
         editor.addWidget(QLabel("颜色"), 0, 2)
         self.color_button = QPushButton("选择颜色")
         self.color_button.setObjectName("studioButton")
@@ -191,7 +203,7 @@ class SpeakerManagerDialog(QDialog):
         self.visible_check = QCheckBox("在成片中显示此说话人的字幕")
         self.visible_check.stateChanged.connect(self._visibility_toggled)
         editor.addWidget(self.visible_check, 1, 2, 1, 2)
-        self.apply_button = QPushButton("应用修改")
+        self.apply_button = QPushButton("应用颜色与样式")
         self.apply_button.setObjectName("studioPrimary")
         self.apply_button.clicked.connect(self._apply_changes)
         editor.addWidget(self.apply_button, 2, 3)
@@ -240,6 +252,8 @@ class SpeakerManagerDialog(QDialog):
         layout.addLayout(track_actions)
         self._color = ""
         self.refresh()
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._stop_preview)
@@ -290,7 +304,7 @@ class SpeakerManagerDialog(QDialog):
         actions.addWidget(self.load_cache_button)
         self.reanalyze_button=QPushButton('用当前方案重新识别…')
         self.reanalyze_button.setObjectName('studioButton')
-        bind_text(self.reanalyze_button, '打开当前工程识别设置，可选 Nemotron。会重新生成字幕，不是只补标签；请先保存人工编辑的工程副本。', property='toolTip')
+        bind_text(self.reanalyze_button, '打开当前工程识别设置，选择当前识别方案。会重新生成字幕，不是只补标签；请先保存人工编辑的工程副本。', property='toolTip')
         def open_recognition():
             self.close()
             QTimer.singleShot(0,self.page._open_recognition_sheet)
@@ -314,8 +328,17 @@ class SpeakerManagerDialog(QDialog):
         self._load_candidates()
 
     def eventFilter(self, watched, event):
+        if watched is getattr(self, 'name_edit', None):
+            if event.type() == QEvent.Type.InputMethod:
+                # QLineEdit.text() excludes preedit. Never commit its earlier
+                # prefix while the IME is still composing the new name.
+                self._name_preedit = bool(event.preeditString())
+            elif event.type() == QEvent.Type.FocusOut:
+                self._finish_name_edit()
         if watched is self.table and event.type()==QEvent.KeyPress and event.key()==Qt.Key_Delete:
             self._batch('delete');return True
+        if watched is self.table and event.type()==QEvent.Type.KeyPress and event.key()==Qt.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._select_visible('all');return True
         if hasattr(self, "_reflow_timer") and watched is self.candidate_table.viewport() and event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange):
             self._reflow_timer.start(0)
         return super().eventFilter(watched, event)
@@ -461,6 +484,9 @@ class SpeakerManagerDialog(QDialog):
             box.setStyleSheet(f"QComboBox {{ border:2px solid {theme.warning}; }}" if label in changed else "")
 
     def done(self, result):
+        if not self._finish_name_edit():
+            self.name_edit.setFocus()
+            return
         self.page._speaker_roles_pending = False
         self.page._populate_speakers()
         super().done(result)
@@ -534,7 +560,11 @@ class SpeakerManagerDialog(QDialog):
         project = self.page.project
         if project is None:
             return
+        if not self._finish_name_edit():
+            return
         selected_id = selected_id or self._selected_speaker_id()
+        checked_ids = self._selected_ids()
+        scroll_position = self.table.verticalScrollBar().value()
         self._checking_rows=True
         self.table.blockSignals(True)
         self.table.setRowCount(0)
@@ -546,11 +576,10 @@ class SpeakerManagerDialog(QDialog):
             color = _speaker_color(project, speaker.id)
             color_item = QTableWidgetItem("●")
             color_item.setFlags(color_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            color_item.setCheckState(Qt.CheckState.Unchecked)
+            color_item.setCheckState(Qt.CheckState.Checked if speaker.id in checked_ids else Qt.CheckState.Unchecked)
             color_item.setForeground(color)
             color_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            identity = QTableWidgetItem(display_speaker_name(project, speaker))
-            bind_item(identity, tr('{name}', name=display_speaker_name(project, speaker)))
+            identity = QTableWidgetItem(speaker.id)
             bind_text(identity, '内部身份：{value0}', property='toolTip', value0=speaker.id)
             identity.setData(Qt.ItemDataRole.UserRole, speaker.id)
             display_name = display_speaker_name(project, speaker)
@@ -574,41 +603,29 @@ class SpeakerManagerDialog(QDialog):
             self.table.selectRow(0)
         self.table.blockSignals(False)
         self._checking_rows=False
-        self._load_selected()
-        self._selection_checks()
+        self._load_selected(force=True)
+        self.table.verticalScrollBar().setValue(scroll_position)
+        self._update_selection_summary()
 
     def _selected_ids(self):
         return {str(self.table.item(row,1).data(Qt.UserRole)) for row in range(self.table.rowCount())
-                if not self.table.isRowHidden(row) and self.table.item(row,0).checkState()==Qt.Checked}
+                if self.table.item(row,0).checkState()==Qt.Checked}
 
     def _selection_checks(self):
-        if self._checking_rows:return
-        self._checking_rows=True
-        selected={i.row() for i in self.table.selectionModel().selectedRows()}
-        for row in range(self.table.rowCount()):
-            item=self.table.item(row,0)
-            if item:item.setCheckState(Qt.Checked if row in selected and not self.table.isRowHidden(row) else Qt.Unchecked)
-        self._checking_rows=False
+        # Checked batch targets are independent of the current editing row.
         self._update_selection_summary()
 
     def _checkbox_selection(self,item):
         if self._checking_rows or item.column()!=0:return
-        from PySide6.QtCore import QItemSelectionModel
-        self._checking_rows=True
-        flag=QItemSelectionModel.Select if item.checkState()==Qt.Checked else QItemSelectionModel.Deselect
-        self.table.selectionModel().select(self.table.model().index(item.row(),0),flag|QItemSelectionModel.Rows)
-        self._checking_rows=False;self._update_selection_summary()
+        self._update_selection_summary()
 
     def _select_visible(self,mode):
-        from PySide6.QtCore import QItemSelectionModel
         self._checking_rows=True
         for row in range(self.table.rowCount()):
             if self.table.isRowHidden(row):continue
             item=self.table.item(row,0)
             checked=mode=='all' or (mode=='invert' and item.checkState()!=Qt.Checked)
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
-            flag=QItemSelectionModel.Select if checked else QItemSelectionModel.Deselect
-            self.table.selectionModel().select(self.table.model().index(row,0),flag|QItemSelectionModel.Rows)
         self._checking_rows=False;self._update_selection_summary()
 
     def _update_selection_summary(self):
@@ -648,9 +665,21 @@ class SpeakerManagerDialog(QDialog):
         self.page.undo_stack.push(command)
         self.refresh()
 
-    def _load_selected(self) -> None:
+    def _load_selected(self, *, force=False) -> None:
+        if self._loading_editor or self._committing_name:
+            return
         project = self.page.project
         speaker_id = self._selected_speaker_id()
+        if speaker_id == self._editor_speaker_id and not force:
+            return
+        if speaker_id != self._editor_speaker_id and not self._finish_name_edit():
+            self.table.blockSignals(True)
+            for row in range(self.table.rowCount()):
+                if self.table.item(row, 1).data(Qt.UserRole) == self._editor_speaker_id:
+                    self.table.setCurrentCell(row, 1)
+                    break
+            self.table.blockSignals(False)
+            return
         speaker = next((item for item in project.speakers if item.id == speaker_id), None) if project else None
         enabled = speaker is not None
         for control in (
@@ -663,8 +692,12 @@ class SpeakerManagerDialog(QDialog):
         self.visible_check.setChecked(not speaker.hidden if speaker else True)
         self.visible_check.blockSignals(False)
         if not speaker or not project:
+            self._editor_speaker_id = ""
             return
+        self._loading_editor = True
+        self._editor_speaker_id = speaker_id
         self.name_edit.setText(speaker.name or speaker.id)
+        self.name_error.hide()
         self._color = speaker.color or _speaker_color(project, speaker.id).name()
         self._update_color_button()
         self.style_combo.clear()
@@ -676,6 +709,74 @@ class SpeakerManagerDialog(QDialog):
             if candidate.id != speaker.id:
                 self.merge_target.addItem(candidate.name or candidate.id, candidate.id)
         self.merge_button.setEnabled(self.merge_target.count() > 0)
+        self._loading_editor = False
+
+    def _finish_name_edit(self) -> bool:
+        if self._name_preedit:
+            from PySide6.QtWidgets import QApplication
+            QApplication.inputMethod().commit()
+        return self._commit_name()
+
+    def _commit_name(self) -> bool:
+        if self._loading_editor or self._committing_name or not self._editor_speaker_id:
+            return True
+        if self._name_preedit:
+            bind_text(self.name_error, '请先确认输入法中的姓名。')
+            self.name_error.show()
+            return False
+        project = self.page.project
+        speaker = next((item for item in project.speakers if item.id == self._editor_speaker_id), None) if project else None
+        if speaker is None:
+            return True
+        name = self.name_edit.text().strip()
+        if not name:
+            bind_text(self.name_error, '名称不能为空，原名称已保留。')
+            self.name_error.show()
+            return False
+        self.name_error.hide()
+        if name == (speaker.name or speaker.id):
+            return True
+        self._committing_name = True
+        try:
+            # One edit session commits once at an explicit boundary; keystrokes
+            # never rebuild the table or add undo entries.
+            manager_ref = weakref.ref(self)
+            page = self.page
+            speaker_id = speaker.id
+            def changed():
+                page._speaker_structure_changed()
+                manager = manager_ref()
+                if manager is not None:
+                    try:
+                        manager._update_name_row(speaker_id)
+                        if not manager._committing_name and manager._editor_speaker_id == speaker_id:
+                            current = next((item for item in project.speakers if item.id == speaker_id), None)
+                            if current is not None:
+                                manager.name_edit.setText(current.name or current.id)
+                    except RuntimeError:
+                        pass  # The dialog can close before the command is undone.
+            self.page.undo_stack.push(SetSpeakerCommand(project, speaker_id, {"name": name},
+                text=tr('修改说话人名称'), changed=changed))
+        finally:
+            self._committing_name = False
+        return True
+
+    def _update_name_row(self, speaker_id: str) -> None:
+        speaker = next((item for item in self.page.project.speakers if item.id == speaker_id), None)
+        if speaker is None:
+            return
+        name = display_speaker_name(self.page.project, speaker)
+        if speaker.is_host:
+            name = tr('★ {name}', name=name)
+        if speaker.hidden:
+            name = tr('{name}（已隐藏）', name=name)
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 1).data(Qt.UserRole) == speaker_id:
+                bind_item(self.table.item(row, 2), tr('{name}', name=name))
+                break
+        for index in range(self.merge_target.count()):
+            if self.merge_target.itemData(index) == speaker_id:
+                self.merge_target.setItemText(index, speaker.name or speaker.id)
 
     def _visibility_toggled(self, state: int) -> None:
         project = self.page.project
@@ -752,18 +853,24 @@ class SpeakerManagerDialog(QDialog):
             self._update_color_button()
 
     def _apply_changes(self) -> None:
+        if not self._finish_name_edit():
+            return
         project = self.page.project
         speaker_id = self._selected_speaker_id()
         if not project or not speaker_id:
             return
+        changes = {"color": self._color, "style_id": str(self.style_combo.currentData() or "default")}
+        speaker = next((item for item in project.speakers if item.id == speaker_id), None)
+        if speaker is None:
+            return
+        existing = {"color": speaker.color or _speaker_color(project, speaker_id).name(), "style_id": speaker.style_id}
+        changes = {key: value for key, value in changes.items() if existing[key] != value}
+        if not changes:
+            return
         self.page.undo_stack.push(SetSpeakerCommand(
             project,
             speaker_id,
-            {
-                "name": self.name_edit.text().strip() or speaker_id,
-                "color": self._color,
-                "style_id": str(self.style_combo.currentData() or "default"),
-            },
+            changes,
             changed=self.page._speaker_structure_changed,
         ))
         self.refresh(speaker_id)

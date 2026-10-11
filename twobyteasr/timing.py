@@ -343,7 +343,7 @@ def extend_cue_tails_by_speaker(
     audio_seconds,
     timeline_fps=TIMELINE_FPS,
 ):
-    """每条分轨字幕尾点增加200ms；同一说话人的下一条出现时立即让位。"""
+    """最多延长200ms；任何说话人的开口都不能被新增的阅读尾部盖住。"""
     if not cues:
         return cues
     tail_frames = max(1, int(round(ISOLATED_CUE_TAIL_SECONDS * timeline_fps)))
@@ -352,6 +352,17 @@ def extend_cue_tails_by_speaker(
     speaker_rows = {}
     for cue in cues:
         speaker_rows.setdefault(cue.speaker or "S00", []).append(cue)
+    # Freeze pre-extension intervals: another speaker's added reading tail is
+    # not speech evidence, and iteration order must not change the result.
+    from bisect import bisect_right
+    speech_index = {}
+    for speaker, rows in speaker_rows.items():
+        intervals = sorted((int(round(c.start * timeline_fps)),
+                            int(round(c.end * timeline_fps))) for c in rows)
+        starts, prefix_ends, farthest = [], [], -1
+        for start, end in intervals:
+            starts.append(start); farthest = max(farthest, end); prefix_ends.append(farthest)
+        speech_index[speaker] = starts, prefix_ends
     changed = 0
     largest_added_frames = 0
     for rows in speaker_rows.values():
@@ -370,6 +381,15 @@ def extend_cue_tails_by_speaker(
                 audio_end_frame,
                 start_frame + max_duration_frames,
             )
+            for speaker, (starts, prefix_ends) in speech_index.items():
+                if speaker == (current.speaker or "S00"):
+                    continue
+                index_at_end = bisect_right(starts, end_frame)
+                if index_at_end and prefix_ends[index_at_end-1] > end_frame:
+                    target_end_frame = end_frame
+                    break
+                if index_at_end < len(starts):
+                    target_end_frame = min(target_end_frame, starts[index_at_end])
             if target_end_frame <= end_frame:
                 continue
             added_frames = target_end_frame - end_frame
@@ -381,7 +401,7 @@ def extend_cue_tails_by_speaker(
     if changed:
         print(
             f"   [完成] 分轨字幕尾帧：{changed}/{len(cues)} 条延长最多 "
-            f"{ISOLATED_CUE_TAIL_SECONDS * 1000:.0f}ms；同主播下一条出现时自动让位。"
+            f"{ISOLATED_CUE_TAIL_SECONDS * 1000:.0f}ms；其他字幕开口时不再追加拖尾。"
         )
         record_run_event(
             "cue_tail_extension",
@@ -397,7 +417,8 @@ def bridge_short_display_gaps(
     audio_seconds,
     timeline_fps=TIMELINE_FPS,
 ):
-    """补齐全轨可见字幕间不足 500ms 的空白，不移动下一条句首。"""
+    """补齐不足 500ms 的空白（全轨空白，以及同一说话人在别人字幕仍在时的
+    短暂消失），不移动下一条句首。"""
     if len(cues) < 2:
         return cues
     rows = sorted(cues, key=lambda cue: (cue.start, cue.end, cue.speaker, cue.cue_id))
@@ -434,6 +455,21 @@ def bridge_short_display_gaps(
         if end_frame > coverage_end_frame:
             coverage_owner = cue
             coverage_end_frame = end_frame
+
+    # 2026-10-10 (user): one speaker's caption must not blink off for a
+    # moment while another speaker's caption stays up either.
+    from .display_timing import short_gap_bridges
+    frames = [
+        (index, cue.speaker or "S00", int(round(cue.start * timeline_fps)), int(round(cue.end * timeline_fps)))
+        for index, cue in enumerate(rows)
+    ]
+    for index, end_frame in short_gap_bridges(
+        frames, bridge_frames, full_track=False, max_duration=max_duration_frames,
+    ).items():
+        if end_frame <= audio_end_frame:
+            largest_gap_frames = max(largest_gap_frames, end_frame - frames[index][3])
+            rows[index].end = end_frame / timeline_fps
+            changed += 1
 
     if changed:
         maximum_gap_ms = round(largest_gap_frames / timeline_fps * 1000)
@@ -501,10 +537,11 @@ def collect_review_items(segments, cues, speech_regions, firered_tokens=()):
     for segment in segments:
         text = content_only(segment.text)
         if len(text) >= 3 and segment.confidence < REVIEW_LOW_CONFIDENCE:
+            streaming=str(segment.primary_source).startswith('vibevoice_')
             add_review_item(
                 segment.start,
-                "低置信度",
-                f"MOSS 主稿的 FireRed 支持度 {segment.confidence:.2f}",
+                "VibeVoice 时间与文字待审核" if streaming else "低置信度",
+                "原生模型概率未知；当前时间精度和声学对齐证据需人工核对" if streaming else f"MOSS 主稿的 FireRed 支持度 {segment.confidence:.2f}",
                 segment.text,
                 priority=2,
             )

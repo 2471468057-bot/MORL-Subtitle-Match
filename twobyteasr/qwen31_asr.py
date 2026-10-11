@@ -13,6 +13,37 @@ FLASH = 'qwen-audio-3.1-asr-flash'
 FILETRANS = 'qwen-audio-3.1-asr-flash-filetrans'
 
 
+def filetrans_hints(canonical_terms, *, vocabulary_id='', vocabulary_model=''):
+    """Filetrans HTTP input.context and modest native vocabulary, no aliases.
+
+    Official HTTP reference: each context round is capped at 400 characters;
+    instantaneous plus compiled hotwords are capped at 2,000 entries. Do not
+    rely on the server's silent tail truncation or random over-limit sampling.
+    """
+    terms = list(dict.fromkeys(str(x).strip() for x in canonical_terms if str(x).strip()))
+    if len(terms) > 2000:
+        raise ASRProtocolError('本场规范词超过 Filetrans 2000 项限制，请缩小启用词库范围。', 'input_limit')
+    if any((not x.isascii() and len(x) > 15) or (x.isascii() and len(x.split()) > 7)
+           or '\n' in x or '\r' in x for x in terms):
+        raise ASRProtocolError('Filetrans热词规范：含非ASCII最多15字符，纯ASCII最多7个空格分词；请缩小本场词库。', 'input_limit')
+    text = '本场规范词（仅实际提到时采用，保持大小写和数字）：'
+    packed = []
+    for term in terms:
+        candidate = text + '、'.join(packed + [term])
+        if len(candidate) <= 400: packed.append(term)
+    hints = {'vocabulary': {term: 2 for term in terms},
+             'filetrans_context': ([{'role': 'user', 'content': [{'type': 'input_text',
+                                    'text': text + '、'.join(packed)}]}] if packed else []),
+             'hint_counts': {'native_vocabulary': len(terms), 'context_terms': len(packed),
+                             'context_omitted_terms': len(terms) - len(packed), 'weight': 2}}
+    if vocabulary_id:
+        if vocabulary_model != FILETRANS:
+            raise ASRProtocolError('预编译热词库绑定未确认或属于旧模型；请为 Qwen Audio 3.1 Filetrans 重新核对绑定。', 'vocabulary_model_mismatch')
+        hints['vocabulary_id'] = str(vocabulary_id)
+        hints['vocabulary_model'] = vocabulary_model
+    return hints
+
+
 class ASRProtocolError(RuntimeError):
     def __init__(self, message, category='invalid_response'):
         super().__init__(message)
@@ -69,7 +100,7 @@ class SentenceRevisions:
                 raise ASRProtocolError('Flash句时间越出本请求范围')
             segment = dict(start=start, end=min(end, duration), text=str(row.get('text', '')),
                            sentence_id=row['sentence_id'], timestamp_source='qwen31_native_sentence')
-            if self.native and row.get('speaker_id') is not None:
+            if row.get('speaker_id') is not None:
                 segment['speaker'] = row['speaker_id']
             segments.append(segment)
             for word in row.get('words', []):
@@ -84,7 +115,7 @@ class SentenceRevisions:
                     continue
                 entry = dict(start=ws, end=we, word=str(word.get('text', ''))+str(word.get('punctuation') or ''),
                              timestamp_source='qwen31_native_word')
-                if self.native and word.get('speaker_id', row.get('speaker_id')) is not None:
+                if word.get('speaker_id', row.get('speaker_id')) is not None:
                     entry['speaker'] = word.get('speaker_id', row.get('speaker_id'))
                 words.append(entry)
         # Mixed stable/unstable words must never silently delete unstabilized

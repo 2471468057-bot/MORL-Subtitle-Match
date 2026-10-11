@@ -2,6 +2,8 @@
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
+const path = require('node:path');
+const {StringDecoder} = require('node:string_decoder');
 const {syncBuiltinESMExports} = require('node:module');
 const log = (value) => {
   try {
@@ -16,9 +18,25 @@ cp.spawn = function(command, args, options) {
   const opts={...options,windowsHide:true,detached:false};
   if (!opts.stdio || opts.stdio==='inherit') opts.stdio=['ignore','pipe','pipe'];
   const child=originalSpawn.call(this,command,args,opts);
-  log({phase:'start',purpose:'Renderer child / Chromium CDP',executable:command,command:[command,...args],
-    child_pid:child.pid,hidden:true,stdio:opts.stdio});
-  child.once('exit',(code,signal)=>log({phase:'exit',child_pid:child.pid,returncode:code,signal}));
+  const exported=!!process.env.TWOBYTEASR_EXPORT_JOB_ID;
+  const isFFmpeg=/^ffmpeg(?:\.exe)?$/i.test(path.basename(String(command)));
+  const purpose=exported && isFFmpeg ? 'Renderer ffmpeg media process' : 'Renderer child / Chromium CDP';
+  const exportFields=exported ? {job_id:process.env.TWOBYTEASR_EXPORT_JOB_ID,
+    cwd:opts.cwd || process.cwd()} : {};
+  log({phase:'start',purpose,executable:command,command:[command,...args],
+    child_pid:child.pid,hidden:true,stdio:opts.stdio,...exportFields});
+  // Observe text diagnostics only. Never attach a listener to binary frame stdout.
+  if (exported && isFFmpeg && process.env.TWOBYTEASR_EXPORT_STDERR_ROOT) {
+    const filename=path.join(process.env.TWOBYTEASR_EXPORT_STDERR_ROOT,`renderer-${child.pid}.stderr.log`);
+    if (child.stderr) {
+      const decoder=new StringDecoder('utf8');
+      const append=(text)=>{if(text)fs.appendFileSync(filename,text);};
+      child.stderr.on('data',chunk=>append(decoder.write(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk))));
+      child.stderr.once('end',()=>append(decoder.end()));
+      log({phase:'stderr_capture',purpose,child_pid:child.pid,stderr_log:filename,...exportFields});
+    } else log({phase:'stderr_unavailable',purpose,child_pid:child.pid,...exportFields});
+  }
+  child.once('exit',(code,signal)=>log({phase:'exit',child_pid:child.pid,returncode:code,signal,...exportFields}));
   return child;
 };
 // Dependency cleanup uses exec/execFile; it must also stay hidden.

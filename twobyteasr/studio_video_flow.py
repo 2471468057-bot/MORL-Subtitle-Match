@@ -37,6 +37,7 @@ class StudioVideoFlowMixin:
             self.save_state.setToolTip(str(exc))
             return False
         self.undo_stack.push(command)
+        self._last_clip_edit_skipped_captions=bool(getattr(command,"skipped_caption_speakers",()))
         return True
 
     def _razor_video_at(self, milliseconds: int) -> None:
@@ -75,7 +76,8 @@ class StudioVideoFlowMixin:
     def _delete_timeline_gap(self):
         gap = self.timeline.selected_gap
         if gap and self._commit_clip_edit(gap[0], 'gap', start=gap[1], end=gap[2]):
-            bind_text(self.save_state, '已闭合 {value0} 空白及关联音频（其他轨道保持原位）', value0=gap[0])
+            if not getattr(self,'_last_clip_edit_skipped_captions',False):
+                bind_text(self.save_state, '已闭合空白，参与波纹的轨道与字幕已同步')
 
     # -------------------------------------------- 自动剪口播气口（四十四轮）
 
@@ -539,6 +541,12 @@ class StudioVideoFlowMixin:
         self._video_effects_control_committed()
 
     def _refresh_video_transform_panel(self) -> None:
+        if getattr(self,"_transition_defaults_project",None) is not self.project:
+            self._transition_defaults_project=self.project
+            for media,fallback in (("video",500),("audio",300)):
+                spin=getattr(self,"default_"+media+"_transition_duration",None)
+                if spin is not None:
+                    spin.setValue(int(self.project.studio_state.get("default_"+media+"_transition_ms",fallback)) if self.project else fallback)
         if not hasattr(self, "video_transform_controls"):
             return
         track, clip = self._selected_video_clip()
@@ -931,6 +939,10 @@ class StudioVideoFlowMixin:
         except KeyError:
             return
         menu = create_studio_menu(self)
+        gap=self.timeline.selected_gap
+        if not clip_id and gap and gap[0]==track_id:
+            menu.addAction('波纹删除空隙',self._delete_timeline_gap).setEnabled(not track.locked)
+            menu.addSeparator()
         from .studio_track_delete import delete_track, delete_clips, delete_label
         menu.addAction(delete_label(project,'video',track_id)+"    Delete",lambda:delete_track(self,'video',track_id)).setEnabled(not track.locked)
         primary_id = primary_video_track_id(project)
@@ -1143,6 +1155,7 @@ class StudioVideoFlowMixin:
                 "track_id": str(audio_layer.get("track_id") or ""),
                 "track_name": str(audio_layer.get("track_name") or "Audio"),
                 "clip_id": str(audio_layer.get("clip_id") or ""),
+                "asset_id": str(audio_layer.get("asset_id") or ""),
                 "source_path": str(audio_layer.get("source_path") or ""),
                 "source_ms": int(audio_layer.get("source_ms") or 0),
                 "source_in_ms": int(audio_layer.get("source_in_ms") or 0),
@@ -1199,6 +1212,7 @@ class StudioVideoFlowMixin:
             "track_id": track_id,
             "track_name": track.name if track is not None else track_id,
             "clip_id": clip.id if clip is not None else "",
+            "asset_id": clip.asset_id if clip is not None else "",
             "source_path": source_path,
             "source_ms": max(0, int(timeline_ms)),
             "source_in_ms": 0,
@@ -1269,6 +1283,7 @@ class StudioVideoFlowMixin:
             self._preview_resolved_paths = {}
             self._preview_indexed_paths = {}
             self._preview_source_kinds = {}
+            self._preview_playback_memo = {}
         cache = getattr(self, "_preview_resolved_paths", None)
         if cache is None:
             cache = self._preview_resolved_paths = {}
@@ -1281,9 +1296,23 @@ class StudioVideoFlowMixin:
         resolved = cache[key]
         if not resolved.lower().endswith(".flv"):
             return resolved
+        from time import monotonic
         from .indexed_media import GLOBAL_INDEXED_MEDIA
-        playback, kind = GLOBAL_INDEXED_MEDIA.playback_source(resolved)
-        indexed = str(playback) if playback is not None else GLOBAL_INDEXED_MEDIA.resolve(resolved)
+        # playback_source() stats the source, proxy and markers (~10 calls)
+        # and this runs several times per playback frame. Re-check each
+        # source at most every 250 ms: a finished proxy is still adopted at
+        # the next transport boundary, and polling keeps the build chain going.
+        memo = getattr(self, "_preview_playback_memo", None)
+        if memo is None:
+            memo = self._preview_playback_memo = {}
+        now = monotonic()
+        remembered = memo.get(resolved)
+        if remembered is not None and remembered[0] > now:
+            playback, kind, indexed = remembered[1:]
+        else:
+            playback, kind = GLOBAL_INDEXED_MEDIA.playback_source(resolved)
+            indexed = str(playback) if playback is not None else GLOBAL_INDEXED_MEDIA.resolve(resolved)
+            memo[resolved] = (now + 0.25, playback, kind, indexed)
         if kind == "original":
             indexed = resolved
         active = getattr(self, "_preview_indexed_paths", None)
@@ -1354,6 +1383,8 @@ class StudioVideoFlowMixin:
             primary_video_track_id,
         )
 
+        from .studio_transitions import transition_windows, transition_gain
+        windows = transition_windows(project, "video")
         primary_id = primary_video_track_id(project)
         layers: list[dict[str, object]] = []
         for track, clip in active_video_clips(project, timeline_ms):
@@ -1396,7 +1427,7 @@ class StudioVideoFlowMixin:
                     asset=asset,
                     force=False,
                 )
-            if primary_route:
+            if primary_route and (track.id,clip.id) not in windows:
                 mapped = timeline_to_source(sequence_of(project), int(timeline_ms))
                 if mapped is not None:
                     source_ms = mapped.source_ms
@@ -1404,6 +1435,9 @@ class StudioVideoFlowMixin:
             transform.update(
                 self._video_transform_preview_overrides.get(clip.id, {})
             )
+            envelopes = windows.get((track.id,clip.id),windows.get(clip.id, {})).get("envelopes", [])
+            transition_active = any(e["start_ms"] <= timeline_ms < e["end_ms"] for e in envelopes)
+            transform["opacity"] = float(transform.get("opacity", 1.)) * transition_gain(envelopes, timeline_ms)
             effects = dict(getattr(clip, "effects", {}) or {})
             effects.update(self._video_effects_preview_overrides.get(clip.id, {}))
             layers.append({
@@ -1412,6 +1446,9 @@ class StudioVideoFlowMixin:
                 "track_name": track.name,
                 "track_locked": bool(getattr(track, "locked", False)),
                 "clip_id": clip.id,
+                # The playback path may be a continuous proxy, so it cannot
+                # identify the original asset or restore its source duration.
+                "asset_id": clip.asset_id,
                 "source_path": source_path,
                 "source_ms": int(source_ms),
                 "source_in_ms": int(clip.source_in_ms),
@@ -1426,6 +1463,7 @@ class StudioVideoFlowMixin:
                 "primary_media": bool(primary_route),
                 "transform": transform,
                 "effects": effects,
+                "transition_active": transition_active,
                 "audio_enabled": bool(clip.audio_enabled),
                 "track_muted": bool(track.muted),
             })
@@ -1679,28 +1717,44 @@ class StudioVideoFlowMixin:
                 return None
             if self._active_video_preview_key != "__gap__":
                 self._composition_keep_resynced = False
+                previous_key = self._active_video_preview_key
+                self._playhead_ui_pending = None
                 self._playback_mode = "multitrack"
-                self.video.enter_timeline_gap(timeline_ms, timeline_duration_ms(self.project))
-                if hasattr(self, 'media_availability'):
-                    self.media_availability.show_gap(timeline_ms)
                 self._active_video_preview_key = "__gap__"
                 self._active_video_preview_track_id = ""
                 self._active_video_preview_clip_id = ""
                 self._active_video_preview_source_path = ""
                 self._active_video_preview_volume = None
+                self.video.enter_timeline_gap(timeline_ms, timeline_duration_ms(self.project))
+                self._studio_trace('TIMELINE_GAP_ENTER', project_ms=int(timeline_ms),
+                    previous_key=previous_key, generation=self.video._playback_clock.generation,
+                    paused=self.video._paused, reason='no_active_media_layer')
+                if hasattr(self, 'media_availability'):
+                    self.media_availability.show_gap(timeline_ms)
                 if hasattr(self, "media_pool_panel"):
                     bind_text(self.media_pool_panel.preview_contract, '预览：当前位置没有可用的启用片段')
             return None
         key = str(target["key"])
         source_path = str(target["source_path"])
-        self._audio_only_subtitle_active = target.get("mode") == "audio_only"
+        token = getattr(self, '_owned_audio_tail', None)
+        tail = bool(token is not None and token.project_identity == id(self.project)
+            and token.preview_key == key and token.clip_id == str(target['clip_id'])
+            and token.generation == self.video._playback_clock.generation)
+        if token is not None and not tail:
+            self._invalidate_audio_tail()
+        visual_tail = tail or (key == str(self._active_video_preview_key)
+            and source_path == str(self._active_video_preview_source_path)
+            and str(target['clip_id']) == str(self._active_video_preview_clip_id)
+            and self._audio_tail_visual_active())
+        self._audio_only_subtitle_active = target.get("mode") == "audio_only" or visual_tail
         # mpv is the primary demux/decode/sync owner for both video and
         # audio-only sources.  AudioEngine is reserved for a non-primary
         # external lane and must never become a second master clock.
         mapping = dict(getattr(self.project, "studio_state", {}).get("media_time_mapping", {}))
         asset = next(
             (item for item in getattr(self.project, "media_pool", ())
-             if str(getattr(item, "canonical_source", "")) == source_path),
+             if (str(getattr(item, "asset_id", "")) == str(target.get("asset_id") or "")
+                 or str(getattr(item, "canonical_source", "")) == source_path)),
             None,
         )
         if asset is not None:
@@ -1722,7 +1776,7 @@ class StudioVideoFlowMixin:
             mapping,
             has_video=target.get("mode") != "audio_only",
         )
-        self.video.set_external_clock_enabled(target.get("mode") == "audio_only")
+        self.video.set_external_clock_enabled(target.get("mode") == "audio_only" or tail)
         self.video.set_project_time_mapping(
             enabled=target.get("mode") == "multitrack",
             timeline_in_ms=int(target.get("timeline_in_ms") or 0),

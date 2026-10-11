@@ -240,67 +240,22 @@ def _model_stage_summary(legacy):
     report_api = getattr(getattr(legacy, "task_reporting", None), "active_media_report", None)
     report = report_api() if callable(report_api) else None
     events = list(report.get("events", [])) if isinstance(report, dict) else []
-    summary = {}
-    for event in events:
-        if str(event.get("event", "")) not in {
-            "MODEL_SELECTED", "MODEL_ENVIRONMENT_READY", "MODEL_STARTED", "MODEL_STAGE_ENTERED",
-            "MODEL_PLANNED", "MODEL_RESULT_AVAILABLE",
-            "MODEL_COMPLETED", "MODEL_FAILED", "MODEL_SKIPPED",
-        }:
-            continue
-        model_id = str(event.get("model_id") or "")
-        if not model_id:
-            continue
-        item = summary.setdefault(model_id, {
-            "model_id": model_id,
-            "role": str(event.get("role") or ""),
-            "backend": str(event.get("backend") or ""),
-            "selected": False,
-            "environment_ready": None,
-            "started": False,
-            "completed": False,
-            "failed": False,
-            "skipped": False,
-            "segment_count": 0,
-            "failure_reason": "",
-        })
-        state = str(event.get("event") or "")
-        if state in {"MODEL_SELECTED", "MODEL_PLANNED"}:
-            item["selected"] = True
-        elif state == "MODEL_ENVIRONMENT_READY":
-            item["environment_ready"] = bool(event.get("environment_ready"))
-        elif state == "MODEL_STAGE_ENTERED":
-            item["stage_entered"] = True
-        elif state == "MODEL_STARTED":
-            item["started"] = True
-            item["failed"] = False
-            item["completed"] = False
-            item["failure_reason"] = ""
-        elif state in {"MODEL_COMPLETED", "MODEL_RESULT_AVAILABLE"}:
-            item["completed"] = True
-            item["failed"] = False
-            item["segment_count"] = int(event.get("segment_count") or 0)
-            item["failure_reason"] = ""
-        elif state == "MODEL_FAILED":
-            item["failed"] = True
-            item["completed"] = False
-            item["failure_reason"] = str(event.get("failure_reason") or "")
-        elif state == "MODEL_SKIPPED":
-            item["skipped"] = True
-            item["failure_reason"] = str(event.get("failure_reason") or "")
-    return summary
+    from twobyteasr.model_execution import summarize_model_events
+    return summarize_model_events(events)
 
 
 def _record_fused_review_classification(
     legacy, segments, *, firered_selected, firered_failed, qwen_selected, qwen_failed
 ):
     """Classify fused evidence after all selected stages have settled."""
+    from twobyteasr.asr_source_evidence import _confidence
     counts = {
         "MULTI_SOURCE_AGREEMENT": 0,
         "MULTI_SOURCE_CONFLICT": 0,
         "SINGLE_SOURCE_DEGRADED": 0,
         "TIMING_LOW_CONFIDENCE": 0,
         "TEXT_LOW_CONFIDENCE": 0,
+        "TEXT_CONFIDENCE_UNKNOWN": 0,
     }
     for segment in segments:
         has_firered = bool(segment.firered_text)
@@ -322,11 +277,12 @@ def _record_fused_review_classification(
             or float(segment.firered_alignment_confidence or 0.0) < 0.60
         ):
             counts["TIMING_LOW_CONFIDENCE"] += 1
-        if qwen_selected and (
-            qwen_failed
-            or not has_qwen
-            or float(segment.qwen_confidence or 0.0) < 0.60
-        ):
+        qwen_score = _confidence({"qwen_confidence": segment.qwen_confidence,
+            "qwen_confidence_available": getattr(segment, "qwen_confidence_available", False)}, "qwen3-asr")
+        if qwen_selected and not qwen_failed and has_qwen and qwen_score is None:
+            counts["TEXT_CONFIDENCE_UNKNOWN"] += 1
+        if qwen_selected and (qwen_failed or not has_qwen or
+                (qwen_score is not None and qwen_score < 0.60)):
             counts["TEXT_LOW_CONFIDENCE"] += 1
     legacy.record_run_event(
         "review_classification",
@@ -662,6 +618,8 @@ def check_runtime(legacy):
     if combination_requires_cuda(legacy.RUNTIME_SETTINGS):
         require_cuda_runtime()
     primary_key = str(getattr(legacy, "PRIMARY_ASR_BACKEND", "moss"))
+    if primary_key in {'vibevoice_1_5b', 'vibevoice_7b'}:
+        raise RuntimeError('VibeVoice-ASR-Streaming 已移除，请在模型工坊选择现有主力模型。')
     if primary_key == "none":
         raise RuntimeError("尚未选择主力转写模型。请先在模型工坊选择一个主力模型。")
     if primary_key == "moss" and not getattr(sys, "frozen", False):
@@ -864,6 +822,8 @@ def _run_streaming_worker(
     # 管道（2026-09-20 运行日志乱码实录）。-X utf8 是显式解释器选项，在
     # -I 下依然生效，因此在这里统一钉住子进程 stdio 编码。
     command = python_utf8_command(command)
+    worker_owner = get_runtime_context()
+    worker_job_id = str(getattr(worker_owner, 'job_id', '') or '')
     # Python 3.12 子进程的 stdout 接到 PIPE 后会回落到 Windows 本地代码页；
     # 主进程按 UTF-8 解码时就会把中文进度替换成问号/�。注意 -I 会忽略全部
     # PYTHON* 环境变量（隐含 -E），因此必须用 -X utf8 这个显式解释器选项
@@ -911,6 +871,13 @@ def _run_streaming_worker(
         cwd=worker_cwd,
         **hidden_subprocess_kwargs(),
     )
+    from twobyteasr.cache import record_run_event
+    worker_identity = dict(model_id='moss', backend='moss', pid=process.pid,
+        job_id=worker_job_id,
+        worker=next((str(arg) for arg in command if str(arg).endswith('moss_worker.py')), ''), runtime=str(command[0]),
+        role='primary_transcription', execution='worker_process_started', loaded=None)
+    record_run_event('asr_worker_started', **worker_identity)
+    record_run_event('MODEL_STARTED', **worker_identity)
     if sys.stdin and sys.stdin.isatty():
         print("      MOSS 运行中可按 Q 安全取消本次任务。", flush=True)
     output_queue = queue.Queue()
@@ -930,13 +897,15 @@ def _run_streaming_worker(
     last_output = started
     try:
         while process.poll() is None or not finished_output:
+            if get_runtime_context() is not worker_owner:
+                raise CancelledError('MOSS旧任务已被替换，停止worker并拒绝迟到结果。')
             now = time.monotonic()
             if now - started > timeout_seconds:
                 raise TimeoutError(f"MOSS 子进程超过 {timeout_seconds / 60:.0f} 分钟未完成。")
             if process.poll() is None and now - last_output > no_progress_seconds:
                 raise TimeoutError(
                     f"MOSS 连续 {no_progress_seconds / 60:.0f} 分钟没有任何进度输出，"
-                    "已停止疑似卡死进程；已完成分块可在下次继续。"
+                    "已停止疑似卡死进程；整段任务未完成，诊断已保留。"
                 )
             if _cancel_requested():
                 raise KeyboardInterrupt("用户按 Q 取消 MOSS。")
@@ -949,74 +918,44 @@ def _run_streaming_worker(
             if line is None:
                 finished_output = True
                 continue
-            last_output = time.monotonic()
+            progress = None
+            if line.startswith("MOSS_EVENT "):
+                try:
+                    progress = json.loads(line[len("MOSS_EVENT "):])
+                    record_run_event("asr_worker_progress", backend="moss", job_id=worker_job_id, **progress)
+                except (ValueError, TypeError):
+                    pass
+            if not progress or not progress.get("heartbeat"):
+                last_output = time.monotonic()
             if line:
                 lines.append(line)
                 print(f"      MOSS{line_prefix}: {line}", flush=True)
         reader.join(timeout=2.0)
         return process.returncode, lines
-    except BaseException:
+    except BaseException as exc:
+        exc.output_lines = list(lines)
         stop_process_tree(process)
         reader.join(timeout=2.0)
         raise
     finally:
         if process.poll() is None:
             stop_process_tree(process)
+        record_run_event('asr_worker_exited', model_id='moss', backend='moss',
+            job_id=worker_job_id, pid=process.pid, returncode=process.poll(), readers_stopped=not reader.is_alive())
 
 
 def _chunk_moss_audio(shared_audio, temp_dir, legacy):
-    duration = len(shared_audio) / legacy.AUDIO_SAMPLE_RATE
-    if duration <= MOSS_SINGLE_PASS_MAX_SECONDS:
-        return []
-    jobs = []
-    step = MOSS_CHUNK_SECONDS - MOSS_CHUNK_OVERLAP_SECONDS
-    offset = 0.0
-    chunk_id = 0
-    while offset < duration - 0.01:
-        chunk_id += 1
-        end = min(duration, offset + MOSS_CHUNK_SECONDS)
-        left = int(round(offset * legacy.AUDIO_SAMPLE_RATE))
-        right = int(round(end * legacy.AUDIO_SAMPLE_RATE))
-        wav_path = os.path.join(temp_dir, f"moss_chunk_{chunk_id:03d}.wav")
-        legacy.write_pcm16_wav(wav_path, shared_audio[left:right])
-        jobs.append(
-            {
-                "chunk_id": chunk_id,
-                "audio": wav_path,
-                "offset": offset,
-                "duration": end - offset,
-                "global_end": end,
-            }
-        )
-        if end >= duration - 0.01:
-            break
-        offset += step
-    return jobs
+    """Compatibility name: transport ONE complete task PCM, never slice it."""
+    path = os.path.join(temp_dir, "moss_full_audio.npy")
+    np.save(path, np.asarray(shared_audio, dtype="<f4"), allow_pickle=False)
+    return [{"chunk_id": 1, "audio": path, "offset": 0.0,
+             "duration": len(shared_audio) / legacy.AUDIO_SAMPLE_RATE,
+             "sample_count": len(shared_audio)}]
 
 
 def _moss_parallel_worker_count(jobs, legacy, total_vram_gb=None, free_vram_gb=None):
-    """Return a conservative MOSS worker count without changing inference output.
-
-    并行 worker 需要同时满足总显存与空闲显存门槛：GPU 被其他程序占用时，
-    总显存再大也不能安全双路，否则第二个 worker 会 OOM 触发整批回退重跑。
-    """
-    configured = max(1, min(2, int(getattr(legacy, "MOSS_PARALLEL_WORKERS", 1))))
-    if configured < 2 or len(jobs) < 2:
-        return 1
-    if total_vram_gb is None:
-        total_vram_gb = _cuda_total_memory_gb()
-    if free_vram_gb is None:
-        free_vram_gb = _cuda_free_memory_gb()
-    minimum = float(getattr(legacy, "MOSS_PARALLEL_MIN_VRAM_GB", 14.0))
-    if total_vram_gb < minimum:
-        return 1
-    if free_vram_gb < minimum:
-        print(
-            f"   [显存提示] 空闲显存 {free_vram_gb:.1f} GB 低于双路门槛 "
-            f"{minimum:.0f} GB，MOSS 单路运行。"
-        )
-        return 1
-    return min(configured, len(jobs))
+    # Persisted legacy settings cannot reactivate independent MOSS contexts.
+    return 1
 
 
 def _read_moss_worker_payload(output_path, returncode, output_lines, label, recorder=None):
@@ -1086,122 +1025,16 @@ def _validate_moss_worker_payload(payload, *, producer, consumer):
 
 
 def _run_moss_manifest_jobs(jobs, temp_dir, paths, legacy, title, *, force_workers=None):
-    """Run disjoint MOSS chunks in one or two isolated processes and combine them."""
-    worker_count = (
-        max(1, min(2, int(force_workers)))
-        if force_workers is not None
-        else _moss_parallel_worker_count(jobs, legacy)
-    )
-
-    def run_partition(worker_index, partition, abort_event=None):
-        manifest_path = os.path.join(temp_dir, f"manifest_{worker_index:02d}.json")
-        output_path = os.path.join(temp_dir, f"moss_{worker_index:02d}.json")
-        Path(manifest_path).write_text(
-            json.dumps({"jobs": partition}, ensure_ascii=False), encoding="utf-8"
-        )
-        command = [
-            paths["moss_python"],
-            "-I",
-            paths["moss_worker"],
-            "--manifest",
-            manifest_path,
-            "--output",
-            output_path,
-            "--model",
-            MOSS_MODEL,
-            "--title",
-            title,
-        ]
-        returncode, output_lines = _run_streaming_worker(
-            command,
-            MOSS_TIMEOUT_SECONDS,
-            abort_event=abort_event,
-            line_prefix=(f"[{worker_index}/{worker_count}]" if worker_count > 1 else ""),
-        )
-        return _read_moss_worker_payload(
-            output_path,
-            returncode,
-            output_lines,
-            f"MOSS 工作进程 {worker_index}",
-            recorder=getattr(legacy, "record_run_event", None),
-        )
-
-    if worker_count == 1:
-        return run_partition(1, jobs)
-
-    print(
-        f"   [并行加速] MOSS {len(jobs)} 个分块由 {worker_count} 个 GPU 进程并行处理。"
-    )
-    recorder = getattr(legacy, "record_run_event", None)
-    if callable(recorder):
-        recorder(
-            "moss_chunks_parallel",
-            chunks=len(jobs),
-            workers=worker_count,
-            total_vram_gb=round(_cuda_total_memory_gb(), 2),
-        )
-    abort_event = threading.Event()
-    partitions = [jobs[index::worker_count] for index in range(worker_count)]
-    payloads = []
-    try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        with ThreadPoolExecutor(
-            max_workers=worker_count, thread_name_prefix="moss-gpu"
-        ) as pool:
-            futures = [
-                pool.submit(run_partition, index + 1, partition, abort_event)
-                for index, partition in enumerate(partitions)
-            ]
-            for future in as_completed(futures):
-                try:
-                    payloads.append(future.result())
-                except BaseException:
-                    abort_event.set()
-                    raise
-    except KeyboardInterrupt:
-        raise
-    except CancelledError:
-        raise
-    except Exception as exc:
-        # A failed process may already have produced valid per-chunk checkpoints.
-        # Retrying once with one model is both safer on low free VRAM and cheap.
-        print(f"   [显存回退] MOSS 双路并行失败，改用单路续跑：{exc}")
-        if callable(recorder):
-            recorder("moss_chunks_parallel_fallback", reason=str(exc))
-        return _run_moss_manifest_jobs(
-            jobs,
-            temp_dir,
-            paths,
-            legacy,
-            title,
-            force_workers=1,
-        )
-
-    chunks = []
-    generated_tokens = 0
-    worker_performance = []
-    for payload in payloads:
-        chunks.extend(payload.get("chunks", []))
-        generated_tokens += int(payload.get("generated_tokens", 0))
-        worker_performance.append(payload.get("performance", {}))
-    chunks.sort(
-        key=lambda item: (
-            str(item.get("group_id", "default")),
-            int(item.get("chunk_id", 0)),
-            float(item.get("offset", 0.0)),
-        )
-    )
-    return {
-        "model": payloads[0].get("model", MOSS_MODEL),
-        "title": title,
-        "chunks": chunks,
-        "generated_tokens": generated_tokens,
-        "performance": {
-            "parallel_workers": worker_count,
-            "workers": worker_performance,
-        },
-    }
+    """Reject historical block requests; one task owns one full-context worker."""
+    if len(jobs) != 1 or float(jobs[0].get("offset", 0)) != 0:
+        raise ValueError("MOSS full_context 禁止多个独立块或非零任务起点。")
+    output_path = os.path.join(temp_dir, "moss.json")
+    command = [paths["moss_python"], "-I", paths["moss_worker"],
+               "--audio", jobs[0]["audio"], "--output", output_path,
+               "--model", MOSS_MODEL, "--title", title]
+    code, lines = _run_streaming_worker(command, MOSS_TIMEOUT_SECONDS)
+    return _read_moss_worker_payload(output_path, code, lines, "MOSS 整段worker",
+                                   recorder=getattr(legacy, "record_run_event", None))
 
 
 def _speaker_match_score(current_segments, previous_segments, local_speaker, global_speaker, legacy):
@@ -2030,6 +1863,8 @@ def _flatten_firered_stage5_result(value):
 
 
 def transcribe_moss_global(media_path, shared_audio, legacy, cache_context):
+    _parallel_cancel_poll()
+    task_owner = get_runtime_context()
     # MOSS 转写必须在主进程预检 CUDA：子进程内报错只会显示为“MOSS 子进程失败”，
     # 无法给出明确原因。打包（frozen）运行没有进程内 torch——改用主运行环境
     # 的子进程探测（hardware._probe_torch_runtime），结果等价。
@@ -2047,9 +1882,9 @@ def transcribe_moss_global(media_path, shared_audio, legacy, cache_context):
         except Exception as exc:
             raise RuntimeError(f"MOSS CUDA 预检失败：{exc}") from exc
     else:
-        from twobyteasr.hardware import _probe_torch_runtime
+        from twobyteasr.hardware import ready_torch_probe
 
-        probe = _probe_torch_runtime()
+        probe = ready_torch_probe()
         if not probe.get("imported") or not probe.get("usable"):
             raise RuntimeError(
                 "MOSS CUDA 预检失败：主运行环境 torch/CUDA 不可用"
@@ -2057,189 +1892,135 @@ def transcribe_moss_global(media_path, shared_audio, legacy, cache_context):
                 f"error={probe.get('error') or probe.get('torch_error') or 'n/a'}）。"
                 "MOSS/FireRed/Qwen 均为 GPU 模型，需要可用的 NVIDIA CUDA 显卡。"
             )
+    from moss_worker import audio_fingerprint, INFERENCE_MODE, CACHE_VERSION
     paths = _script_paths(legacy)
+    fingerprint = audio_fingerprint(shared_audio, legacy.AUDIO_SAMPLE_RATE)
+    evidence = Path(cache_context["cache_dir"]) / "speaker-evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    legacy.record_run_event("moss_full_context_preparing", inference_mode=INFERENCE_MODE,
+        task_audio_duration=len(shared_audio) / legacy.AUDIO_SAMPLE_RATE,
+        sample_rate=legacy.AUDIO_SAMPLE_RATE, sample_count=len(shared_audio),
+        task_audio_fingerprint=fingerprint, cache_version=CACHE_VERSION)
     with tempfile.TemporaryDirectory(prefix="moss_bridge_") as temp_dir:
+        job = _chunk_moss_audio(shared_audio, temp_dir, legacy)[0]
         output_path = os.path.join(temp_dir, "moss.json")
-        jobs = _chunk_moss_audio(shared_audio, temp_dir, legacy)
-        title = os.path.splitext(os.path.basename(media_path))[0]
-        checkpoint_dir = os.path.join(cache_context["cache_dir"], "moss_chunks")
-        run_signature = legacy.stable_digest(
-            {
-                "media": cache_context["identity"],
-                **_moss_stage_signature(paths),
-            }
-        )
-        if jobs:
-            for job in jobs:
-                job["checkpoint_dir"] = checkpoint_dir
-                job["run_signature"] = run_signature
-            print(
-                f"   MOSS 长音频分块：{len(jobs)} 块，每块最多 {MOSS_CHUNK_SECONDS:.0f}s，"
-                f"重叠 {MOSS_CHUNK_OVERLAP_SECONDS:.0f}s。"
-            )
-            payload = _run_moss_manifest_jobs(
-                jobs,
-                temp_dir,
-                paths,
-                legacy,
-                title,
-            )
-        else:
-            command = [
-                paths["moss_python"],
-                "-I",
-                paths["moss_worker"],
-                "--audio",
-                media_path,
-                "--output",
-                output_path,
-                "--model",
-                MOSS_MODEL,
-                "--title",
-                title,
-                "--checkpoint-dir",
-                checkpoint_dir,
-                "--run-signature",
-                run_signature,
-            ]
-            # P0: Log the exact interpreter and command so we can see if it is using .venv-moss
-            try:
-                print("[MOSS LAUNCH]", flush=True)
-                print("Python:", paths.get("moss_python"), flush=True)
-                print("Worker:", paths.get("moss_worker"), flush=True)
-                print("Command:", " ".join(str(x) for x in command), flush=True)
-            except Exception:
-                pass
-            returncode, output_lines = _run_streaming_worker(
-                command, MOSS_TIMEOUT_SECONDS
-            )
-            payload = _read_moss_worker_payload(
-                output_path,
-                returncode,
-                output_lines,
-                "MOSS 子进程",
-                recorder=getattr(legacy, "record_run_event", None),
-            )
-    payload = _merge_moss_chunks(
-        payload,
-        len(shared_audio) / legacy.AUDIO_SAMPLE_RATE,
-        legacy,
-        shared_audio=shared_audio,
-    )
-    segments = payload.get("segments", [])
-    segments.sort(key=lambda item: (item["start"], item["end"]))
-    if not segments:
-        raise RuntimeError("MOSS 没有返回可用的说话人转写段。")
-    payload["segments"] = segments
-    print(
-        f"   [完成] MOSS：{len(segments)} 个全局说话人段，"
-        f"{len({item['speaker'] for item in segments})} 个标签，覆盖到 {max(item['end'] for item in segments):.2f} 秒。"
-    )
+        command = [paths["moss_python"], "-I", paths["moss_worker"],
+                   "--audio", job["audio"], "--output", output_path, "--model", MOSS_MODEL,
+                   "--title", Path(media_path).stem, "--task-audio-fingerprint", fingerprint]
+        print(f"[MOSS LAUNCH full_context] worker={paths['moss_worker']} runtime={paths['moss_python']} samples={len(shared_audio)} @ {legacy.AUDIO_SAMPLE_RATE}Hz", flush=True)
+        lines = []
+        try:
+            code, lines = _run_streaming_worker(command, MOSS_TIMEOUT_SECONDS)
+            _parallel_cancel_poll()
+            payload = _read_moss_worker_payload(output_path, code, lines, "MOSS 整段worker",
+                                               recorder=legacy.record_run_event)
+        except BaseException as exc:
+            lines = getattr(exc, 'output_lines', lines)
+            raise
+        finally:
+            # Diagnostics survive failure and temp-dir cleanup; never write subtitles here.
+            if Path(output_path).is_file():
+                raw = Path(output_path).read_text("utf8")
+                (evidence / "moss-full-context-raw.json").write_text(raw, "utf8")
+                try:
+                    legacy.record_run_event("moss_full_context_execution", job_id=task_owner.job_id,
+                                            **json.loads(raw).get("execution", {}))
+                except (ValueError, TypeError):
+                    pass
+            (evidence / "moss-full-context-worker.log").write_text("\n".join(lines), "utf8")
+    if get_runtime_context() is not task_owner:
+        raise CancelledError('MOSS旧任务结果拒绝写入新任务。')
+    payload = _normalize_moss_full_context(payload, shared_audio, legacy)
+    _parallel_cancel_poll()
+    from twobyteasr.speaker_evidence import save_speaker_evidence
+    save_speaker_evidence(evidence, "moss-full-context-parsed", payload)
     return payload
 
 
+def _normalize_moss_full_context(payload, shared_audio, legacy):
+    from moss_worker import audio_fingerprint, INFERENCE_MODE, CACHE_VERSION
+    _validate_moss_worker_payload(payload, producer="moss_worker", consumer="moss_full_context")
+    chunks = payload["chunks"]
+    execution = payload.get("execution", {})
+    expected = audio_fingerprint(shared_audio, legacy.AUDIO_SAMPLE_RATE)
+    if (payload.get("inference_mode") != INFERENCE_MODE or payload.get("cache_version") != CACHE_VERSION
+        or len(chunks) != 1 or float(chunks[0].get("offset", -1)) != 0
+        or execution.get("sample_count") != len(shared_audio)
+        or execution.get("sample_rate") != legacy.AUDIO_SAMPLE_RATE
+        or execution.get("task_audio_fingerprint") != expected):
+        raise RuntimeError("MOSS完整输入/模式/时钟校验失败；拒绝分块或不完整运输结果。")
+    rows = copy.deepcopy(chunks[0]["segments"])
+    duration = len(shared_audio) / legacy.AUDIO_SAMPLE_RATE
+    for row in rows:
+        if not str(row.get("speaker", "")).strip():
+            raise RuntimeError("MOSS原生标签缺失，拒绝伪造身份。")
+        if float(row["start"]) < 0 or float(row["end"]) > duration + 1:
+            execution["complete"] = False
+            execution.setdefault("truncation_reasons", []).append("invalid_timestamp")
+        row["start"] = max(0, float(row["start"]))
+        row["end"] = min(duration, float(row["end"]))
+    payload["segments"] = rows
+    # No local relabeling, overlap ownership windows, cross-context ECAPA or dedup.
+    canonical = normalize_moss_result(payload, producer="moss_full_context", consumer="moss_pipeline")
+    canonical["provenance"]["normalization"] = "single_native_context_to_flat_segments"
+    from twobyteasr.speaker_evidence import label_summary
+    canonical["metadata"].update(inference_mode=INFERENCE_MODE, cache_version=CACHE_VERSION,
+        raw_speaker_to_internal_speaker_id={row["speaker"]: row["speaker"] for row in rows},
+        speaker_stages={"parsed_chunks": [label_summary(rows)], "global_identities": label_summary(rows)})
+    if not execution.get("complete"):
+        legacy.add_review_item(0, "主力转写不完整", "MOSS整段生成需要复核：" + ",".join(execution.get("truncation_reasons", [])), priority=3)
+    legacy.record_run_event("moss_full_context_normalized", **execution,
+                           speaker_distribution=label_summary(rows))
+    return canonical
+
+
+def _moss_cache_reuse_receipt(source_execution):
+    """Separate cached artifact measurements from this task's actual calls."""
+    receipt = copy.deepcopy(source_execution)
+    receipt.update(cache_hit=True, worker_pids=[], worker_count=0,
+        generation_attempts=0, application_chunk_count=0, retries=[],
+        input_tokens=None, generated_tokens=None, attention_backend=None, dtype=None,
+        elapsed_seconds=0.0, model_load_seconds=0.0,
+        peak_allocated_gb=None, peak_reserved_gb=None,
+        phase='cache_reuse', measurement_origin='source_execution',
+        source_execution=copy.deepcopy(source_execution))
+    return receipt
+
+
+def _decode_moss_full_context_cache(payload, shared_audio, legacy):
+    if not isinstance(payload, dict) or not payload.get('execution', {}).get('complete'):
+        raise ValueError('MOSS缓存缺少完整整段结束回执。')
+    try:
+        return _normalize_moss_full_context(payload, shared_audio, legacy)
+    except (RuntimeError, SchemaContractError) as exc:
+        raise ValueError('MOSS缓存完整输入校验失败。') from exc
+
+
 def _moss_stage_signature(paths):
-    return {
-        "asr_result_schema_version": ASR_RESULT_SCHEMA_VERSION,
-        "model": MOSS_MODEL,
-        "worker": _path_signature(paths["moss_worker"]),
-        "chunk_seconds": MOSS_CHUNK_SECONDS,
-        "chunk_overlap": MOSS_CHUNK_OVERLAP_SECONDS,
-    }
+    from moss_worker import INFERENCE_MODE, CACHE_VERSION, PROMPT_VERSION, GENERATION_POLICY
+    worker = Path(paths["moss_worker"])
+    root = worker.parent.parent if worker.parent.name == "workers" else worker.parent
+    implementation = root / "third_party" / "MOSS-Transcribe-Diarize" / "moss_transcribe_diarize"
+    from twobyteasr.runtime_paths import resolve_model_dir
+    model_root = Path(resolve_model_dir("MOSS-Transcribe-Diarize"))
+    def identity(path):
+        return {**_path_signature(str(path)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None}
+    return {"asr_result_schema_version": ASR_RESULT_SCHEMA_VERSION, "model": MOSS_MODEL,
+            "worker": identity(worker), "inference_mode": INFERENCE_MODE, "cache_version": CACHE_VERSION,
+            "prompt_version": PROMPT_VERSION, "generation_policy": GENERATION_POLICY,
+            "implementation": {name: identity(implementation / name) for name in (
+                "inference_utils.py", "processing_moss_transcribe_diarize.py", "modeling_moss_transcribe_diarize.py", "transcript_parser.py")},
+            "model_config": {name: identity(model_root / name) for name in ("config.json", "generation_config.json", "processor_config.json")},
+            "model_files": _path_signature(str(model_root)), "runtime": _path_signature(paths.get("moss_python", ""))}
 
 
 def precompute_moss_batch_cache(media_paths, legacy):
-    """多文件时让 MOSS 只加载一次；其余模型仍按文件释放，避免叠加显存。"""
-    if len(media_paths) < 2:
-        return
-    paths = _script_paths(legacy)
-    signature = _moss_stage_signature(paths)
-    pending = []
-    for media_path in media_paths:
-        cache_context = legacy.media_cache_context(media_path)
-        if legacy.cached_stage_is_valid("moss", cache_context, signature):
-            continue
-        pending.append((media_path, cache_context))
-    if len(pending) < 2:
-        return
+    """Each media task now owns its full-context worker/cache and cancellation fence.
 
-    print(f"\n[批量加速] {len(pending)} 个未缓存文件共用一次 MOSS 模型加载。")
-    with tempfile.TemporaryDirectory(prefix="moss_batch_") as temp_dir:
-        all_jobs = []
-        groups = {}
-        for group_index, (media_path, cache_context) in enumerate(pending, 1):
-            _parallel_cancel_poll()
-            group_id = f"media_{group_index:03d}"
-            shared_audio = legacy.load_shared_audio(media_path, cache_context)
-            duration = len(shared_audio) / legacy.AUDIO_SAMPLE_RATE
-            group_dir = os.path.join(temp_dir, group_id)
-            os.makedirs(group_dir, exist_ok=True)
-            jobs = _chunk_moss_audio(shared_audio, group_dir, legacy)
-            if not jobs:
-                # 按用户要求，短于约210秒的素材继续直接交给 MOSS 读取原媒体。
-                jobs = [
-                    {
-                        "chunk_id": 1,
-                        "audio": media_path,
-                        "offset": 0.0,
-                        "duration": duration,
-                        "global_end": duration,
-                    }
-                ]
-            run_signature = legacy.stable_digest(
-                {
-                    "media": cache_context["identity"],
-                    **signature,
-                }
-            )
-            checkpoint_dir = os.path.join(cache_context["cache_dir"], "moss_chunks")
-            for job in jobs:
-                job.update(
-                    {
-                        "group_id": group_id,
-                        "checkpoint_dir": checkpoint_dir,
-                        "run_signature": run_signature,
-                    }
-                )
-                all_jobs.append(job)
-            groups[group_id] = {
-                "media_path": media_path,
-                "cache_context": cache_context,
-                "shared_audio": shared_audio,
-                "audio_seconds": duration,
-            }
-
-        chunks = _run_moss_manifest_jobs(
-            all_jobs,
-            temp_dir,
-            paths,
-            legacy,
-            "batch",
-        ).get("chunks", [])
-
-        for group_id, info in groups.items():
-            group_chunks = [
-                item for item in chunks if str(item.get("group_id", "default")) == group_id
-            ]
-            if not group_chunks:
-                raise RuntimeError(f"MOSS 批量结果缺少 {os.path.basename(info['media_path'])}。")
-            payload = _merge_moss_chunks(
-                {"chunks": group_chunks},
-                info["audio_seconds"],
-                legacy,
-                shared_audio=info["shared_audio"],
-            )
-            if not payload.get("segments"):
-                raise RuntimeError(f"MOSS 批量结果为空：{os.path.basename(info['media_path'])}。")
-            legacy.store_cached_stage_value(
-                "moss",
-                info["cache_context"],
-                payload,
-                extra_signature=signature,
-            )
-            # 合并完成立即释放该文件的音频映射；批量场景不再同时持有全部 mmap。
-            info["shared_audio"] = None
-            print(f"   [批量缓存完成] {os.path.basename(info['media_path'])}")
+    Do not preload a multi-task block manifest before task audio/snapshots exist.
+    Model features remain internally batched within each single generation.
+    """
+    return
 
 
 def detect_firered_vad(audio, legacy):
@@ -2615,6 +2396,7 @@ def select_host_speakers(
     audio_seconds,
     legacy,
     runtime_context=None,
+    label_source="MOSS",
 ):
     speakers = sorted({str(item.get("speaker") or "S00") for item in moss_segments})
     requested = int(
@@ -2650,7 +2432,7 @@ def select_host_speakers(
         }
     max_bins = max(item["bins"] for item in stats.values())
     for speaker, item in stats.items():
-        print(f"   [说话人候选] raw_moss_label={speaker} timeline_span_ratio={item['span_ratio']:.4f} "
+        print(f"   [说话人候选] raw_label={speaker} label_source={label_source} timeline_span_ratio={item['span_ratio']:.4f} "
               f"candidate_min_span_ratio={MOSS_HOST_MIN_SPAN_RATIO:.2f} identity_confirmed=false")
     max_count = max(item["count"] for item in stats.values())
     eligible = [
@@ -2678,7 +2460,7 @@ def select_host_speakers(
     if inventory["needs_confirmation"]:
         legacy.add_review_item(
             0.0, "说话人需要确认",
-            "检测到多个持续说话人，需要确认。请在说话人管理中试听全部 MOSS 标签并选择主要说话人；自动筛选不代表真人身份。",
+            f"检测到多个持续说话人，需要确认。请在说话人管理中试听全部 {label_source} 标签并选择主要说话人；自动筛选不代表真人身份。",
             priority=3,
         )
     detail = "，".join(
@@ -2691,7 +2473,7 @@ def select_host_speakers(
         legacy.add_review_item(
             0.0,
             "主播人数不足",
-            f"预计 {requested} 位主播，但 MOSS 只形成 {len(selected)} 个可用主播标签",
+            f"预计 {requested} 位主播，但 {label_source} 只形成 {len(selected)} 个可用匿名标签",
             priority=3,
         )
         print(
@@ -2733,12 +2515,10 @@ def _trustworthy_dialogue_text(item, text, speech_overlap, duration, legacy):
 
 
 def _firered_token_window(tokens, start, end):
-    """Return the bounded FireRed token window supporting one MOSS segment.
+    """Return a neighbourhood search window, not a matched acoustic interval.
 
-    FireRed timestamps are word/token evidence, not a second sentence
-    segmenter.  Keep the actual token bounds and confidence while clipping a
-    pathological long token to the configured neighbourhood around the MOSS
-    row.  An empty window means that no independent timing evidence exists.
+    Neighbouring tokens can belong to another speaker. Their pooled confidence
+    does not verify either clipped endpoint or simultaneous speech.
     """
     nearby = [
         token for token in (tokens or [])
@@ -2764,6 +2544,10 @@ def _firered_token_window(tokens, start, end):
         "end": max(max(0.0, window_start) + 0.01, window_end),
         "confidence": sum(confidences) / len(confidences) if confidences else 0.0,
         "token_count": len(nearby),
+        "kind": "bounded_search_window",
+        "independent_acoustic": False,
+        "neighbourhood_seconds": float(MOSS_SPEAKER_PAD_SECONDS),
+        "clipping_seconds": tolerance,
     }
 
 
@@ -2804,6 +2588,9 @@ def build_moss_host_primary_segments(
         list(moss_payload.get("segments", [])), legacy
     )
     moss_payload["segments"] = moss_segments
+    from twobyteasr.speaker_evidence import label_summary
+    speaker_stages = moss_payload.setdefault("metadata", {}).setdefault("speaker_stages", {})
+    speaker_stages["before_host_filter"] = label_summary(moss_segments)
     host_speakers = select_host_speakers(
         moss_segments,
         audio_seconds,
@@ -2823,6 +2610,14 @@ def build_moss_host_primary_segments(
     )
     moss_payload["segments"] = moss_segments
     moss_payload["host_speakers"] = host_speakers
+    speaker_stages["after_registered_identity"] = label_summary(moss_segments)
+    speaker_stages["selected_hosts"] = {"labels": list(host_speakers)}
+    identities = {}
+    for row in moss_segments:
+        raw_label = str(row.get('speaker_raw') or row['speaker'])
+        identities[raw_label] = str(row['speaker'])
+    moss_payload['metadata']['raw_speaker_to_internal_speaker_id'] = identities
+    legacy.record_run_event('moss_identity_mapping', raw_speaker_to_internal_speaker_id=identities)
     all_speakers = sorted(
         {str(item.get("speaker") or "S00") for item in moss_segments}
     )
@@ -2949,6 +2744,9 @@ def build_moss_host_primary_segments(
             ),
             reference_consensus=firered_similarity,
         )
+        if firered_window:
+            segment.caption_arbitration = dict(segment.caption_arbitration or {}, timing_evidence=dict(firered_window))
+        segment.caption_arbitration['word_timing'] = {'basis': 'uniform_display_estimate', 'source': 'moss_sentence_bounds'}
         if overlap_conflict:
             legacy.add_review_item(
                 start,
@@ -3006,6 +2804,19 @@ def attach_qwen_review_evidence(segments, qwen_chunks, legacy):
         segment.qwen_asr_context = raw_context
         if not raw_context:
             continue
+
+        from twobyteasr.model_execution import review_model_id
+        model = review_model_id(getattr(legacy, "QWEN_ASR_BACKEND", "local"))
+        if model == 'api':
+            model = 'asr-api:' + str(getattr(legacy, 'QWEN_ASR_API_MODEL', '') or 'unrecorded')
+        decision = dict(segment.caption_arbitration or {})
+        coverage = dict(decision.get("source_coverage") or {})
+        coverage[model] = [dict(start_ms=round(float(chunk['start']) * 1000),
+            end_ms=round(float(chunk['end']) * 1000), text=str(chunk.get('text') or ''),
+            confidence=chunk.get('confidence'), coverage_basis='observed_model_window')
+            for chunk in matched_chunks]
+        decision['source_coverage'] = coverage
+        segment.caption_arbitration = decision
 
         primary_candidate, primary_score = legacy.best_alternate_window(
             segment.text, raw_context
@@ -3086,7 +2897,11 @@ def build_alternate_primary_segments(references, timeline_tokens, legacy, backen
         local_speaker = str(row.get("speaker") or "S00")
         speaker = resolver.resolve("", local_speaker)
         row_tokens = list(row.get("tokens") or [])
-        if not row_tokens:
+        streaming=backend in {'vibevoice_1_5b','vibevoice_7b'}
+        if streaming:
+            from twobyteasr.optional_timing import exact_tokens
+            row_tokens=row_tokens or exact_tokens(row,timeline_tokens)
+        if not row_tokens and not streaming:
             row_tokens = [
                 item
                 for item in (timeline_tokens or [])
@@ -3105,7 +2920,7 @@ def build_alternate_primary_segments(references, timeline_tokens, legacy, backen
                     float(token.get("confidence", 0.78)),
                 )
             )
-        if not words:
+        if not words and not streaming:
             words = _distributed_words(text, start, end, 0.76, legacy)
         segments.append(
             legacy.SpeechSegment(
@@ -3113,17 +2928,27 @@ def build_alternate_primary_segments(references, timeline_tokens, legacy, backen
                 start=start,
                 end=end,
                 text=text,
-                confidence=float(row.get("confidence", 0.78)),
+                confidence=float(row.get("confidence") if row.get("confidence") is not None else (min((w.probability for w in words),default=0.0) if streaming else 0.78)),
                 words=words,
                 speaker=speaker,
-                moss_text=text,
-                moss_context="非 MOSS 主力模型，按单说话人模式生成"
-                if speaker == "S00"
-                else f"API diarization 说话人 {speaker}（file-local，未做身份推断）",
+                moss_text="",
+                moss_context="",
                 primary_source=str(row.get("source") or f"{backend}-primary"),
             )
         )
         segment = segments[-1]
+        if row.get('speaker_evidence'):
+            segment.caption_arbitration['speaker_evidence']=copy.deepcopy(row['speaker_evidence'])
+        if streaming:
+            segment.caption_arbitration.update(native_model_probability=None,
+                confidence_kind='acoustic_alignment_support' if words else 'unknown',
+                timing_precision='word-span' if words else 'chunk',
+                streaming_chunk_index=row.get('chunk_index'),native_timestamp_source='streaming_chunk_bounds')
+            segment.final_timing_owner='FireRed acoustic word alignment' if words else 'VibeVoice chunk bounds (word alignment unavailable)'
+            segment.timing_locked=not bool(words)
+            if not words:
+                legacy.add_review_item(start,'VibeVoice 字级对齐未完成','保留主转写文字、原生身份和块级范围；未知模型概率不作为零概率。',priority=2)
+            continue
         # Independent text is evidence, never a replacement word sequence for
         # an unrelated API transcript. Project matching anchors onto this text.
         nearby = [token for token in (timeline_tokens or [])
@@ -3141,12 +2966,16 @@ def build_alternate_primary_segments(references, timeline_tokens, legacy, backen
                 segment.firered_end = window['end']
                 segment.firered_alignment_confidence = min(window['confidence'], coverage['coverage'])
                 segment.reference_consensus = similarity
+                segment.caption_arbitration = dict(segment.caption_arbitration or {}, timing_evidence=dict(window))
         primary_words_match = bool(row.get('tokens')) and legacy.content_only(''.join(word.text for word in segment.words)) == legacy.content_only(text)
         if legacy.content_only(''.join(word.text for word in segment.words)) != legacy.content_only(text):
             segment.words = _distributed_words(text, start, end, float(row.get('confidence',.76)), legacy)
-        segment.words = legacy.segment_content_timeline(segment, () if primary_words_match else nearby)
+        native_sentence = bool(row.get('timestamp_source')) and row.get('timestamp_source') != 'request_bounds_coarse'
+        segment.words = legacy.segment_content_timeline(segment, () if primary_words_match or native_sentence else nearby)
         if primary_words_match:
             segment.final_timing_owner=f'{backend.upper()} word timestamps'
+        elif native_sentence:
+            segment.final_timing_owner=f'{backend.upper()} native sentence timestamps'
     if not segments:
         raise RuntimeError(f"{backend} 主力转写没有生成有效文字。")
     legacy.record_run_event(
@@ -3156,6 +2985,103 @@ def build_alternate_primary_segments(references, timeline_tokens, legacy, backen
         diarization=False,
     )
     return segments
+
+
+def alternate_dialogue_coverage_signature(backend, speaker_mode, runtime_context, legacy):
+    if backend == "moss" and speaker_mode == "moss":
+        return {}
+    return {"alternate_coverage_policy": "anonymous-primary-preserving-trustworthy-firered-v1",
+            "alternate_coverage_mode": _dialogue_coverage_mode(runtime_context, legacy),
+            "alternate_speaker_backend": speaker_mode,
+            "alternate_expected_speakers": int(getattr(runtime_context, "expected_speakers", 0) or 0)}
+
+
+def apply_alternate_dialogue_coverage(
+    segments, references, timeline_tokens, speech_regions, audio_seconds,
+    legacy, backend, runtime_context=None,
+):
+    """Filter existing alternate objects; anonymous candidates are not true identities."""
+    mode = _dialogue_coverage_mode(runtime_context, legacy)
+    rows = [row for row in sorted(references or [], key=lambda row: (float(row["start"]), float(row["end"])))
+            if legacy.content_only(legacy.clean_subtitle_text(row.get("text", "")))]
+    if len(rows) != len(segments):
+        raise RuntimeError("独立主稿覆盖筛选的原始证据数量不一致；未猜测说话人或复制字幕。")
+    pairs = []
+    for segment, source_row in zip(segments, rows):
+        expected_start = max(0.0, float(source_row.get("start", 0.0)))
+        expected_end = max(expected_start + 0.04, float(source_row.get("end", expected_start)))
+        if (segment.text != legacy.clean_subtitle_text(source_row.get("text", ""))
+                or abs(segment.start - expected_start) > 1e-8
+                or abs(segment.end - expected_end) > 1e-8):
+            raise RuntimeError("独立主稿覆盖筛选的原始文字或时间证据不一致；未猜测归属。")
+        row = dict(source_row, speaker=segment.speaker)
+        if backend.startswith("vibevoice_"):
+            # Chunk generation has no model probability. Alignment confidence
+            # must not be interpreted as native zero-confidence evidence.
+            row["confidence"] = None
+        pairs.append((segment, row))
+    speaker_backend = str(getattr(runtime_context, "speaker_source", "") or
+                          ("native" if backend.startswith("vibevoice_") else backend))
+    label_source = (
+        backend if speaker_backend == "native" else speaker_backend)
+    candidates = sorted({str(segment.speaker) for segment in segments})
+    selected = select_host_speakers(
+        [row for _segment, row in pairs], audio_seconds, legacy,
+        runtime_context=runtime_context, label_source=label_source,
+    ) if mode != "all_dialogue" else []
+    kept, decisions = [], []
+    for segment, row in pairs:
+        reason, similarity = "all_dialogue", None
+        retain = True
+        if mode != "all_dialogue":
+            overlap = sum(_time_overlap(segment.start, segment.end,
+                          float(region["start"]), float(region["end"])) for region in speech_regions)
+            retain = _trustworthy_dialogue_text(row, segment.text, overlap,
+                                                segment.end - segment.start, legacy)
+            reason = "trustworthy_dialogue" if retain else "no_reliable_speech"
+            if retain and segment.speaker not in selected:
+                if mode == "host_only":
+                    retain, reason = False, "outside_selected_candidates"
+                else:
+                    nearby = [token for token in timeline_tokens or []
+                              if float(token.get("end", 0)) >= segment.start - MOSS_SPEAKER_PAD_SECONDS
+                              and float(token.get("start", 0)) <= segment.end + MOSS_SPEAKER_PAD_SECONDS]
+                    context = legacy.clean_subtitle_text("".join(str(token.get("text", "")) for token in nearby))
+                    _candidate, similarity = legacy.best_alternate_window(segment.text, context)
+                    retain = similarity >= 0.64
+                    reason = "independent_firered_support" if retain else "noncandidate_without_firered_support"
+        if retain:
+            kept.append(segment)
+        decisions.append(dict(segment_id=segment.segment_id, speaker=segment.speaker,
+                              start=segment.start, end=segment.end, retained=retain,
+                              reason=reason, firered_similarity=similarity))
+    summary = dict(dialogue_coverage_mode=mode, backend=backend,
+                   primary_backend=backend, speaker_backend=speaker_backend,
+                   host_labels=list(selected), candidate_labels=candidates,
+                   before_segments=len(segments), after_segments=len(kept),
+                   filtered_labels={speaker: dict(segments=sum(not row["retained"] and row["speaker"] == speaker for row in decisions))
+                                    for speaker in candidates},
+                   executed=True, identity_confirmed=False,
+                   selection_source="anonymous_timeline_persistence_and_text_amount",
+                   needs_confirmation=mode != "all_dialogue", decisions=decisions)
+    # Execute outside the cached conversion so every job records its own policy.
+    legacy.record_run_event("host_filter_summary", **summary)
+    if runtime_context is not None:
+        recovery = getattr(runtime_context, "speaker_recovery", None)
+        if isinstance(recovery, dict):
+            recovery["coverage_filter"] = copy.deepcopy(summary)
+            if mode != "all_dialogue":
+                recovery["needs_confirmation"] = True
+    if mode != "all_dialogue":
+        legacy.add_review_item(0.0, "主要说话人候选需要确认",
+            "已按匿名标签的持续度和发言量执行覆盖筛选；没有声纹或真人身份确认。原始全部候选及筛选区间保存在工程证据中。",
+            priority=3)
+    if not kept:
+        raise RuntimeError("覆盖筛选未保留可靠对白；请使用全部对白并在说话人管理中确认匿名候选。")
+    if mode != "all_dialogue":
+        for index, segment in enumerate(kept, 1):
+            segment.segment_id = index
+    return kept
 
 
 def add_qwen_skeleton_gap_review_items(segments, qwen_chunks, moss_payload, legacy):
@@ -3333,6 +3259,7 @@ def restore_qwen_supported_dialogue_segments(
             firered_text=firered_candidate if firered_similarity >= 0.42 else "",
             primary_source="moss-dialogue-qwen-restored",
             reference_consensus=max(qwen_similarity, firered_similarity),
+            caption_arbitration={"timing_evidence": dict(firered_window)} if firered_window else {},
         ))
     if not restored:
         return segments, 0
@@ -3673,6 +3600,12 @@ def process_media(
     task_settings = runtime_context.asr_settings_snapshot or legacy.RUNTIME_SETTINGS
     text_plan = text_ai_plan(task_settings, purpose=runtime_context.recognition_purpose)
     runtime_context.reset_for_media()
+    runtime_context.media_path = str(media_path)
+    runtime_context.media_index = file_index
+    from twobyteasr.recognition_result import media_identity_for_task
+    runtime_context.media_identity = media_identity_for_task(media_path, runtime_context)
+    if runtime_context.recognition_snapshot:
+        runtime_context.media_identity["fingerprint"] = runtime_context.recognition_snapshot["fingerprint"]
     legacy.reset_review_items()
     started = time.perf_counter()
     base_name = os.path.splitext(os.path.basename(media_path))[0]
@@ -3789,15 +3722,18 @@ def process_media(
         "audio_sha256": hashlib.sha256(np.asarray(shared_audio,dtype='<f4').tobytes()).hexdigest(),
         "job_id": runtime_context.job_id,
         "project_id": runtime_context.recognition_snapshot.get("project_id", ""),
-        "shared_by": ["primary", "vad", "firered", "alignment", "voiceprint", "review", "nemotron"],
+        "shared_by": ["primary", "vad", "firered", "alignment", "voiceprint", "review"],
     })
 
-    moss_signature = _moss_stage_signature(paths)
+    from moss_worker import audio_fingerprint
+    moss_signature = {**_moss_stage_signature(paths),
+                      "task_audio_fingerprint": audio_fingerprint(shared_audio, legacy.AUDIO_SAMPLE_RATE)}
 
     def audit_branch(name):
         legacy.record_run_event("recognition_branch_input", branch=name, input_path=media_path,
             sample_rate=legacy.AUDIO_SAMPLE_RATE, samples=len(shared_audio), start_seconds=0,
-            end_seconds=audio_seconds, fingerprint=getattr(runtime_context,"recognition_snapshot",{}).get("fingerprint",""))
+            end_seconds=audio_seconds, fingerprint=runtime_context.media_identity.get("fingerprint", ""),
+            job_id=runtime_context.job_id, media_sha256=runtime_context.media_identity.get("sha256", ""))
 
     def run_moss_stage():
         audit_branch(primary_backend)
@@ -3896,6 +3832,7 @@ def process_media(
             payload = {
                 "segments": [
                     {
+                        **copy.deepcopy(item),
                         "start": float(item["start"]),
                         "end": float(item["end"]),
                         "text": str(item["text"]),
@@ -3913,7 +3850,7 @@ def process_media(
                 segment_count=len(payload['segments']), loaded=None,
                 execution='result_available', worker_start_event='asr_worker_started')
             return payload
-        return _run_audited_model_stage(
+        value = _run_audited_model_stage(
             legacy,
             model_id="moss",
             role="primary_transcription",
@@ -3930,12 +3867,22 @@ def process_media(
                     "moss",
                     cache_context,
                     lambda: transcribe_moss_global(media_path, shared_audio, legacy, cache_context),
-                    should_cache=lambda value: bool(value.get("segments")),
+                    should_cache=lambda value: bool(value.get("segments")) and value.get("execution", {}).get("complete", False),
+                    decoder=lambda value: _decode_moss_full_context_cache(value, shared_audio, legacy),
                     extra_signature=moss_signature,
                 ),
             ),
             selected=True,
         )
+        # A reused artifact's original receipt is provenance, not new calls.
+        execution = dict(value.get("execution", {}))
+        from twobyteasr import reporting
+        report = reporting.active_media_report() or {}
+        cache_hit = "moss" in report.get("cache", {}).get("hits", [])
+        if cache_hit:
+            execution = _moss_cache_reuse_receipt(value.get("execution", {}))
+        legacy.record_run_event("moss_full_context_result", **execution)
+        return value
 
     def run_vad_stage():
         audit_branch("vad")
@@ -4141,8 +4088,9 @@ def process_media(
     stage_index = 3
 
     from twobyteasr.speaker_evidence import needs_moss_speakers
-    from twobyteasr.speaker_organization import normalized_speaker_mode
-    speaker_mode = normalized_speaker_mode(getattr(runtime_context,'speaker_source','single'))
+    from twobyteasr.speaker_strategy import resolve
+    speaker_mode = resolve(runtime_context.asr_settings_snapshot or legacy.RUNTIME_SETTINGS)
+    runtime_context.speaker_source = speaker_mode
     if speaker_mode!='moss':
         moss_payload['host_speakers']=[]
         if not moss_payload.get('references'):moss_payload['references']=copy.deepcopy(moss_payload.get('segments',[]))
@@ -4155,72 +4103,14 @@ def process_media(
     if speaker_mode == 'moss' and primary_backend == 'moss':
         speaker_processing.update(status='completed', backend='moss')
         speaker_processing['stages'].update(moss_payload.get('metadata', {}).get('speaker_stages', {}))
-    if primary_backend != "moss" and needs_moss_speakers(speaker_processing['mode'], moss_payload.get('references', [])):
-        audit_branch("moss_speaker_timeline")
-        speaker_started = time.perf_counter()
-        print(f"   [说话人来源] {primary_backend} 提供文字；MOSS 运行完整转写与分离（非轻量纯分离模式）。")
-        save_speaker_evidence(speaker_audit_root, 'primary-before-diarization', moss_payload)
-        try:
-            speaker_payload = legacy.run_timed_stage(3, stage_total, "MOSS 说话人时间轴（完整模型）", "GPU",
-                lambda: legacy.run_cached_stage("moss", cache_context,
-                    lambda: transcribe_moss_global(media_path, shared_audio, legacy, cache_context),
-                    should_cache=lambda value: bool(value.get("segments")), extra_signature=moss_signature))
-            if not speaker_payload.get('segments'):
-                raise RuntimeError('MOSS 未返回可用的说话人时间轴')
-            save_speaker_evidence(speaker_audit_root, "moss-original", speaker_payload)
-            references = fuse_moss_speakers(moss_payload.get("references", []), speaker_payload.get("segments", []))
-            moss_payload["references"] = references
-            moss_payload["segments"] = [{k:row[k] for k in ("start","end","text","speaker")} for row in references]
-            save_speaker_evidence(speaker_audit_root, "hybrid", references)
-            speaker_processing.update(status='completed',moss_called=True,backend='moss')
-            speaker_processing['stages'].update(speaker_payload.get('metadata', {}).get('speaker_stages', {}))
-            speaker_processing['stages']['assigned'] = label_summary(references)
-        except Exception as exc:
-            from twobyteasr.service import CancelledError
-            if isinstance(exc, CancelledError):
-                raise
-            if runtime_context.cancellation_token:
-                runtime_context.cancellation_token.raise_if_cancelled()
-            message = f'说话人分离失败，已保留 {primary_backend} 文字。请在模型工坊检查 MOSS 环境后，以相同设置重试识别（可复用文字缓存）。原因：{exc}'
-            print('   [警告] ' + message)
-            legacy.add_review_item(0, '说话人分离失败', message, priority=3)
-            speaker_processing.update(status='failed', error=message)
-        legacy.record_run_event("speaker_source", text_source=primary_backend, speaker_source="moss",
-            input_path=media_path, audio_seconds=audio_seconds, elapsed_seconds=time.perf_counter()-speaker_started,
+    # Native output is reused exactly once. A recognizer without speaker
+    # capability simply yields one lane; no extra model runs or native-label
+    # requirement is inferred from retired recognition-stage switches.
+    if primary_backend != 'moss':
+        speaker_processing.update(status='native', moss_called=False,
+            text_transcription_repeated=False)
+        legacy.record_run_event('speaker_source', text_source=primary_backend,
             processing=speaker_processing)
-
-    if primary_backend == 'api' and speaker_processing['mode'] in {'ecapa', 'filetrans', 'native'}:
-        from twobyteasr.speaker_diarization import has_native_speakers, diarize
-        references = moss_payload.get('references', [])
-        native = has_native_speakers(references)
-        if native and speaker_processing['mode'] != 'ecapa':
-            speaker_processing.update(status='native', moss_called=False, text_transcription_repeated=False)
-            print('   [说话人来源] 原生标签有效（单个标签也有效）；不运行 MOSS，不重复转写。')
-        else:
-            try:
-                if speaker_processing['mode'] in {'filetrans','native'}:
-                    raise RuntimeError('供应商未返回可用原生 speaker_id；文字与原始结果已缓存，可明确关闭分轨后继续或重试')
-                from twobyteasr.processes import main_python_executable
-                root = Path(__file__).resolve().parent
-                worker = root/'workers'/'speaker_embed_worker.py'
-                if not worker.is_file(): worker = root/'speaker_embed_worker.py'
-                print('   [说话人来源] VAD + ECAPA 窗口声纹 + 保守聚类；不执行文字转写。')
-                references, receipt = diarize(references, shared_audio, speech_regions,
-                    sample_rate=legacy.AUDIO_SAMPLE_RATE, model_dir=_script_paths(legacy)['speaker_embedding'],
-                    cache_dir=cache_context['cache_dir'], worker_path=worker, python=main_python_executable())
-                moss_payload['references'] = references
-                moss_payload['segments'] = [{k:row[k] for k in ('start','end','text','speaker','speaker_evidence')} for row in references]
-                save_speaker_evidence(speaker_audit_root, 'ecapa-diarization', receipt)
-                speaker_processing.update(status='needs_review', backend='ecapa', **{k:v for k,v in receipt.items() if k not in ('windows','embeddings')})
-            except Exception as exc:
-                if runtime_context.cancellation_token: runtime_context.cancellation_token.raise_if_cancelled()
-                message=f'快速分离未完成：{exc}。API 文字已保留，请在说话人管理复核；没有启动完整 MOSS。'
-                print('   [警告] '+message)
-                legacy.add_review_item(0,'快速分离未完成',message,priority=3)
-                speaker_processing.update(status='failed',error=message,moss_called=False)
-                if speaker_processing['mode'] in {'filetrans','native'}:
-                    raise RuntimeError(message) from exc
-        legacy.record_run_event('speaker_source',text_source='api',processing=speaker_processing)
 
     # Capture before host filtering, duplicate cleanup or voiceprint relabeling.
     # This is project evidence, independent of Stage 9 cache identities.
@@ -4243,6 +4133,10 @@ def process_media(
             f"{primary_backend} 到 {moss_last_end:.2f}s，FireRedVAD 人声到 {vad_last_end:.2f}s；尾段不自动臆造文字",
             priority=3,
         )
+        if primary_backend == 'moss':
+            legacy.record_run_event("moss_full_context_coverage", complete=False,
+                reason="vad_tail_uncovered", vad_last_end=vad_last_end, transcript_last_end=moss_last_end,
+                overlap_recognition_verified=False)
 
     def run_qwen_stage():
         audit_branch("qwen_review")
@@ -4308,7 +4202,7 @@ def process_media(
                 else (
                     f"{review_backend} 本地文字复核"
                     if review_backend in {"sensevoice", "funasr_nano", "firered_llm"}
-                    else "Qwen3-ASR 局部复核"
+                    else "Qwen3-ASR VAD短块复核"
                 )
             )
         return _run_audited_model_stage(
@@ -4454,45 +4348,12 @@ def process_media(
     # selected/failed state is finalized there once every execution path has
     # had a chance to run.
 
-    if speaker_mode=='nemotron':
-        from twobyteasr.nemotron_diarization import diarize, UNKNOWN_SPEAKER
-        references=copy.deepcopy(moss_payload.get('references') or moss_payload['segments'])
-        for row in references:
-            if row.get('tokens'):continue
-            nearby=[t for t in firered_tokens if float(row['start'])<=float(t['start'])<float(t['end'])<=float(row['end'])+.01]
-            if legacy.content_only(''.join(t.get('text','') for t in nearby))==legacy.content_only(row['text']):
-                row['tokens']=nearby
-        try:
-            references,receipt=diarize(references,shared_audio,cache_context['cache_dir'],
-                mapping_version=('timeline:'+runtime_context.recognition_snapshot['fingerprint'])
-                    if runtime_context.recognition_snapshot else 'source_16khz_v1')
-            receipt['task_context']=dict(job_id=runtime_context.job_id,
-                project_id=runtime_context.recognition_snapshot.get('project_id',''),
-                project_revision=runtime_context.recognition_snapshot.get('project_revision'),
-                time_domain='timeline' if runtime_context.recognition_snapshot else 'source')
-        except Exception as exc:
-            if runtime_context.cancellation_token:runtime_context.cancellation_token.raise_if_cancelled()
-            legacy.record_run_event('speaker_source',speaker_source='nemotron',state='failed',message=str(exc))
-            message='Nemotron 分析未完成，已保留文字与时间；当前交付尚无可靠分轨。可修复后重试并复用文字缓存，或选择关闭说话人区分继续。原因：'+str(exc)
-            legacy.add_review_item(0,'说话人区分失败',message,priority=3)
-            speaker_processing.update(status='failed',backend='nemotron',error=message)
-            legacy.record_run_event('speaker_progress',backend='nemotron',state='failed',message=message)
-            receipt=dict(status='failed',error=str(exc),cache_hit=False)
-            for row in references:
-                row['speaker_evidence']=dict(source='nemotron',status='failed',needs_confirmation=True,
-                                             original_speaker=row.get('speaker'))
-                row['speaker']=UNKNOWN_SPEAKER
-        else:
-            speaker_processing.update(status='needs_review',backend='nemotron',receipt=receipt)
-            legacy.record_run_event('speaker_source',speaker_source='nemotron',state='completed',cache_hit=receipt['cache_hit'])
-        moss_payload['references']=references;moss_payload['segments']=references
-        save_speaker_evidence(speaker_audit_root,'nemotron',receipt)
-        runtime_context.speaker_recovery=candidate_snapshot(references,(),runtime_context.expected_speakers,source='nemotron')
-        runtime_context.speaker_recovery['processing']=speaker_processing
-
+    alternate_coverage_signature = alternate_dialogue_coverage_signature(
+        primary_backend, speaker_mode, runtime_context, legacy,
+    )
     primary_dependency = {
         'speaker_strategy':speaker_mode,
-        'speaker_policy': 'explicit-identities-v3',
+        'speaker_policy': 'primary-native-identities-v4',
         "asr_result_schema_version": ASR_RESULT_SCHEMA_VERSION,
         "stage5_input_schema": "ASRResult+moss-flat-firered-flat-v2",
         "backend": primary_backend,
@@ -4507,6 +4368,7 @@ def process_media(
         "model_identity": _path_signature(paths.get("firered_worker", "")),
         "runtime_version": str(paths.get("main_python", "")),
     }
+    primary_dependency.update(alternate_coverage_signature)
     stage_index = 5
     audit_branch("alignment")
     if primary_backend == "moss":
@@ -4547,7 +4409,16 @@ def process_media(
         ),
     )
 
+    if not (primary_backend == "moss" and speaker_mode == "moss"):
+        segments = apply_alternate_dialogue_coverage(
+            segments, moss_payload.get("references", []), firered_tokens,
+            speech_regions, audio_seconds, legacy, primary_backend,
+            runtime_context=runtime_context,
+        )
+
     speaker_processing['stages']['primary_segments'] = label_summary(segments)
+    if primary_backend == 'moss':
+        speaker_processing['stages'].update(moss_payload.get('metadata', {}).get('speaker_stages', {}))
     if analysis_transcript:
         qwen_chunks = []
         legacy.record_run_event('stage_skipped', index=6, total=stage_total,
@@ -4599,6 +4470,12 @@ def process_media(
         # Preserve each model's own evidence.  ``reference_consensus`` is a
         # lexical similarity score and must never overwrite FireRed timing or
         # Qwen confidence.
+        segment.caption_arbitration = dict(segment.caption_arbitration or {})
+        segment.caption_arbitration['acoustic_words'] = [
+            {'text': str(token.get('text') or ''), 'start_ms': round(float(token['start'])*1000),
+             'end_ms': round(float(token['end'])*1000), 'model': 'firered'}
+            for token in (firered_tokens or []) if token.get('text') and float(token['end']) > segment.start
+            and float(token['start']) < segment.end]
         segment.moss_start = float(segment.moss_start or segment.start)
         segment.moss_end = float(segment.moss_end or segment.end)
         if segment.firered_text and segment.firered_end > segment.firered_start:
@@ -4612,7 +4489,11 @@ def process_media(
         if not segment.qwen_text:
             segment.qwen_confidence = 0.0
         segment.final_text = str(segment.text or "")
-        if str(segment.final_timing_owner).endswith('word timestamps'):
+        if primary_backend.startswith('vibevoice_'):
+            segment.final_start=float(segment.start)
+            segment.final_end=float(segment.end)
+            segment.final_timing_owner='FireRed acoustic word alignment' if segment.words else 'VibeVoice chunk bounds (word alignment unavailable)'
+        elif str(segment.final_timing_owner).endswith('timestamps'):
             segment.final_start=float(segment.start)
             segment.final_end=float(segment.end)
         elif segment.firered_text and segment.firered_end > segment.firered_start:
@@ -4680,6 +4561,10 @@ def process_media(
             ),
         )
 
+    from twobyteasr.terminology import apply_to_segments, runtime_snapshot
+    term_snapshot = runtime_snapshot(legacy)
+    segments = apply_to_segments(segments, term_snapshot, legacy)
+
     if text_plan.polish:
         stage_index += 1
         from twobyteasr.asr_provider_snapshot import task_provider_snapshot
@@ -4700,10 +4585,16 @@ def process_media(
                 extra_signature=legacy.serialize_segments(segments),
             ),
         )
+    # Search owns an independent scope/cache and runs even after a text hit.
+    from twobyteasr.domain_terms import run_optional_term_verification
+    segments = run_optional_term_verification(segments, base_name, cache_context)
     # 即使命中旧缓存，仍在本地执行术语与成片规则；后续全文断句会依据
     # 规整后的文字和说话人插话边界重新计算缓存签名。
     save_speaker_evidence(speaker_audit_root, 'corrected-before-editorial', legacy.serialize_segments(segments))
     segments = legacy.apply_editorial_segment_rules(segments)
+    # Cloud/cached polishing and editorial formatting may alter casing. The
+    # authoritative local pass runs before grouping and its word alignment.
+    segments = apply_to_segments(segments, term_snapshot, legacy)
     save_speaker_evidence(speaker_audit_root, "polished", legacy.serialize_segments(segments))
 
     grouping_uses_ai = text_plan.group
@@ -4720,12 +4611,16 @@ def process_media(
         (
             f"{runtime_context.provider_snapshot.provider}/{runtime_context.provider_snapshot.model} · {runtime_context.provider_snapshot.transport}+说话人插话保护"
             if grouping_uses_ai
-            else "MOSS 自然语句+FireRed 停顿+本地护栏"
+            else ("VibeVoice 原生块+真实词级对齐+块级待审" if primary_backend.startswith('vibevoice_') else "MOSS 自然语句+FireRed 停顿+本地护栏")
         ),
         lambda: legacy.run_cached_stage(
             "grouped" if grouping_uses_ai else "grouped_local",
             cache_context,
-            lambda: legacy.group_subtitles(
+            lambda: (__import__('twobyteasr.optional_timing',fromlist=['grouping']).grouping(
+                    segments,firered_tokens,legacy,speech_regions=speech_regions,
+                    protect_all_source_boundaries=False,cache_context=cache_context,use_ai=grouping_uses_ai,
+                    provider_snapshot=runtime_context.provider_snapshot)
+                if primary_backend.startswith('vibevoice_') else legacy.group_subtitles(
                     segments,
                     firered_tokens=firered_tokens,
                     speech_regions=speech_regions,
@@ -4733,10 +4628,11 @@ def process_media(
                     cache_context=cache_context,
                     use_ai=grouping_uses_ai,
                     provider_snapshot=runtime_context.provider_snapshot,
-            ),
+            )),
             encoder=legacy.serialize_cues,
             decoder=legacy.deserialize_cues,
             extra_signature={
+                **alternate_coverage_signature,
                 "segments": legacy.serialize_segments(segments),
                 "firered_tokens": firered_tokens,
                 "speech_regions": speech_regions,
@@ -4767,11 +4663,12 @@ def process_media(
             encoder=legacy.serialize_cues,
             decoder=legacy.deserialize_cues,
             extra_signature={
+                **alternate_coverage_signature,
                 "cues": legacy.serialize_cues(cues),
-                "mode": "moss-outer-strict-vad-onset-firered-inner-tail200-gap500-turn-protection-v6",
+                "mode": "vibevoice-native-chunk-measured-words-v1" if primary_backend.startswith('vibevoice_') else "moss-outer-strict-vad-onset-firered-inner-tail200-gap500-turn-protection-v6",
                 "firered_execution": _model_stage_summary(legacy).get("firered", {}),
                 "firered_result_hash": legacy.stable_digest(firered_tokens),
-                "final_timing_owner": "FireRed" if not firered_failed else "MOSS_DEGRADED",
+                "final_timing_owner": "VibeVoice chunks / FireRed measured words" if primary_backend.startswith('vibevoice_') else "FireRed" if not firered_failed else "MOSS_DEGRADED",
                 "upstream_artifact_hashes": {
                     "firered": legacy.stable_digest(firered_tokens),
                     "firered_primary": legacy.stable_digest(legacy.serialize_segments(segments)),
@@ -4793,6 +4690,7 @@ def process_media(
     stage_index += 1
     model_statuses = _model_stage_summary(legacy)
     legacy.record_run_event("model_summary", models=model_statuses)
+    coverage_filter = copy.deepcopy(runtime_context.speaker_recovery.get("coverage_filter"))
     raw_candidates = runtime_context.speaker_recovery.get("raw_segments", [])
     if raw_candidates:
         runtime_context.speaker_recovery = candidate_snapshot(
@@ -4802,6 +4700,10 @@ def process_media(
         # execution/failure receipt captured before downstream timing stages.
         runtime_context.speaker_recovery['processing'] = speaker_processing
         runtime_context.speaker_recovery['allow_raw_recovery'] = primary_backend == 'moss'
+        if coverage_filter is not None:
+            runtime_context.speaker_recovery['coverage_filter'] = coverage_filter
+            if coverage_filter.get('needs_confirmation'):
+                runtime_context.speaker_recovery['needs_confirmation'] = True
         if speaker_processing.get('backend') == 'ecapa':
             runtime_context.speaker_recovery['needs_confirmation'] = True
             if 'S00' in runtime_context.speaker_recovery['roles']:
@@ -4831,8 +4733,8 @@ def process_media(
         review_classification=fused_review_counts,
         real_three_source_cues=real_three_source_cues,
         cache_owners={
-            "firered_primary": "FireRed" if not firered_failed else "MOSS_DEGRADED",
-            "final_timing": "FireRed" if not firered_failed else "MOSS_DEGRADED",
+            "firered_primary": primary_backend.upper() if primary_backend.startswith('vibevoice_') else "FireRed" if not firered_failed else "MOSS_DEGRADED",
+            "final_timing": "VibeVoice chunks / FireRed measured words" if primary_backend.startswith('vibevoice_') else "FireRed" if not firered_failed else "MOSS_DEGRADED",
         },
     )
 

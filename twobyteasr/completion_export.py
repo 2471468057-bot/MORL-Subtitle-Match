@@ -65,7 +65,9 @@ class CompletionExportDialog(QDialog):
         self.all_speakers.toggled.connect(self._select_all)
         self.speakers.itemChanged.connect(self._selection_changed)
         form = QFormLayout()
-        self.name = QLineEdit(Path(name).stem)
+        # The completion page already supplies the extension-free media name.
+        # Dotted identifiers such as .456-467 are part of that name.
+        self.name = QLineEdit(str(name))
         form.addRow(t("文件名", "File name", "ファイル名"), self.name)
         formats = QHBoxLayout()
         self.formats = {}

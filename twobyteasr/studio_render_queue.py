@@ -150,7 +150,11 @@ class StudioRenderQueue:
             return [QueuedRenderJob.from_dict(item.to_dict()) for item in self._jobs]
 
     def enqueue(self, job: RenderJob) -> QueuedRenderJob:
-        queued = QueuedRenderJob(job=job)
+        from copy import deepcopy
+        from dataclasses import replace
+        # QObject-bound preview callbacks cannot be deep-copied or persisted.
+        frozen = replace(job, preview_callback=None, preview_url='', completion_metadata={}, completion_preview_path='')
+        queued = QueuedRenderJob(job=deepcopy(frozen))
         with self._condition:
             self._jobs.append(queued)
             self.store.save(self._jobs)

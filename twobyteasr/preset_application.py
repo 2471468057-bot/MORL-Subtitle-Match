@@ -30,7 +30,7 @@ def preset_command(project, cue_ids, patch, *, apply_geometry=False, changed=Non
         base.id = preset_id + '-revision-' + hashlib.sha256(json.dumps(asdict(base),sort_keys=True).encode()).hexdigest()[:10]
     styles[base.id] = base
     recipes = deepcopy(project.style_recipes)
-    mapped = {}; overrides = {}; effects = {}
+    mapped = {}; overrides = {}; effects = {}; transforms = {}
     for cue in project.cues:
         if cue.id not in cue_ids: continue
         authored = resolve_cue_visual(project, cue).style
@@ -39,6 +39,16 @@ def preset_command(project, cue_ids, patch, *, apply_geometry=False, changed=Non
                 setattr(authored, key, deepcopy(value))
         authored.name = base.name
         authored.validate()
+        if apply_geometry and any(key in patch for key in GEOMETRY):
+            # Applying geometry is an explicit scoped position edit. Capture
+            # its effective anchor so saved initial overlap layout cannot
+            # override the user's selected preset position.
+            from .visual_snapshot import _anchor
+            x,y,_,_ = _anchor(authored, int(project.render_settings.get('play_res_x',1920)),
+                             int(project.render_settings.get('play_res_y',1080)))
+            transform = deepcopy(cue.transform or {})
+            transform.update(position_x=x, position_y=y)
+            transforms[cue.id] = transform
         # A complete recipe replaces appearance/motion explicitly; a sparse
         # recipe merges only the sections/keys its author supplied.
         recipe = _merge(recipes.get(cue.style_id, {}), patch.get('recipe', {}))
@@ -66,8 +76,12 @@ def preset_command(project, cue_ids, patch, *, apply_geometry=False, changed=Non
     command = SetCuesPresentationCommand(project, cue_ids, style_id=base.id, effect_id='none',
         style_ids=mapped, base_preset_id=base.id, appearance_overrides=overrides,
         effect_ids=effects, styles=list(styles.values()), style_recipes=recipes,
+        transform_overrides=transforms or None,
         merge_enabled=False,
         text='应用字幕预设', changed=changed)
+    if apply_geometry:
+        from .subtitle_stacking import stack_batch_presentation
+        stack_batch_presentation(command)
     if command.before == command.after and command.before_styles == command.after_styles and command.before_style_recipes == command.after_style_recipes:
         return None
     return command

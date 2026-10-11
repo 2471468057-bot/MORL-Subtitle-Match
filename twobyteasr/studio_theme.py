@@ -290,7 +290,7 @@ def studio_status_colors() -> dict[str, tuple[str, str]]:
     return {
         "pending": (t.warning_soft, t.warning),
         "issue": (t.danger_soft, t.danger),
-        "done": (t.selected, t.accent),
+        "done": (t.success_soft, t.success),
     }
 
 

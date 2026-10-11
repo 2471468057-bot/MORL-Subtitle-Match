@@ -203,7 +203,6 @@ def compile_ass(project: SubtitleProject, *, frame_rate=None, cues: Sequence[Any
     bilingual = bool(state.get("bilingual_mode")) if isinstance(state, Mapping) else False
     from .caption_frame_time import project_frame_rate
     if frame_rate is None:frame_rate=project_frame_rate(project)
-    from .subtitle_stacking import project_stack_layout
     return _compile_ass_records(
         cues=cues if cues is not None else project.cues,
         frame_rate=frame_rate,
@@ -215,7 +214,6 @@ def compile_ass(project: SubtitleProject, *, frame_rate=None, cues: Sequence[Any
         play_res_y=play_res_y,
         translations=translations if (bilingual and isinstance(translations, Mapping)) else None,
         stacking_enabled=project.studio_state.get('auto_subtitle_stacking',True),
-        stack_offsets=project_stack_layout(project).offsets,
     )
 
 
@@ -277,30 +275,15 @@ def _compile_ass_records(
     ]
     from .resolved_caption_style import resolve_caption_style
     resolved_captions = {cue.id: resolve_caption_style(styles,speakers,cue,style_recipes,play_res_x) for cue in cues}
-    # 2026-09-19：抢话字幕自动分层——同时显示的多条字幕按开始时间上下
-    # 排布（先开始的在下）。偏移是纯显示布局：只进派生 resolved 样式
-    # 的 per-event \pos，绝不写回用户样式/cue transform。
-    from .subtitle_stacking import compute_stack_layout
-    stack_layout = compute_stack_layout(
-        cues,
-        resolve_one=lambda cue: resolved_captions[cue.id],
-        play_res_y=play_res_y,
-        play_res_x=play_res_x,
-        enabled=stacking_enabled,
-        effect_for=lambda cue:effects.get(cue.effect_id,{}),
-    )
-    if stack_offsets is not None:
-        from .subtitle_stacking import StackLayout
-        stack_layout=StackLayout(stack_offsets)
+    # Positions are persisted during generation or an explicit layout edit.
+    # libass receives explicit per-event positions and performs no second
+    # application-level overlap allocation.
     cue_styles = {}
     lines.extend(_style_line(style) for style in styles)
     for cue in cues:
         caption = resolved_captions[cue.id]
         from .ass_font_units import ass_font_style
         effective = ass_font_style(caption.style, play_res_x, play_res_y)
-        stack_offset = stack_layout.offset_for(cue.id)
-        if stack_offset:
-            effective.position_y = max(4.0, float(effective.position_y) - stack_offset)
         effective.id = f"resolved-{caption.style_hash[:20]}"
         cue_styles[cue.id] = effective
     lines.extend(_style_line(style) for style in {style.id:style for style in cue_styles.values()}.values())

@@ -8,14 +8,21 @@ def transcribe(audio_path,chunks,*,publish_primary=False):
     import numpy as np
     from . import asr
     from .cache import record_run_event
-    from .llm_config import qwen_asr_endpoint_from_settings
+    from .llm_config import qwen_asr_endpoint_from_settings, validate_qwen_asr_endpoint
     from .runtime import get_runtime_context
     from .runtime_paths import detect_install_root
     from .runtime_registry import resolve_runtime_python
     context=get_runtime_context()
     settings=context.asr_settings_snapshot or asr._legacy_runtime_value('RUNTIME_SETTINGS',asr.RUNTIME_SETTINGS)
     endpoint=dict(context.asr_endpoint_snapshot or qwen_asr_endpoint_from_settings(settings))
+    validate_qwen_asr_endpoint(endpoint)
     endpoint['speaker_source']=context.speaker_source or 'single'
+    from .qwen31_asr import FILETRANS, filetrans_hints
+    if endpoint['model'] == FILETRANS:
+        from .terminology import runtime_snapshot
+        endpoint.update(filetrans_hints(runtime_snapshot().canonical_terms,
+                        vocabulary_id=settings.get('models', {}).get('asr_vocabulary_id', ''),
+                        vocabulary_model=settings.get('models', {}).get('asr_vocabulary_model', '')))
     from .cloud_asr_jobs import FLASH, FILETRANS, SPARK, worker_timeout
     native_job=endpoint['model'] in {FLASH,FILETRANS,SPARK}
     worker=detect_install_root()/'asr_api_worker.py'
@@ -42,11 +49,14 @@ def transcribe(audio_path,chunks,*,publish_primary=False):
             manifest.append(dict(offset=offset,samples=size,start=chunk['start'],end=chunk['end']))
             offset+=size
         audio.flush();del audio
+        from .llm_config import read_oss_credentials
+        storage_credentials = read_oss_credentials() if endpoint['model'] == FILETRANS else ()
         request=dict(source_path=str(audio_path),audio_array=str(array),output=str(output),chunks=manifest,
             endpoint=endpoint,context=asr.build_qwen_asr_context(audio_path),settings=settings,
             native_job=native_job,speaker_source=endpoint['speaker_source'],
             cancel_file=str(root/'cancel'),
             job_id=context.job_id,publish_primary=publish_primary,workers=max(1,min(6,int(asr.CLOUD_BATCH_WORKERS))))
+        if storage_credentials: request['storage_credentials'] = storage_credentials
         record_run_event('asr_wait',backend='api',state='connecting',total_batches=len(chunks),
             message='上传短块并等待真实转写；本地独立证据可同时运行')
         payload=asr._run_isolated_asr_worker([python,'-u',str(worker)],str(output),model_id='PRIMARY_API',

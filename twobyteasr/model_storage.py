@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,23 +49,18 @@ def format_bytes(value: int) -> str:
     return "0 B"
 
 
-def directory_size(path: Path, *, max_files: int = 8_000) -> int:
+def directory_size(path: Path, *, max_files: int | None = None) -> int:
     if not path.is_dir():
         return 0
     total = 0
-    counted = 0
-    try:
-        for item in path.rglob("*"):
-            try:
-                if item.is_file():
-                    total += item.stat().st_size
-                    counted += 1
-                    if counted >= max_files:
-                        return total
-            except OSError:
-                continue
-    except OSError:
-        return total
+    from .model_removal import _link
+    def failure(exc): raise exc
+    for directory, dirs, files in os.walk(path, followlinks=False, onerror=failure):
+        base = Path(directory)
+        dirs[:] = [name for name in dirs if not _link(base / name)]
+        for name in files:
+            item = base / name
+            if not _link(item): total += item.stat().st_size
     return total
 
 
@@ -106,6 +102,7 @@ class StorageEntry:
     environment_bytes: int
     current: bool
     revision: str
+    measurement_error: str = ''
 
 
 class _StorageScanThread(QThread):
@@ -119,6 +116,18 @@ class _StorageScanThread(QThread):
 
     def run(self):
         self.completed.emit(scan_storage(self.root, self.models, self.current))
+
+
+class _HistoryCleanupThread(QThread):
+    completed = Signal(object)
+
+    def __init__(self, action, parent=None):
+        super().__init__(parent)
+        self.action = action
+
+    def run(self):
+        try: self.completed.emit((self.action(), ''))
+        except Exception as exc: self.completed.emit((None, str(exc)))
 
 
 def scan_storage(root: Path, models: Iterable[object], current_keys: set[str]) -> list[StorageEntry]:
@@ -137,6 +146,7 @@ def scan_storage(root: Path, models: Iterable[object], current_keys: set[str]) -
         actual_bytes = 0
         revision = ""
         installed = False
+        measurement_error = ''
         if record is not None:
             path = record.installation_path
             expected_bytes = record.expected_bytes
@@ -152,11 +162,11 @@ def scan_storage(root: Path, models: Iterable[object], current_keys: set[str]) -
             if env_path not in environment_sizes:
                 environment_sizes[env_path] = _environment_bytes(env_path)
             env_bytes = environment_sizes[env_path]
-        if path.is_dir():
-            if expected_bytes >= 80_000_000:
-                actual_bytes = expected_bytes if installed else actual_bytes
-            elif actual_bytes <= 0:
-                actual_bytes = directory_size(path)
+        if record and record.health is ModelHealth.UNREADABLE:
+            measurement_error = '目录不可访问，统计未完成'
+        elif path.is_dir():
+            try: actual_bytes = directory_size(path)
+            except OSError as exc: measurement_error = str(exc)
         entries.append(StorageEntry(
             model_key=str(getattr(model, "key", download_key)),
             key=download_key,
@@ -172,6 +182,7 @@ def scan_storage(root: Path, models: Iterable[object], current_keys: set[str]) -
             environment_bytes=env_bytes,
             current=str(getattr(model, "key", "")) in current_keys,
             revision=revision,
+            measurement_error=measurement_error,
         ))
     return entries
 
@@ -205,23 +216,10 @@ def verify_model_files(root: Path, key: str) -> tuple[bool, str]:
 
 
 def residual_files(root: Path) -> list[Path]:
-    """Return only explicit temporary artifacts owned by this checkout."""
-    root = root.resolve()
-    found: list[Path] = []
-    for owner in ("models", "tmp"):
-        base = (root / owner).resolve()
-        if not base.is_dir():
-            continue
-        for item in base.rglob("*"):
-            try:
-                if not item.is_file() or not _owned_child(root, item, owner):
-                    continue
-            except OSError:
-                continue
-            lower = item.name.lower()
-            if lower.endswith((".part", ".tmp", ".download.json")) or ".part." in lower:
-                found.append(item)
-    return found
+    """Explicit downloader receipts only; checkout tmp is development data."""
+    from .model_download_cache import scan_download_transactions
+    return [path for transaction in scan_download_transactions(get_runtime_paths().model_root / '.downloads')
+            for path in transaction.paths]
 
 
 class ModelStorageDialog(QDialog):
@@ -243,6 +241,7 @@ class ModelStorageDialog(QDialog):
         self.filter_mode = "all"
         self._entries: list[StorageEntry] = []
         self._scanner: _StorageScanThread | None = None
+        self._history_worker: _HistoryCleanupThread | None = None
         self._close_after_scan = False
         self.setObjectName("modelStorageDialog")
         bind_text(self, '模型存储管理', property='windowTitle')
@@ -269,6 +268,10 @@ class ModelStorageDialog(QDialog):
         self.residual_button.setObjectName("storageOutline")
         self.residual_button.clicked.connect(self._show_residuals)
         header.addWidget(self.residual_button)
+        self.history_cleanup_button = QPushButton('永久清理历史模型残留')
+        self.history_cleanup_button.setObjectName('storageDanger')
+        self.history_cleanup_button.clicked.connect(self._scan_history_cleanup)
+        header.addWidget(self.history_cleanup_button)
         outer.addLayout(header)
 
         path_row = QHBoxLayout()
@@ -288,6 +291,15 @@ class ModelStorageDialog(QDialog):
         path_row.addWidget(change_path)
         path_row.addWidget(scan_existing)
         outer.addLayout(path_row)
+        runtime_row = QHBoxLayout()
+        runtime_note = QLabel('运行环境只清理已有健康替代、无进程引用且有完整归属登记的旧版本；当前共享环境保留。')
+        runtime_note.setObjectName('storageMuted'); runtime_note.setWordWrap(True)
+        runtime_row.addWidget(runtime_note, 1)
+        self.runtime_cleanup_button = QPushButton('清理不再使用的模型运行环境')
+        self.runtime_cleanup_button.setObjectName('storageOutline')
+        self.runtime_cleanup_button.clicked.connect(self._scan_unused_runtimes)
+        runtime_row.addWidget(self.runtime_cleanup_button)
+        outer.addLayout(runtime_row)
 
         summary = QFrame()
         summary.setObjectName("storageSummary")
@@ -338,6 +350,13 @@ class ModelStorageDialog(QDialog):
         if not chosen:
             return
         set_model_root(chosen, persist=True)
+        # Re-selecting a location is the explicit restore operation for models
+        # previously detached from this exact external directory.
+        from .model_associations import restore_model_association
+        from .runtime_paths import model_folder_name
+        lock = json.loads((self.root / 'dependencies.lock.json').read_text('utf-8-sig'))
+        for spec in lock.get('models', {}).values():
+            restore_model_association(Path(chosen) / model_folder_name(str(spec.get('path', ''))))
         self.model_root_edit.setText(str(get_runtime_paths().model_root))
         self.refresh()
 
@@ -387,11 +406,132 @@ class ModelStorageDialog(QDialog):
             QDialog.reject(self)
 
     def reject(self):
-        if self._scanner is not None and self._scanner.isRunning():
+        if ((self._scanner is not None and self._scanner.isRunning()) or
+                (self._history_worker is not None and self._history_worker.isRunning())):
             self._close_after_scan = True
             self.hide()
             return
         super().reject()
+
+    def _history_action(self, action, callback):
+        self.history_cleanup_button.setEnabled(False)
+        self.residual_button.setEnabled(False)
+        self.runtime_cleanup_button.setEnabled(False)
+        worker = _HistoryCleanupThread(action, self)
+        self._history_worker = worker
+        def completed(payload):
+            self._history_worker = None
+            self.history_cleanup_button.setEnabled(True)
+            self.residual_button.setEnabled(True)
+            self.runtime_cleanup_button.setEnabled(True)
+            callback(payload)
+            if self._close_after_scan: QDialog.reject(self)
+        worker.completed.connect(completed)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _scan_history_cleanup(self):
+        if self._storage_busy():
+            QMessageBox.information(self, tr('任务正在运行'), tr('请等待模型推理、下载、安装或修复结束。')); return
+        main = self.parentWidget()
+        while main is not None and not hasattr(main, '_run_in_progress'):
+            main = main.parentWidget()
+        if main and (main._run_in_progress or
+                     (getattr(main, 'worker', None) is not None and main.worker.isRunning())):
+            QMessageBox.information(self, tr('任务正在运行'), tr('请先等待任务结束或正常取消任务，再永久清理历史模型。'))
+            return
+        if self._history_worker is not None: return
+        from .model_removal import historical_model_removals
+        self._history_action(lambda: historical_model_removals(self.root), self._confirm_history_cleanup)
+
+    def _storage_busy(self):
+        node = self.parentWidget()
+        while node is not None:
+            if getattr(node, '_run_in_progress', False): return True
+            worker = getattr(node, 'worker', None)
+            if worker is not None and worker.isRunning(): return True
+            for dialog in getattr(node, '_download_dialogs', ()):
+                if dialog.process.state().value != 0: return True
+            node = node.parentWidget()
+        return False
+
+    def _scan_unused_runtimes(self):
+        if self._history_worker is not None: return
+        if self._storage_busy():
+            QMessageBox.information(self, tr('任务正在运行'), tr('请等待模型推理、下载、安装或修复结束。')); return
+        from .model_runtime_cleanup import scan_unused_model_runtimes
+        self._history_action(scan_unused_model_runtimes, self._confirm_unused_runtimes)
+
+    def _confirm_unused_runtimes(self, payload):
+        plans, error = payload
+        if error:
+            QMessageBox.warning(self, tr('运行环境扫描失败'), error); return
+        if not plans:
+            QMessageBox.information(self, tr('运行环境清理'), tr('未发现应用登记的旧版本运行环境。')); return
+        eligible = [plan for plan in plans if not plan.protected_reason and plan.removal is not None]
+        detail = '\n'.join(str(plan.root) + '\n' + (plan.protected_reason or
+            tr('可清理逻辑大小 {size}；保留未知文件 {count} 项', size=format_bytes(plan.removal.logical_bytes), count=len(plan.removal.retained))) for plan in plans)
+        if not eligible:
+            QMessageBox.information(self, tr('运行环境均受保护'), detail); return
+        answer = QMessageBox.question(self, tr('清理不再使用的模型运行环境'),
+            tr('{detail}\n\n只永久删除清单中的旧版本文件；重新检查当前登记、进程占用和替代环境健康。当前运行环境、Python基底和模型权重保持。', detail=detail),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes: return
+        from .model_runtime_cleanup import remove_unused_model_runtime
+        self._cleanup_result_title = '运行环境清理结果'
+        self._history_action(lambda: [remove_unused_model_runtime(plan, install_root=self.root,
+            busy=self._storage_busy) for plan in eligible], self._history_cleanup_completed)
+
+    def _confirm_history_cleanup(self, payload):
+        plans, error = payload
+        if error:
+            QMessageBox.warning(self, tr('历史模型扫描失败'), error); return
+        if not plans:
+            QMessageBox.information(self, tr('历史模型残留'), tr('没有发现本应用管理范围内的历史模型残留。')); return
+        preview = '\n'.join(str(tr('{key}: {path}（{count} 项，{size}）', key=p.model_key,
+                                  path=str(p.root), count=len(p.paths), size=format_bytes(p.logical_bytes))) for p in plans)
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowTitle(tr('永久清理历史模型残留'))
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(str(tr('{preview}\n\n只删除清单中已登记的模型文件，保留共享或未知文件、模型运行环境和全局缓存。\n'
+                              '目录 .bin 与权重文件扩展名 .bin 分开处理。不会移入回收站。', preview=preview)) +
+                       '\n' + tr('再次使用需要下载。'))
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.button(QMessageBox.StandardButton.Yes).setText(tr('永久删除'))
+        dialog.button(QMessageBox.StandardButton.No).setText(tr('取消'))
+        answer = dialog.exec()
+        if answer != QMessageBox.StandardButton.Yes: return
+        from .model_removal import execute_removal
+        def remove():
+            if self._storage_busy(): raise BlockingIOError('模型任务已开始，等待占用释放后重新清理')
+            from .asr import end_local_asr_session
+            end_local_asr_session(force=True)
+            return [execute_removal(plan, busy_check=self._storage_busy) for plan in plans]
+        self._history_action(remove, self._history_cleanup_completed)
+
+    def _history_cleanup_completed(self, payload):
+        results, error = payload
+        if error:
+            QMessageBox.warning(self, tr('历史模型清理失败'), error); return
+        failures = {p: why for result in results for p, why in result.failures.items()}
+        retained = [p for result in results for p in result.retained]
+        message = str(tr('已永久删除 {count} 项，逻辑大小 {logical}。\n独占文件 {exclusive}，硬链接可能仍由其他目录持有。',
+                         count=sum(len(r.removed) for r in results), logical=format_bytes(sum(r.logical_bytes for r in results)),
+                         exclusive=format_bytes(sum(r.exclusive_bytes for r in results))))
+        if failures: message += '\n\n' + tr('未能删除：') + '\n' + '\n'.join(f'{p}: {why}' for p, why in failures.items())
+        if retained: message += '\n\n' + tr('保留共享或未登记文件：') + '\n' + '\n'.join(retained[:20])
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning if failures or retained else QMessageBox.Icon.Information)
+        dialog.setWindowTitle(tr(getattr(self, '_cleanup_result_title', '历史模型清理结果')))
+        self._cleanup_result_title = '历史模型清理结果'
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(message)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.button(QMessageBox.StandardButton.Ok).setText(tr('确定'))
+        dialog.exec()
+        self.refresh()
 
     def _render_entries(self):
         self._clear_rows()
@@ -400,6 +540,8 @@ class ModelStorageDialog(QDialog):
         model_bytes = sum(entry.actual_bytes for entry in entries)
         free_bytes = shutil.disk_usage(self.root).free
         values = (str(len(installed)), format_bytes(model_bytes), str(len(entries) - len(installed)), format_bytes(free_bytes))
+        if any(entry.measurement_error for entry in entries):
+            values = (values[0], tr('统计未完成（已知 {size}）', size=format_bytes(model_bytes)), values[2], values[3])
         for label, value in zip(self.summary_labels, values):
             label.setText(value)
         for entry in entries:
@@ -433,7 +575,7 @@ class ModelStorageDialog(QDialog):
         meta.setWordWrap(True)
         layout.addWidget(meta, 1, 1, 1, 2)
         expected = format_bytes(entry.expected_bytes) if entry.expected_bytes else "以仓库实际文件为准"
-        actual = format_bytes(entry.actual_bytes) if entry.actual_bytes else "—"
+        actual = tr('统计未完成') if entry.measurement_error else (format_bytes(entry.actual_bytes) if entry.actual_bytes else "—")
         runtime = f"{entry.environment_name} · {format_bytes(entry.environment_bytes)}" if entry.environment_bytes else f"{entry.environment_name} · 未安装"
         detail = bind_text(QLabel(), '预计下载 {expected}    模型文件 {actual}    运行环境 {runtime}\n{value3}', expected=expected, actual=actual, runtime=runtime, value3=entry.path)
         detail.setObjectName("storageDetail")
@@ -475,33 +617,51 @@ class ModelStorageDialog(QDialog):
         self.refresh()
 
     def _show_residuals(self):
-        files = residual_files(self.root)
-        if not files:
+        if self._history_worker is not None: return
+        from .model_download_cache import scan_download_transactions
+        staging = get_runtime_paths().model_root / '.downloads'
+        self._history_action(lambda: scan_download_transactions(staging), self._confirm_residuals)
+
+    def _confirm_residuals(self, payload):
+        transactions, error = payload
+        if error:
+            QMessageBox.warning(self, tr('残留扫描失败'), error); return
+        if not transactions:
             QMessageBox.information(self, tr('残留文件'), tr('没有发现可清理的 2ByteASR 临时下载文件。'))
             return
-        total = sum(item.stat().st_size for item in files if item.is_file())
-        preview = "\n".join(str(item.relative_to(self.root)) for item in files[:20])
-        if len(files) > 20:
-            preview += f"\n…另有 {len(files) - 20} 项"
+        total = sum(item.logical_bytes for item in transactions)
+        preview = '\n'.join(f'{item.model_key}: {item.root} [{item.state}] {format_bytes(item.logical_bytes)}' for item in transactions)
         answer = QMessageBox.question(
             self,
             tr('清理残留文件'),
-            tr('将删除 {value0} 个项目内临时文件，共 {value1}：\n\n{value2}\n\n不会清理用户全局 Hugging Face cache。', value0=len(files), value1=format_bytes(total), value2=preview),
+            tr('下载事务 {value0} 项，共 {value1}：\n\n{value2}\n\n仅清理已发布或超过续传保留期限的明确归属文件。使用中、未到期、未知文件与开发tmp保留。', value0=len(transactions), value1=format_bytes(total), value2=preview),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        removed = 0
-        for item in files:
-            try:
-                owner = "models" if _owned_child(self.root, item, "models") else "tmp"
-                if _owned_child(self.root, item, owner):
-                    item.unlink()
-                    removed += 1
-            except OSError:
-                continue
-        QMessageBox.information(self, tr('清理完成'), tr('已删除 {value0} 个项目内临时文件。', value0=removed))
+        from .model_download_cache import cleanup_download_transaction
+        from .storage_service import StorageService
+        resume_days = StorageService().policy()['resume_days']
+        staging = get_runtime_paths().model_root / '.downloads'
+        def remove():
+            if self._storage_busy(): raise BlockingIOError('模型任务已开始，等待占用释放')
+            return [cleanup_download_transaction(item, staging_root=staging,
+                expired_only=True, resume_days=resume_days) for item in transactions]
+        self._history_action(remove, self._residual_cleanup_completed)
+
+    def _residual_cleanup_completed(self, payload):
+        results, error = payload
+        if error:
+            QMessageBox.warning(self, tr('下载残留清理失败'), error); return
+        removed = sum(len(item['removed']) for item in results)
+        logical = sum(item['logical_bytes'] for item in results)
+        reasons = [why for item in results for why in item['skipped']]
+        failures = {path: why for item in results for path, why in item['failures'].items()}
+        text = tr('已删除 {count} 项，逻辑大小 {logical}（实际空间可能受硬链接、稀疏文件及同期磁盘活动影响）。', count=removed, logical=format_bytes(logical))
+        if reasons: text += '\n' + '\n'.join(reasons)
+        if failures: text += '\n' + '\n'.join(f'{path}: {why}' for path, why in failures.items())
+        QMessageBox.information(self, tr('下载残留清理结果'), text)
 
 
 def build_storage_qss() -> str:

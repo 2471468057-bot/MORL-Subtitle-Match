@@ -91,13 +91,17 @@ class StudioProjectFlowMixin:
         self._autosave_generation += 1
         # Closing a project revokes all pixel producers, including the ones
         # that bypass QWidget visibility and the GUI overlay registry.
+        # Both are children of this page: close() alone left one of each per
+        # opened project alive, each still holding that project (~10 MB).
         scene = getattr(self, "_caption_scene", None)
         if scene is not None:
             scene.close()
+            scene.deleteLater()
             self._caption_scene = None
         cache = getattr(self, "_caption_playback_cache", None)
         if cache is not None:
             cache.close()
+            cache.deleteLater()
             self._caption_playback_cache = None
         self._revoke_advanced_preview(reason="project_close")
         actor = getattr(self, "_ass_actor", None)
@@ -160,7 +164,17 @@ class StudioProjectFlowMixin:
                 advanced.clear()
             except RuntimeError:
                 pass
+        # Prepared drag-preview rasters (up to 64 MB) and LIVE layers (up to
+        # 160 MB) only serve the closed project; the hub keeps neither.
+        timing = getattr(self, "_cue_timing_preview", None)
+        if timing is not None:
+            timing.release()
+        from .live_layer_cache import GLOBAL_LIVE_LAYER_CACHE
+        GLOBAL_LIVE_LAYER_CACHE.clear()
         self._preview_path = None
+        # Preview path caches are keyed by project identity; do not keep the
+        # closed project alive while the hub is showing.
+        self._preview_path_project = None
         self.project = None
         # Unload can emit synchronous callbacks while the old project is still
         # assigned. Fence LIVE jobs after those callbacks too.
@@ -278,9 +292,10 @@ class StudioProjectFlowMixin:
         *,
         skip_dirty_guard: bool = False,
         on_ready=None,
+        expected_result_ref=None,
     ) -> None:
         return self.project_controller.open_project_entry(path,single_shot_fn=QTimer.singleShot,
-            skip_dirty_guard=skip_dirty_guard,on_ready=on_ready)
+            skip_dirty_guard=skip_dirty_guard,on_ready=on_ready,expected_result_ref=expected_result_ref)
 
     def _recovery_choice(self, candidate: Path) -> str:
         return self.project_controller._recovery_choice(candidate)

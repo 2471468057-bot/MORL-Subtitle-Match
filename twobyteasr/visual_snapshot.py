@@ -408,15 +408,10 @@ def build_visual_cue_snapshot(
             "exit": copy.deepcopy(motion.get("exit", {})),
         }
     position_x, position_y, anchor_x, anchor_y = _anchor(style, playres_x, playres_y)
-    from .subtitle_stacking import project_stack_layout
-    stack_offset = project_stack_layout(project).offset_for(cue.id)
-    position_y -= stack_offset
     recipe.layout['positionY'] = position_y
-    recipe.layout['stackOffset'] = stack_offset
     if recipe.web_theme:
         from .web_placement import cue_placement
         recipe.layout['webPlacement'] = cue_placement(project, cue)
-        recipe.layout['webPlacement']['y'] -= stack_offset / max(1,playres_y)
     typography = recipe.typography if isinstance(recipe.typography, Mapping) else {}
     return VisualCueSnapshot(
         cue_id=cue.id, text=caption.text, start_ms=cue.start_ms, end_ms=cue.end_ms,

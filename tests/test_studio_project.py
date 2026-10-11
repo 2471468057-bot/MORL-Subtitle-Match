@@ -265,7 +265,7 @@ def test_create_studio_outputs_keeps_original_asr_files_and_links_evidence(tmp_p
     assert txt.read_text(encoding="utf-8") == "original txt"
     assert srt.read_text(encoding="utf-8") == "original srt"
     project_path = Path(outputs["project"])
-    assert project_path.parent.name == "game"
+    assert project_path.parent.name.startswith("game__")
     assert project_path.parent.parent == project_library_root()
     assert all(
         (project_path.parent / name).is_dir()

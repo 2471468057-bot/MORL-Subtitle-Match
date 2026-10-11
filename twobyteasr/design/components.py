@@ -32,46 +32,52 @@ def _classify_model(name: str) -> str | None:
 
 
 def format_model_evidence_coverage(hypotheses: Iterable[Any] | None) -> dict[str, Any]:
-    """Frontend-only source coverage. Missing models stay '—'; never guessed.
-
-    BACKEND FOLLOW-UP: MODEL EVIDENCE COVERAGE
-    If hypotheses only carry Current/MOSS, FireRed and Qwen stay empty.
-    """
-    present: set[str] = set()
-    unknown: list[str] = []
+    """Describe independent sources separately from agreement and coverage."""
+    from ..asr_source_evidence import coverage_summary, independent_model
+    rows, unknown = [], []
     for row in hypotheses or ():
         if isinstance(row, Mapping):
-            name = str(row.get("model") or row.get("source") or row.get("label") or "")
+            item = dict(row)
+            name = str(row.get('model') or row.get('source') or row.get('label') or '')
         else:
-            name = str(getattr(row, "model", "") or getattr(row, "source", "") or row)
-        classified = _classify_model(name)
-        if classified == "Current":
+            name = str(getattr(row, 'model', '') or getattr(row, 'source', '') or
+                       getattr(row, 'label', '') or row)
+            item = dict(text=getattr(row, 'text', ''))
+        item['model'] = name
+        if _classify_model(name) == 'Current':
             continue
-        if classified is None:
+        if not independent_model(name):
             if name.strip():
                 unknown.append(name.strip())
             continue
-        present.add(classified)
-    moss = "✓" if "MOSS" in present else "—"
-    firered = "✓" if "FireRed" in present else "—"
-    qwen = "✓" if "Qwen3" in present else "—"
-    known_count = sum(1 for mark in (moss, firered, qwen) if mark == "✓")
-    if known_count <= 1:
-        headline = "单来源 无冲突证据"
-    elif known_count == 2:
-        headline = "2 / 3 模型一致"
+        rows.append(item)
+    summary = coverage_summary(rows)
+    present = set(summary['models'])
+    marks = {model: '✓' if model in present else '—'
+             for model in ('moss', 'firered', 'qwen3-asr')}
+    if summary['missing']:
+        headline = '来源信息缺失／待恢复'
+    elif summary['coverage_unknown']:
+        headline = '原始来源已保留 · 字级覆盖待核验'
+    elif summary['partial']:
+        headline = (f"分段来源覆盖 · 各段 {summary['minimum_count']} 路"
+            if summary['minimum_count'] == summary['maximum_count'] else
+            f"局部来源覆盖 · {summary['minimum_count']}–{summary['maximum_count']} 路")
+    elif summary['conflict']:
+        headline = f"{summary['known_count']} 路来源 · 文本存在分歧"
+    elif summary['single_source']:
+        headline = '单来源 无冲突证据'
+    elif summary['agreement']:
+        headline = f"{summary['known_count']} 路独立来源 · 文本一致"
     else:
-        headline = "3 / 3 模型一致"
-    return {
-        "headline": headline,
-        "moss": moss,
-        "firered": firered,
-        "qwen": qwen,
-        "known_count": known_count,
-        "single_source": known_count <= 1,
-        "unknown": tuple(unknown),
-        "display": f"MOSS {moss}    FireRed {firered}    Qwen3 {qwen}",
-    }
+        headline = f"{summary['known_count']} 路独立来源 · 一致性未提供"
+    extra = sorted(present.difference({'moss', 'firered', 'qwen3-asr'}))
+    display = f"MOSS {marks['moss']}    FireRed {marks['firered']}    Qwen3 {marks['qwen3-asr']}"
+    if extra:
+        display += '    ' + '    '.join(model.removeprefix('asr-api:') + ' ✓' for model in extra)
+    return dict(summary, headline=headline, moss=marks['moss'], firered=marks['firered'],
+        qwen=marks['qwen3-asr'], unknown=tuple(unknown),
+        display=display)
 
 
 def map_provider_ui_state(state: str, message: str = "") -> str:

@@ -162,6 +162,7 @@ class ReviewEvidenceAggregate:
     risk_score: int = 0
     reasons: tuple[str, ...] = ()
     hypotheses: tuple[dict[str, Any], ...] = ()
+    source_coverage: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -182,7 +183,8 @@ def _hypothesis_text(row: Mapping[str, Any]) -> str:
 
 
 def _hypothesis_model(row: Mapping[str, Any], fallback: str) -> str:
-    return str(row.get("model") or row.get("source") or row.get("label") or fallback).strip() or fallback
+    from .model_execution import canonical_model_id
+    return canonical_model_id(row.get("model") or row.get("source") or row.get("label") or fallback) or fallback
 
 
 def _as_hypotheses(value: Any) -> list[dict[str, Any]]:
@@ -225,28 +227,9 @@ def _as_hypotheses(value: Any) -> list[dict[str, Any]]:
 
 
 def review_hypotheses_from_project(project: SubtitleProject, cue) -> tuple[dict[str, Any], ...]:
-    """Collect only evidence overlapping the cue; never send the full media."""
-    refs = set(getattr(cue, "evidence_refs", ()) or ())
-    rows: list[dict[str, Any]] = []
-    for reference, value in getattr(project, "asr_evidence", {}).items():
-        if not isinstance(value, Mapping):
-            continue
-        start = int(value.get("start_ms", 0) or 0)
-        end = int(value.get("end_ms", start) or start)
-        matches = reference in refs if refs else bool(
-            (start or end)
-            and end >= int(cue.start_ms) - 300
-            and start <= int(cue.end_ms) + 300
-        )
-        if matches and refs and (start or end):
-            # Ignore timestamp-rounding slivers from the adjacent segment.
-            overlap = max(0, min(int(cue.end_ms), end) - max(int(cue.start_ms), start))
-            cue_duration = max(1, int(cue.end_ms) - int(cue.start_ms))
-            matches = overlap >= max(50, round(cue_duration * 0.20))
-        if not matches:
-            continue
-        rows.extend(_as_hypotheses(value))
-    return tuple(rows)
+    """Project independent evidence onto this cue without source unions."""
+    from .asr_source_evidence import cue_source_hypotheses
+    return cue_source_hypotheses(project, cue)
 
 
 def _stream_stats(hypotheses: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -257,6 +240,12 @@ def _stream_stats(hypotheses: Sequence[Mapping[str, Any]]) -> dict[str, dict[str
             grouped[_hypothesis_model(row, "model")].append(row)
     result: dict[str, dict[str, Any]] = {}
     for model, rows in grouped.items():
+        # A repeated receipt or alias spelling is the same observation.
+        unique = {}
+        for row in rows:
+            key = (_hypothesis_text(row), row.get("start_ms"), row.get("end_ms"), row.get("reference"))
+            unique.setdefault(key, row)
+        rows = list(unique.values())
         ordered = sorted(rows, key=lambda item: (int(item.get("start_ms", 0) or 0), int(item.get("end_ms", 0) or 0)))
         stream = "".join(_hypothesis_text(item) for item in ordered)
         normalized = normalize_spoken_text(stream)
@@ -320,12 +309,22 @@ class ReviewEvidenceAggregator:
             normalized = str(item.get("normalized") or "")
             rows_for_model = item.get("rows") or ()
             spans_boundary = any(
-                int(row.get("start_ms", 0) or 0) < int(getattr(cue, "start_ms", 0))
-                or int(row.get("end_ms", 0) or 0) > int(getattr(cue, "end_ms", 0))
+                int(row.get("original_start_ms" if row.get('context_only') else "start_ms", 0) or 0) < int(getattr(cue, "start_ms", 0))
+                or int(row.get("original_end_ms" if row.get('context_only') else "end_ms", 0) or 0) > int(getattr(cue, "end_ms", 0))
                 for row in rows_for_model
                 if isinstance(row, Mapping)
             )
             if normalized != current_norm and current_norm in normalized and spans_boundary:
+                contextual_boundary_models.add(name)
+        from .asr_source_evidence import coverage_summary
+        source_coverage = coverage_summary(rows)
+        for name, item in streams.items():
+            partial_rows = item.get('rows') or ()
+            if name == 'Current' or not partial_rows:
+                continue
+            if source_coverage.get('current_text_supported') is True and all(
+                   row.get('cue_text_start') is not None and row.get('comparison_text') and normalize_spoken_text(row['text']) ==
+                   normalize_spoken_text(row['comparison_text']) for row in partial_rows):
                 contextual_boundary_models.add(name)
         model_norms = [
             current_norm if name in contextual_boundary_models else item["normalized"]
@@ -340,10 +339,11 @@ class ReviewEvidenceAggregator:
         unique_norms = set(comparison_norms)
         models_agree_text = len(unique_norms) <= 1
         majority_count = max(
-            (comparison_norms.count(item) for item in unique_norms),
+            (model_norms.count(item) for item in set(model_norms)),
             default=1,
         )
-        model_majority = majority_count / max(1, len(comparison_norms))
+        # Current is the text being checked, never an independent ASR vote.
+        model_majority = majority_count / max(1, len(model_norms))
         pair_ratios = [
             SequenceMatcher(None, left, right, autojunk=False).ratio()
             for index, left in enumerate(comparison_norms)
@@ -376,7 +376,9 @@ class ReviewEvidenceAggregator:
         timing_only = bool(timing_delta > self.timing_tolerance_ms and models_agree_text)
         if not models_agree_text:
             risk_types.append(ReviewRiskType.LEXICAL.value)
-            reasons.append("文本冲突")
+            reasons.append('当前全文与局部投影不一致／缺少完整字词范围证据'
+                if source_coverage.get('current_text_supported') is False and not source_coverage['conflict']
+                else "文本冲突")
         if boundary_only:
             risk_types.append(ReviewRiskType.BOUNDARY.value)
             reasons.append("断句不确定")
@@ -404,10 +406,14 @@ class ReviewEvidenceAggregator:
             or bool(boundary_flags.intersection({"1", "true", "yes", "high"}))
             or short_or_long_segment and len({len(item["boundaries"]) for name, item in streams.items() if name != "Current"}) > 1
         )
-        lexical_risk = not models_agree_text and (edit_distance >= 0.08 or model_majority < 0.75)
+        lexical_risk = not models_agree_text
         speaker_risk = speaker_only and len(speakers) > 1
         timing_risk = timing_only and timing_delta > self.material_timing_ms
         requires_review = bool(lexical_risk or speaker_risk or material_boundary or timing_risk)
+        if source_coverage['missing'] or source_coverage['partial'] or source_coverage['coverage_unknown']:
+            requires_review = True
+            reasons.append('来源信息缺失／待恢复' if source_coverage['missing'] else
+                '原始来源已保留，字级覆盖待核验' if source_coverage['coverage_unknown'] else '部分范围缺少独立来源覆盖')
         score = 0
         if lexical_risk:
             score += 65
@@ -447,6 +453,7 @@ class ReviewEvidenceAggregator:
             risk_score=min(100, score),
             reasons=tuple(dict.fromkeys(reasons)),
             hypotheses=tuple(rows),
+            source_coverage=source_coverage,
         )
 
 
@@ -744,10 +751,21 @@ def cached_review_risks(project: SubtitleProject | None) -> dict[str, Any]:
     if project is None:
         return {}
     cache = getattr(project, "_review_risks_cache", None)
-    if isinstance(cache, dict):
-        return cache
-    legacy = project.studio_state.get("review_risks", {})
-    return legacy if isinstance(legacy, dict) else {}
+    # Historical serialized QC metrics predate the current coverage contract.
+    # Keep their stored dictionary intact, but only use freshly computed
+    # runtime statistics (normal Studio startup runs its chunked QC scan).
+    result = dict(cache) if isinstance(cache, dict) else {}
+    from .studio_edit_sequence import source_cue_id_of
+    receipts = project.studio_state.get('caption_timeline', {}).get('instances', {})
+    current = {c.id for c in project.cues}
+    for cue_id, receipt in receipts.items():
+        if cue_id in current and receipt.get('needs_review'):
+            key = source_cue_id_of(cue_id)
+            row = dict(result.get(key, {}))
+            row.update(level='high', score=max(100, int(row.get('score', 0))))
+            row['reasons'] = list(dict.fromkeys([*row.get('reasons', ()), '波纹边界缺少完整字词映射，请检查保留文字']))
+            result[key] = row
+    return result
 
 
 def cached_qc_result(project: SubtitleProject | None) -> QCResult:
@@ -786,7 +804,7 @@ def _audit_bucket(aggregate: ReviewEvidenceAggregate | None, risk: CueReviewRisk
 
 
 def review_evidence_coverage(project: SubtitleProject) -> dict[str, Any]:
-    """Count real MOSS / FireRed / Qwen hypotheses across every cue."""
+    """Count guaranteed whole-cue overlap separately from partial receipts."""
     totals = {
         "TOTAL": len(project.cues),
         "MOSS_COUNT": 0,
@@ -796,6 +814,8 @@ def review_evidence_coverage(project: SubtitleProject) -> dict[str, Any]:
         "2_SOURCE_OVERLAP": 0,
         "1_SOURCE_ONLY": 0,
         "0_SOURCE": 0,
+        "PARTIAL_SOURCE_COVERAGE": 0,
+        "UNKNOWN_SOURCE_COVERAGE": 0,
     }
     aggregator = ReviewEvidenceAggregator()
     for cue in project.cues:
@@ -806,7 +826,11 @@ def review_evidence_coverage(project: SubtitleProject) -> dict[str, Any]:
         totals["MOSS_COUNT"] += int(moss)
         totals["FIRERED_COUNT"] += int(firered)
         totals["QWEN_COUNT"] += int(qwen)
-        known = int(moss) + int(firered) + int(qwen)
+        totals["PARTIAL_SOURCE_COVERAGE"] += int(coverage["partial"])
+        totals["UNKNOWN_SOURCE_COVERAGE"] += int(coverage["coverage_unknown"])
+        if coverage["coverage_unknown"]:
+            continue
+        known = coverage["minimum_count"]
         if known >= 3:
             totals["3_SOURCE_OVERLAP"] += 1
         elif known == 2:

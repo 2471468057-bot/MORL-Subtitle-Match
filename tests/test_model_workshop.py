@@ -32,6 +32,19 @@ def isolated_model_registry(tmp_path, monkeypatch):
     reset_runtime_paths()
 
 
+@pytest.mark.parametrize('saved_model',['','microsoft/mai-transcribe-2'])
+def test_mai_pending_mapping_never_claims_ready_from_a_preserved_key(monkeypatch,saved_model):
+    from twobyteasr.model_workshop import _metric_evidence
+    monkeypatch.setattr('twobyteasr.llm_config.read_asr_api_key',lambda *a:('preserved-key','test'))
+    app=QApplication.instance() or QApplication([])
+    page=ModelWorkshopPage(ROOT,{'models':{'qwen_asr_api_provider':'openrouter_word',
+                                        'qwen_asr_api_model':saved_model,'primary_asr_backend':'api'}})
+    model=page._cards['mai_latest'].model
+    assert page._model_state(model)=='configure'
+    assert not _metric_evidence(model,'accuracy',api_model=saved_model)['available']
+    page.deleteLater();app.processEvents()
+
+
 def test_installed_model_keys_requires_every_locked_file(tmp_path):
     payload = {
         "models": {
@@ -105,11 +118,24 @@ def test_workshop_exposes_api_presets_and_downloadable_adapter_candidates(monkey
 
     assert requested == ["groq"]
     assert {model.key for model in MODELS if model.api_preset} >= {
-        "qwen_api",
+        "qwen31_filetrans",
         "groq_api",
         "openai_api",
         "custom_asr_api",
     }
+    # The current long-file provider intentionally replaced the retired card.
+    # Keep protocol/model/roles and real configuration-signal checks explicit.
+    from twobyteasr.ui import ASR_API_PRESETS
+    assert 'qwen_api' not in page._cards
+    qwen = page._cards['qwen31_filetrans'].model
+    assert qwen.api_preset == 'qwen31_filetrans'
+    assert qwen.asr_capabilities == ('ASR_TEXT', 'TIMESTAMP', 'DIARIZATION')
+    assert dict(qwen.adapter_bindings) == {'primary': 'api', 'review': 'api'}
+    assert ASR_API_PRESETS[qwen.api_preset]['protocol'] == 'dashscope_filetrans'
+    assert page._api_model_for(qwen) == 'qwen-audio-3.1-asr-flash-filetrans'
+    page._perform_action('qwen31_filetrans', role='review')
+    assert requested == ['groq', 'qwen31_filetrans']
+    assert page.api_target_role == 'review'
     sensevoice = page._cards["sensevoice"].model
     assert page._model_state(sensevoice) == "missing"
     assert page._action_text(sensevoice, "missing") == ("下载", True)

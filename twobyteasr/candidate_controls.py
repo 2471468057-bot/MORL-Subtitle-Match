@@ -58,17 +58,18 @@ def workbench_qss(theme):
     t = theme
     return f'''
 QToolButton {{ background:{t.input_surface}; color:{t.text}; border:1px solid {t.border}; border-radius:6px; padding:6px 9px; }}
-QToolButton:hover {{ background:{t.accent_soft}; border-color:{t.accent}; }}
-QToolButton:checked {{ background:{t.selected}; border-color:{t.accent}; }}
+QToolButton:hover {{ background:{t.selected}; border-color:{t.border_strong}; }}
+QToolButton:checked {{ background:{t.accent_tint}; border-color:{t.accent}; }}
 QToolButton:disabled {{ color:{t.text_muted}; background:{t.panel}; }}
 QListWidget#candidateList {{ background:transparent; border:0; outline:0; color:{t.text}; }}
-QListWidget#candidateList::item {{ background:{t.panel}; border:1px solid {t.border}; border-radius:6px; padding:5px; color:{t.text}; }}
-QListWidget#candidateList::item:selected {{ background:{t.selected}; border:2px solid {t.accent}; color:{t.text}; }}
+QListWidget#candidateList::item {{ background:{t.surface}; border:1px solid {t.border}; border-radius:8px; padding:6px; color:{t.text}; }}
+QListWidget#candidateList::item:hover {{ background:{t.surface_elevated}; border-color:{t.border_strong}; }}
+QListWidget#candidateList::item:selected {{ background:{t.accent_tint}; border:2px solid {t.accent}; color:{t.text}; }}
 QTabWidget::pane {{ background:transparent; border:0; border-top:1px solid {t.border}; }}
 QTabBar::tab {{ background:transparent; color:{t.text_secondary}; border:0; padding:7px 14px; }}
 QTabBar::tab:selected {{ color:{t.text}; border-bottom:2px solid {t.accent}; }}
 QPlainTextEdit {{ background:transparent; border:0; padding:5px 1px; color:{t.text_secondary}; selection-background-color:{t.selected}; selection-color:{t.text}; }}
-QLabel#workTitle {{ font-size:22px; font-weight:700; color:{t.text}; }}
+QLabel#workTitle {{ font-size:20px; font-weight:600; color:{t.text}; }}
 QLabel#workStatus, QLabel#workOverview {{ color:{t.text_secondary}; font-size:12px; }}
 QSlider::groove:horizontal {{ background:{t.border}; height:5px; border-radius:2px; }}
 QSlider::sub-page:horizontal {{ background:{t.accent}; border-radius:2px; }}

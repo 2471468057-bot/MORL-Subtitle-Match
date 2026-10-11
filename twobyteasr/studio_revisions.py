@@ -10,7 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .studio_edit_sequence import sequence_of
 from .studio_project import (
@@ -318,6 +319,7 @@ class StudioRevisionStore:
         self._effects = freeze_json(project.effects)
         self._recipes = freeze_json(project.style_recipes)
         self._persistence = self._capture_persistence(revision)
+        self._persistence_pending = None
         self.render = self._capture_render(revision)
 
     def _capture_render_cues(self) -> tuple:
@@ -330,7 +332,12 @@ class StudioRevisionStore:
         污染。
         """
         from .studio_edit_sequence import projected_cues, sequence_of
-
+        from .studio_caption_timeline import independent_captions
+        if independent_captions(self.project):
+            # Independent objects are rendered once by CaptionScene against
+            # the project clock. A native source-time event is ambiguous when
+            # the same media is reused or the bottom video lane is disabled.
+            return ()
         if sequence_of(self.project).is_identity():
             return tuple(self._cues)
         return tuple(
@@ -343,6 +350,23 @@ class StudioRevisionStore:
         if sequence_of(self.project).is_identity():
             return self._cues
         return tuple(RenderCueDTO.capture(c) for c in projected_cues(self.project, domain='timeline'))
+
+    def _frozen_studio_state(self) -> FrozenJSON:
+        """studio_state is ~280 KB on a long project (caption timeline) and
+        most render revisions do not touch it. Reuse the previous frozen value
+        when the content (marshal bytes: exact types and key order) is equal."""
+        import marshal
+        state = self.project.studio_state or {}
+        try:
+            key = marshal.dumps(state)
+        except ValueError:
+            return freeze_json(state)
+        memo = getattr(self, "_studio_state_memo", None)
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        frozen = freeze_json(state)
+        self._studio_state_memo = (key, frozen)
+        return frozen
 
     def _capture_render(self, revision: int) -> SubtitleRenderRevision:
         settings = self.project.render_settings
@@ -359,8 +383,13 @@ class StudioRevisionStore:
             speakers=self._speakers,
             effects=self._effects,
             style_recipes=self._recipes,
-            generation_metadata=freeze_json(self.project.generation_metadata or {}),
-            studio_state=freeze_json(self.project.studio_state or {}),
+            # ASS/CaptionScene consume only translations from generation
+            # metadata. Recognition histories and terminology/source receipts
+            # belong to persistence, not every live visual revision.
+            generation_metadata=freeze_json({
+                'translations': (self.project.generation_metadata or {}).get('translations', {}),
+            }),
+            studio_state=self._frozen_studio_state(),
             frame_rate=project_frame_rate(self.project),
             timeline_cues=self._timeline_cues,
         )
@@ -397,6 +426,8 @@ class StudioRevisionStore:
 
     @property
     def persistence(self) -> PersistenceRevision:
+        if self._persistence_pending is not None:
+            self.refresh_persistence(self._persistence_pending)
         return self._persistence
 
     def consume(self, delta: StateDelta) -> None:
@@ -439,12 +470,16 @@ class StudioRevisionStore:
             self._timeline_cues = self._capture_timeline_cues()
         self.render = self._capture_render(delta.revision)
         if dirty & DirtyDomain.AUTOSAVE:
-            self._persistence = self._capture_persistence(delta.revision)
+            # The existing debounce/save boundary freezes once before handing
+            # data to a worker. Re-freezing all ASR evidence for every pointer
+            # release/keystroke stalls the GUI and is discarded at that boundary.
+            self._persistence_pending = delta.revision
 
     def refresh_persistence(self, generation: int) -> PersistenceRevision:
         # Studio viewport/layout fields are captured immediately before the
         # debounced autosave. Heavy cue/style tuples remain structurally shared.
         self._persistence = self._capture_persistence(generation)
+        self._persistence_pending = None
         return self._persistence
 
 
@@ -468,8 +503,10 @@ def preview_render_revision(
     if not isinstance(recipes, dict):
         recipes = {}
     derived_cues: list[RenderCueDTO] = []
+    derived_timeline_cues: list[RenderCueDTO] = []
     styles_by_id = {style.id: style for style in styles}
-    for cue in revision.cues:
+    source_count = len(revision.cues)
+    for index, cue in enumerate((*revision.cues, *(revision.timeline_cues or ()))):
         # Route suppression outranks live text overrides. Advanced text edits
         # are rendered by LIVE; allowing an override to reinsert the cue into
         # ASS recreates the solid-frame flash and duplicate foreground.
@@ -508,8 +545,14 @@ def preview_render_revision(
                     if "font_size" in transform:
                         typography["fontSize"] = float(transform["font_size"])
                     recipes[live_id] = live_recipe
-                derived = replace(derived, style_id=live_id)
-        derived_cues.append(derived)
+                # Temporary pointer coordinates must override persisted cue
+                # layout just like the final commit. A derived style alone
+                # loses to initial_layout/manual transform precedence.
+                temporary_transform = thaw_json(derived.transform) or {}
+                temporary_transform.update(transform)
+                derived = replace(derived, style_id=live_id,
+                                  transform=freeze_json(temporary_transform))
+        (derived_cues if index < source_count else derived_timeline_cues).append(derived)
     preview_payload = {
         "texts": sorted(texts.items()),
         "transforms": [
@@ -528,6 +571,7 @@ def preview_render_revision(
     return replace(
         revision,
         cues=tuple(derived_cues), styles=tuple(styles),
+        timeline_cues=(tuple(derived_timeline_cues) if revision.timeline_cues is not None else None),
         style_recipes=freeze_json(recipes),
         preview_key=preview_key,
     )

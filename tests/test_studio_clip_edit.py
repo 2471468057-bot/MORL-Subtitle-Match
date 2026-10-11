@@ -105,7 +105,7 @@ def test_q_30min_w_50min_and_io(tmp_path):
     assert (sequence_of(p).in_point_ms, sequence_of(p).out_point_ms) == (0, 1200000)
     edit(p, 'V1', 'ripple_end', time_ms=1200000)
     assert (clip(p).source_in_ms, clip(p).source_out_ms, timeline_duration_ms(p)) == (1800000,3000000,1200000)
-    assert p.cues == original
+    assert p.studio_state['caption_timeline']['source_archive'] == [__import__('dataclasses').asdict(c) for c in original]
     assert [(c.start_ms,c.end_ms) for c in projected_cues(p)] == [(0,1000),(300000,302000)]
     loaded = load_project(save_project(p, tmp_path/'twenty-minutes.2byteproj'))
     assert_linked(loaded)
@@ -120,9 +120,15 @@ def test_gap_local_scope_and_nonripple_delete(tmp_path):
     overlay_before = copy.deepcopy(p.video_tracks[1])
     edit(p, 'V1', 'trim', start=1800000, end=3000000)
     assert lane_gap(p,'V1',1000) == (0,1800000)
+    before = copy.deepcopy(p.to_dict())
+    with pytest.raises(ValueError, match='在所选空隙内有素材'):
+        edit(p,'V1','gap',start=0,end=1800000)
+    assert p.to_dict() == before
+    from twobyteasr.studio_selection import ClipSelection, delete_selection_command
+    delete_selection_command(p, ClipSelection(video_ids={clip(p,lane).id})).redo()
     command = edit(p,'V1','gap',start=0,end=1800000)
     assert (clip(p).timeline_in_ms,clip(p).source_in_ms) == (0,1800000)
-    assert p.video_tracks[1] == overlay_before
+    assert not p.video_tracks[1].clips
     command.undo()
     assert clip(p).timeline_in_ms == 1800000
     command.redo()
@@ -135,7 +141,7 @@ def test_gap_local_scope_and_nonripple_delete(tmp_path):
     assert clip(p,'V1',1).timeline_in_ms == 10000
 
 
-@pytest.mark.parametrize('lock', ['video','audio','subtitle'])
+@pytest.mark.parametrize('lock', ['video','audio'])
 def test_locked_objects_reject_before_mutation(lock):
     p = project()
     if lock == 'video': p.video_tracks[0].locked=True
@@ -177,13 +183,16 @@ def test_recognized_crossing_video_edge_survives_pure_split():
     assert [(c.start_ms,c.end_ms,c.text) for c in projected_cues(p)] == [(4000,6000,'跨视频边界')]
 
 
-def test_empty_video_hides_bound_cues_and_honors_caption_lock():
-    p=project()
-    with pytest.raises(ValueError,match='字幕轨道已锁定'):
-        clip_edit_command(p,'V1','ripple_start',clip_id=clip(p).id,time_ms=3600000,locked_speakers={'S1'})
+def test_empty_video_preserves_own_locked_caption_track():
+    p=project();original=copy.deepcopy(p.cues)
+    command=clip_edit_command(p,'V1','ripple_start',clip_id=clip(p).id,time_ms=3600000,locked_speakers={'S1'})
+    command.redo()
+    assert not p.video_tracks[0].clips and p.cues==original
+    assert command.skipped_caption_speakers=={'S1'}
+    command.undo()
     edit(p,'V1','ripple_start',time_ms=3600000)
-    assert not projected_cues(p)
-    assert len(p.cues)==2
+    assert not projected_cues(p) and not p.cues
+    assert len(p.studio_state['caption_timeline']['source_archive'])==2
 
 
 @pytest.mark.parametrize('action',['split','trim'])
@@ -208,14 +217,14 @@ def test_delete_locked_caption_io_and_source_ownership():
     p.cues=[StudioCue('bound',1000,2000,'A ONLY',speaker_id='S1')]
     edit(p,'V1','split',time_ms=5000)
     page=SimpleNamespace(timeline=SimpleNamespace(locked_speakers={'S1'},playhead_ms=1000))
-    with pytest.raises(ValueError,match='字幕轨道已锁定'):
-        DeleteTrackCommand(p,'video','V1',page,clip_ids=[clip(p).id])
+    # An ordinary video Delete never owns or inherits the caption lock.
+    DeleteTrackCommand(p,'video','V1',page,clip_ids=[clip(p).id])
     sequence_of(p).in_point_ms=0;sequence_of(p).out_point_ms=10000
     DeleteTrackCommand(p,'video','V1',clip_ids=[clip(p,'V1',1).id]).redo()
     assert sequence_of(p).out_point_ms==5000
     add_v2(p)
     DeleteTrackCommand(p,'video','V1',clip_ids=[clip(p).id]).redo()
-    assert not projected_cues(p)  # A's authored caption cannot appear on B.
+    assert [(c.start_ms,c.end_ms,c.text) for c in projected_cues(p)]==[(1000,2000,'A ONLY')]
     assert p.cues[0].text=='A ONLY'
 
 
@@ -235,6 +244,9 @@ def test_gap_preserves_unlinked_music_and_independent_caption():
     p.cues=[StudioCue('independent',7000,9000,'独立字幕')]
     p.audio_tracks.append(AudioTrack('music','背景音乐',[AudioClip('music-clip',p.media_pool[0].asset_id,0,10000,0,10000)]))
     before=copy.deepcopy(p.audio_tracks[-1])
-    edit(p,'V2','gap',start=0,end=5000)
+    original = copy.deepcopy(p.to_dict())
+    with pytest.raises(ValueError, match='在所选空隙内有素材'):
+        edit(p,'V2','gap',start=0,end=5000)
+    assert p.to_dict() == original
     assert p.audio_tracks[-1]==before
     assert [(c.start_ms,c.end_ms) for c in projected_cues(p)]==[(7000,9000)]

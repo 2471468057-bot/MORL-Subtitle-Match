@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def simple_video_clips(graph):
-    if not graph or graph.get('audio_mix') is None:
+    if not graph or graph.get('audio_mix') is None or any(t.get('media') == 'video' for t in graph.get('clip_transitions', [])):
         return None
     clips = [c for t in graph.get('video_tracks', []) if t.get('enabled', True)
              for c in t.get('clips', []) if c.get('enabled', True)]
@@ -38,7 +38,8 @@ def simple_video_clips(graph):
 def compile_video_filtergraph(ffmpeg, job, ass_filter, *, caption_overlays=(), caption_filter=None):
     from .audio_export import compile_audio_mix
     from .clip_time_mapper import project_to_source_exact
-    graph = job.direct_video_graph
+    from .timeline_media import resolve_video_graph
+    graph = resolve_video_graph(job.direct_video_graph, ffmpeg)
     clips = simple_video_clips(graph)
     if clips is None:
         raise ValueError('Unsupported direct video graph')
@@ -77,13 +78,20 @@ def compile_video_filtergraph(ffmpeg, job, ass_filter, *, caption_overlays=(), c
         # trades extra decode for correct content instead of hiding lost frames.
         seek = Fraction(0) if Path(source_path).suffix.lower()=='.flv' else max(Fraction(0), source - 10)
         trim = source - seek
+        source_window = trim + (last-first)/fps*rate + 2/fps
         inputs += ['-threads', '4']
         if seek > 0:
             inputs += ['-ss', f'{float(seek):.9f}']
-        inputs += ['-t', f'{float(trim+(last-first)/fps*rate + 2/fps):.9f}',
+        inputs += ['-t', f'{float(source_window):.9f}',
                    '-i', source_path]
         label = f'piece{len(pieces)}'
-        filters.append(f'[{input_count}:v:0]trim=start={float(trim):.9f},setpts=(PTS-{float(trim):.9f}/TB)/({rate}),fps={fps}:round=up:start_time=0,'
+        # A container/clip can outlast its video stream while real audio and
+        # captions remain. Hold this input's last decoded frame before trimming
+        # so a range starting in that tail still has a frame. The finite window
+        # and exact end_frame bound each isolated piece; no frame can spill into
+        # a gap or the next source, and an input with no frames still fails.
+        filters.append(f'[{input_count}:v:0]tpad=stop_mode=clone:stop_duration={float(source_window):.9f},'
+                       f'trim=start={float(trim):.9f},setpts=(PTS-{float(trim):.9f}/TB)/({rate}),fps={fps}:round=up:start_time=0,'
                        f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
                        f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,'
                        f'tpad=stop_mode=clone:stop_duration=0.1,trim=end_frame={last-first},'

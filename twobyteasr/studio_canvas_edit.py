@@ -70,7 +70,7 @@ class StudioCanvasEditMixin:
             recipe_payload_for_style(self.project.style_recipes, cue.style_id)
             if self.project and cue else {}
         )
-        if payload.get('webTheme'):
+        if payload and payload.get('webTheme'):
             # Keep the exact currently visible raster during a gesture. A
             # fresh browser request here can replace it with an earlier frame.
             return
@@ -163,6 +163,17 @@ class StudioCanvasEditMixin:
             return
         snapshot = self.video.playback_position_snapshot()
         position = round(snapshot.presentation_media_ms)
+        if getattr(self, '_playback_mode', 'source') == 'mapped':
+            from .studio_edit_sequence import sequence_of
+            from .studio_sequence_mapper import source_to_timeline
+            mapped = source_to_timeline(
+                sequence_of(self.project), position,
+                segment=self._mapped_sequence_segment(),
+            )
+            if mapped is None:
+                bind_text(self.save_state, '当前没有可编辑字幕')
+                return
+            position = mapped.timeline_ms
         cue = self.cue_controller.sync_playhead_target(position, force=True)
         if cue is None:
             bind_text(self.save_state, '当前没有可编辑字幕')

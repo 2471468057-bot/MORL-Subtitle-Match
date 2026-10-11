@@ -54,10 +54,11 @@ def run_startup_self_test(core):
                 cursor_t += 0.12
             forced_local = core.locally_repair_resegmented_cue(sample, force_units, forced_boundaries={7})
             require([cue.text for cue in forced_local] in (['那我们就直接进入', '一个珊瑚场啊'], ['那我们就直接', '进入一个珊瑚场啊']), '本地修复遇到词中强制点时必须贴到词边界')
-            tail_cues = [core.SubtitleCue(1, 0.0, 1.0, '第一句', speaker='S01'), core.SubtitleCue(2, 1.1, 1.5, '第二句', speaker='S01'), core.SubtitleCue(3, 0.0, 1.0, '重叠说话', speaker='S02')]
-            core.extend_cue_tails_by_speaker(tail_cues, 2.0, core.TIMELINE_FPS)
+            tail_cues = [core.SubtitleCue(1, 0.0, 1.0, '第一句', speaker='S01'), core.SubtitleCue(2, 1.1, 1.5, '第二句', speaker='S01'), core.SubtitleCue(3, 0.0, 1.0, '重叠说话', speaker='S02'), core.SubtitleCue(4, 2.5, 3.0, '独立一句', speaker='S02')]
+            core.extend_cue_tails_by_speaker(tail_cues, 4.0, core.TIMELINE_FPS)
             require(abs(tail_cues[0].end - 1.1) <= 1.0 / core.TIMELINE_FPS, '同主播下一句必须截断上一句尾帧')
-            require(abs(tail_cues[2].end - 1.2) <= 1.0 / core.TIMELINE_FPS, '独立字幕尾帧不得超过 200ms')
+            require(abs(tail_cues[2].end - 1.1) <= 1.0 / core.TIMELINE_FPS, '新增尾帧不得盖住其他主播开口')
+            require(abs(tail_cues[3].end - 3.2) <= 1.0 / core.TIMELINE_FPS, '独立字幕尾帧必须延长且不得超过 200ms')
             bridge_cues = [core.SubtitleCue(1, 0.0, 1.0, '主播一', speaker='S01'), core.SubtitleCue(2, 1.184, 2.0, '主播二', speaker='S02'), core.SubtitleCue(3, 2.6, 3.2, '长空白', speaker='S01')]
             core.bridge_short_display_gaps(bridge_cues, 4.0, core.TIMELINE_FPS)
             require(abs(bridge_cues[0].end - bridge_cues[1].start) <= 1.0 / core.TIMELINE_FPS, '跨说话人不足 500ms 的空白必须衔接')

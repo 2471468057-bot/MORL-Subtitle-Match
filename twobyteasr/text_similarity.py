@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import re
 
 
 def levenshtein(left, right):
@@ -28,11 +29,13 @@ def levenshtein(left, right):
 def _phonetic_text_cached(text: str) -> str:
     # Lazy import keeps this low-level module out of subtitle_core's import cycle.
     from pypinyin import Style, lazy_pinyin
-    from twobyteasr.text_rules import content_only
-
+    # Keep the distance layer dependency-light: importing text_rules here
+    # before subtitle_core boots creates a partially initialized correction
+    # module. This is the same content alphabet as content_only.
+    normalized = ''.join(re.findall(r'[\u3400-\u9fffA-Za-z0-9]+', str(text))).lower()
     return "".join(
         lazy_pinyin(
-            content_only(text),
+            normalized,
             style=Style.NORMAL,
             errors=lambda value: list(value),
         )

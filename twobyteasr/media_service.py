@@ -129,10 +129,14 @@ class MediaMetadataSnapshot:
     video_best_effort_timestamp_ms: float = 0.0
     audio_best_effort_timestamp_ms: float = 0.0
     sample_timeline_origin_ms: float = 0.0
+    # Runtime decoder boundary, deliberately excluded from project metadata
+    # and identity fingerprints. Container duration is not video duration.
+    video_stream_end_ms: float = 0.0
     schema_version: int = MEDIA_METADATA_SCHEMA
 
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
+        payload.pop("video_stream_end_ms", None)
         payload.update(
             size=self.source_size,
             mtime_ns=self.source_mtime_ns,
@@ -359,6 +363,8 @@ class MediaService:
             video_best_effort_timestamp_ms=video_best_effort_timestamp_ms,
             audio_best_effort_timestamp_ms=audio_best_effort_timestamp_ms,
             sample_timeline_origin_ms=audio_start_ms,
+            video_stream_end_ms=(video_start_ms + _stream_duration_ms(video) - container_start_ms)
+            if video and _stream_duration_ms(video) else 0.0,
         )
 
     def start_proxy(

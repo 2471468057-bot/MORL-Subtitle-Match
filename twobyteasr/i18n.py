@@ -1277,6 +1277,14 @@ from .i18n_catalog import STRINGS as _CATALOG
 for _key, (_en, _ja) in _CATALOG.items():
     _TRANSLATIONS["en"][_key] = _en
     _TRANSLATIONS["ja"][_key] = _ja
+from .i18n_round_20261010_proofread import PROOFREAD_2026_10_10 as _PROOFREAD
+for _key, (_en, _ja) in _PROOFREAD.items():
+    _TRANSLATIONS["en"][_key] = _en
+    _TRANSLATIONS["ja"][_key] = _ja
+from .i18n_round_20261011_update import UPDATE_2026_10_11 as _UPDATE
+for _key, (_en, _ja) in _UPDATE.items():
+    _TRANSLATIONS["en"][_key] = _en
+    _TRANSLATIONS["ja"][_key] = _ja
 
 _KNOWN_KEYS = frozenset().union(*(table.keys() for table in _TRANSLATIONS.values()))
 

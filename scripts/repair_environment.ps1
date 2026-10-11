@@ -24,7 +24,7 @@ function Test-RepairShouldProceed {
 
 function Get-RepairTorchSpec {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm", "nemotron")][string]$Role,
+        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm")][string]$Role,
         [string]$ProjectRoot = ""
     )
     return (Get-EnvironmentDependency -Role $Role -Name "torch" -ProjectRoot $ProjectRoot)
@@ -32,7 +32,7 @@ function Get-RepairTorchSpec {
 
 function Get-RepairLivePath {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm", "nemotron")][string]$Role,
+        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm")][string]$Role,
         [string]$ProjectRoot = ""
     )
     if (-not $ProjectRoot) { $ProjectRoot = (Split-Path -Parent $PSScriptRoot) }
@@ -42,7 +42,7 @@ function Get-RepairLivePath {
 
 function Get-RepairStagingPath {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm", "nemotron")][string]$Role,
+        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm")][string]$Role,
         [string]$ProjectRoot = ""
     )
     if (-not $ProjectRoot) { $ProjectRoot = (Split-Path -Parent $PSScriptRoot) }
@@ -81,7 +81,7 @@ function Resolve-RepairCreatorPython {
 
 function Install-RepairRoleStaging {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm", "nemotron")][string]$Role,
+        [Parameter(Mandatory = $true)][ValidateSet("main", "moss", "firered_llm")][string]$Role,
         [Parameter(Mandatory = $true)][string]$ProjectRoot,
         [string]$StagingPath = ""
     )

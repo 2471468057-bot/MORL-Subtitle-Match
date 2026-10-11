@@ -203,6 +203,8 @@ class RenderSettings:
         if self.quality_mode in {"vbr", "limited"}:
             if self.max_bitrate_kbps is None or int(self.max_bitrate_kbps) <= 0:
                 raise ValueError("maximum bitrate must be positive")
+            if int(self.max_bitrate_kbps) < int(self.bitrate_kbps):
+                raise ValueError('maximum bitrate must not be below the average target')
         if self.width is None or self.height is None:
             raise ValueError("width and height use 0 for source dimensions, not None")
         if (int(self.width) < 0 or int(self.height) < 0) or bool(self.width) != bool(self.height):
@@ -238,6 +240,8 @@ class RenderJob:
     preview_url: str = ''
     # Serialized immutable subtitle/style dependencies for queued exports.
     export_project_data: dict | None = None
+    # Optional internal export identity; old queue entries use the default.
+    export_context: dict = field(default_factory=dict)
 
 
 def validate_export_config(job: RenderJob) -> None:
@@ -576,18 +580,24 @@ def _quality_arguments(encoder: str, settings: RenderSettings) -> list[str]:
                 "-rc", "vbr", "-b:v", f"{settings.bitrate_kbps}k",
                 "-maxrate", f"{settings.max_bitrate_kbps}k",
             ]
+        if mode == 'target':
+            return ["-rc", "vbr", "-b:v", f"{settings.bitrate_kbps}k"]
         return ["-rc", "cbr", "-b:v", f"{settings.bitrate_kbps}k"]
     if encoder.endswith("_qsv"):
         if mode in {"cq", "crf"}:
             return ["-global_quality", str(settings.quality)]
         if mode == "cbr":
             return ["-b:v", f"{settings.bitrate_kbps}k", "-maxrate", f"{settings.bitrate_kbps}k"]
+        if mode == "target":
+            return ["-b:v", f"{settings.bitrate_kbps}k"]
         return ["-b:v", f"{settings.bitrate_kbps}k", "-maxrate", f"{settings.max_bitrate_kbps}k"]
     if encoder.endswith("_amf"):
         if mode in {"cq", "crf"}:
             return ["-rc", "cqp", "-qp_i", str(settings.quality), "-qp_p", str(settings.quality)]
         if mode == "cbr":
             return ["-rc", "cbr", "-b:v", f"{settings.bitrate_kbps}k"]
+        if mode == "target":
+            return ["-rc", "vbr_peak", "-b:v", f"{settings.bitrate_kbps}k"]
         return ["-rc", "vbr_peak", "-b:v", f"{settings.bitrate_kbps}k", "-maxrate", f"{settings.max_bitrate_kbps}k"]
     if mode in {"crf", "cq"}:
         return ["-crf", str(settings.quality)]
@@ -614,7 +624,7 @@ def build_render_command(
     if output.suffix.lower() != f".{settings.container}":
         raise ValueError("output extension does not match container")
     encoder = select_encoder(ffmpeg_path, settings)
-    command = [str(Path(ffmpeg_path).resolve()), "-hide_banner", "-loglevel", "warning", "-y"]
+    command = [str(Path(ffmpeg_path).resolve()), "-hide_banner", "-loglevel", "info", "-y"]
     slices = [(float(start), float(end)) for start, end in (job.edit_segments or ())]
     ass_filter = f"ass=filename={_filter_path(ass)}"
     # Qt's application fonts are process-local. libass in FFmpeg cannot see
@@ -692,6 +702,11 @@ def build_render_command(
             command.extend(["-ar", str(settings.audio_sample_rate)])
         if settings.audio_channels:
             command.extend(["-ac", str(settings.audio_channels)])
+    if job.composition_resolved:
+        from .video_export import composed_video_frame_count
+        frames = composed_video_frame_count(job)
+        if frames is not None:
+            command.extend(["-frames:v", str(frames)])
     if settings.container in {"mp4", "mov"}:
         command.extend(["-movflags", "+faststart"])
     command.extend(["-progress", "pipe:1", "-nostats", str(output)])
@@ -883,6 +898,8 @@ def run_render_job(
     trace: Callable[[str, object], None] | None = None,
 ) -> Path:
     if job.video_graph:
+        from .timeline_media import resolve_video_graph
+        job = replace(job, video_graph=resolve_video_graph(job.video_graph, ffmpeg_path, cancelled=cancelled))
         validate_export_config(job)
         from .media_availability import export_sources, probe_sources, require_available
         start_ms = (job.start_seconds or 0) * 1000
@@ -949,6 +966,10 @@ def run_render_job(
             if fallback is None:
                 raise
             current, notice = fallback
+            from .export_run_log import note_export
+            note_export('encoder_or_audio_fallback', {'reason': str(exc), 'notice': notice,
+                'actual_encoder': current.settings.encoder, 'rate_control': current.settings.quality_mode,
+                'target_video_bitrate_bps': current.settings.bitrate_kbps * 1000})
             if trace:
                 trace('encoder_or_audio_fallback', {'reason':str(exc), 'notice':notice,
                     'encoder':current.settings.encoder, 'preset':current.settings.preset})

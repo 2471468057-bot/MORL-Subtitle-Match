@@ -101,8 +101,13 @@ def test_windows_installer_and_release_workflow_are_present():
     assert 'Filename: "{cmd}"' not in installer
     assert "astral-sh.uv" in bootstrap
     assert "Gyan.FFmpeg" in bootstrap
-    assert "gh release create" in workflow
-    assert "2ByteASR-Update-${{ steps.version.outputs.value }}.zip" in workflow
+    # Releases are uploaded as drafts by scripts/release_pipeline.py on the build
+    # machine. The workflow is manual, credential-free verification only: pushing
+    # or creating a tag must never build or publish anything.
+    assert "workflow_dispatch" in workflow and "push:" not in workflow and "tags:" not in workflow
+    assert "gh release" not in workflow and "permissions: {}" in workflow
+    pipeline = (ROOT / "scripts" / "release_pipeline.py").read_text(encoding="utf-8")
+    assert "--clobber" not in pipeline and "never replaced" in pipeline
 
 
 def test_versioned_self_update_assets_and_metadata_are_present():

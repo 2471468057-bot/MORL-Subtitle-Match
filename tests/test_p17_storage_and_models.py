@@ -90,7 +90,7 @@ def test_storage_scan_counts_model_and_shared_runtime_separately(tmp_path):
     assert by_key["firered_llm"].environment_bytes == 0
 
 
-def test_residual_scan_never_leaves_project_owned_models_and_tmp(tmp_path):
+def test_residual_scan_requires_receipted_staging_and_preserves_development_tmp(tmp_path, monkeypatch):
     inside_model = tmp_path / "models" / "candidate" / "weight.part"
     inside_tmp = tmp_path / "tmp" / "download.tmp"
     ordinary = tmp_path / "models" / "candidate" / "config.json"
@@ -99,9 +99,16 @@ def test_residual_scan_never_leaves_project_owned_models_and_tmp(tmp_path):
         path.write_bytes(b"x")
     outside = tmp_path.parent / "global-hf-cache-test.part"
     outside.write_bytes(b"do-not-touch")
+    from types import SimpleNamespace
+    monkeypatch.setattr('twobyteasr.model_storage.get_runtime_paths',lambda:SimpleNamespace(model_root=tmp_path/'models'))
+    from twobyteasr.model_download_cache import write_transaction
+    stage=tmp_path/'models/.downloads/candidate/hf/identity';stage.mkdir(parents=True)
+    staged=stage/'weight.part';staged.write_bytes(b'owned')
+    write_transaction(stage,model_key='candidate',destination=tmp_path/'models/candidate',files=['weight.part'],state='paused')
     try:
         found = set(residual_files(tmp_path))
-        assert found == {inside_model, inside_tmp}
+        assert found == {staged}
+        assert inside_model.read_bytes()==b'x' and inside_tmp.read_bytes()==b'x'
         assert outside.read_bytes() == b"do-not-touch"
     finally:
         outside.unlink(missing_ok=True)

@@ -97,19 +97,20 @@ def test_model_evidence_never_guesses_missing_sources():
     assert single["single_source"] is True
 
     empty = format_model_evidence_coverage([])
-    assert empty["headline"] == "单来源 无冲突证据"
+    assert empty["headline"] == "来源信息缺失／待恢复"
+    assert empty["single_source"] is False
     assert empty["display"] == "MOSS —    FireRed —    Qwen3 —"
 
     two = format_model_evidence_coverage(
         [{"model": "MOSS"}, {"model": "FireRedASR2-AED"}]
     )
-    assert two["headline"] == "2 / 3 模型一致"
+    assert two["headline"] == "2 路独立来源 · 一致性未提供"
     assert two["qwen"] == "—"
 
     three = format_model_evidence_coverage(
         [{"model": "MOSS"}, {"model": "FireRed"}, {"model": "Qwen3-ASR"}]
     )
-    assert three["headline"] == "3 / 3 模型一致"
+    assert three["headline"] == "3 路独立来源 · 一致性未提供"
 
     unknown = format_model_evidence_coverage([{"model": "mystery-engine"}])
     assert unknown["moss"] == "—"

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Headed verification: razor drag preview, merge drag, and edit latency.
 
+SUPERSEDED 2026-10-10: the preview cards this script probes were removed
+(ADR 0101). Use scripts/verify_razor_split_headed.py instead.
+
 Checks (2026-09-03 razor/merge responsiveness round):
   1. Razor press-and-slide paints a full-height accent cut line and a large
      two-sentence preview card (pixel-probed, screenshot saved for review).

@@ -10,6 +10,10 @@ import os
 import subprocess
 import sys
 import time
+import copy
+import gc
+import threading
+from collections import Counter
 from pathlib import Path
 
 
@@ -18,6 +22,149 @@ DEFAULT_PROMPT = (
     "（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，"
     "并在段末标注结束时间戳，以清晰标明该段语音范围。"
 )
+
+# Application metadata, never passed as invented model.generate parameters.
+INFERENCE_MODE = "full_context"
+CACHE_VERSION = "moss-full-context-v1"
+PROMPT_VERSION = "native-transcript-v1"
+GENERATION_POLICY = {"tokens_per_second": 24, "minimum_output_tokens": 2048,
+                     "context_reserve": 32, "do_sample": False,
+                     "encoder_batch_size": 2, "oom_retries": 1}
+
+
+def generation_budget(duration, input_tokens, context_limit):
+    requested = max(GENERATION_POLICY["minimum_output_tokens"], math.ceil(duration * GENERATION_POLICY["tokens_per_second"]))
+    available = int(context_limit) - int(input_tokens) - GENERATION_POLICY["context_reserve"]
+    if available < GENERATION_POLICY["minimum_output_tokens"]:
+        raise ValueError(f"整段输入上下文容量不足：input_tokens={input_tokens}, context_limit={context_limit}, available_output={available}")
+    return min(requested, available), requested
+
+
+def ending_assessment(generated_tokens, budget, last_token, eos_ids):
+    eos_ids = eos_ids if isinstance(eos_ids, (list, tuple)) else [eos_ids]
+    if generated_tokens >= budget:
+        return "token_limit", False
+    if generated_tokens and last_token in eos_ids:
+        return "eos", True
+    return "unexpected_stop", False
+
+
+def audio_fingerprint(audio, sample_rate):
+    import numpy as np
+    digest = hashlib.sha256(f"float32-mono:{int(sample_rate)}:".encode())
+    # Bound scratch memory while hashing the complete ordered task waveform.
+    for start in range(0, len(audio), 1024 * 1024):
+        digest.update(np.asarray(audio[start:start + 1024 * 1024], dtype="<f4").tobytes())
+    return digest.hexdigest()
+
+
+class ExecutionProgress:
+    def __init__(self):
+        self.started = time.monotonic()
+        self.last_activity = self.started
+        self.phase = "audio_preparation"
+        self.tokens = 0
+        self.stop = threading.Event()
+
+    def emit(self, *, activity=True, **fields):
+        if activity:
+            self.last_activity = time.monotonic()
+        row = {"phase": self.phase, "elapsed_seconds": round(time.monotonic() - self.started, 3),
+               "last_activity_elapsed_seconds": round(self.last_activity - self.started, 3),
+               "generated_tokens": self.tokens, "progress_percent": None, **fields}
+        print("MOSS_EVENT " + json.dumps(row, ensure_ascii=False), flush=True)
+
+    def set_phase(self, phase):
+        self.phase = phase
+        self.emit()
+
+    def heartbeat(self):
+        while not self.stop.wait(10):
+            self.emit(activity=False, heartbeat=True)
+
+
+def install_encoder_batching(model, batch_size, progress):
+    """Batch the official Whisper encoder only, preserving all feature rows.
+
+    The installed MOSS calls whisper_encoder(features, return_dict=True) and
+    consumes last_hidden_state. Its mapping/merge/adaptor and decoder are intact.
+    """
+    import torch
+    from transformers.modeling_outputs import BaseModelOutput
+    encoder = model.model.whisper_encoder
+    original = encoder.forward
+    state = {"batch_size": batch_size}
+
+    def forward(input_features, **kwargs):
+        if not kwargs.get("return_dict") or kwargs.get("output_attentions") or kwargs.get("output_hidden_states"):
+            return original(input_features, **kwargs)
+        outputs = []
+        for start in range(0, input_features.shape[0], state["batch_size"]):
+            outputs.append(original(input_features[start:start + state["batch_size"]], **kwargs).last_hidden_state)
+            progress.emit(encoder_feature_rows_done=min(input_features.shape[0], start + state["batch_size"]),
+                          encoder_feature_rows_total=int(input_features.shape[0]))
+        progress.set_phase("generation")
+        return BaseModelOutput(last_hidden_state=torch.cat(outputs, dim=0))
+
+    encoder.forward = forward
+    return state
+
+
+def generate_full_context(model, processor, audio, messages, device, dtype, progress, receipt):
+    import torch
+    from moss_transcribe_diarize.inference_utils import ProgressStreamer
+    context_limit = int(model.config.text_config.max_position_embeddings)
+    progress.set_phase("audio_encoding")
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    # Processor owns its 30s feature blocks and ordered audio_chunk_mapping.
+    # Do not use truncation, VAD concatenation, or a shorter raw waveform.
+    with torch.inference_mode():
+        inputs = processor(text=text, audio=[audio], max_length=context_limit,
+                           return_tensors="pt").to(device)
+    prompt_len = int(inputs["attention_mask"][0].sum().item())
+    budget, requested = generation_budget(len(audio) / processor.feature_extractor.sampling_rate, prompt_len, context_limit)
+    receipt.update(input_tokens=prompt_len, max_new_tokens=budget, requested_output_tokens=requested,
+                   context_limit=context_limit, processor_feature_chunk_count=int(inputs["input_features"].shape[0]))
+    progress.emit(input_tokens=prompt_len, max_new_tokens=budget, context_limit=context_limit)
+    config = copy.deepcopy(model.generation_config)
+    config.max_new_tokens = budget
+    config.do_sample = False
+    config.num_beams = 1
+    encoder_state = install_encoder_batching(model, GENERATION_POLICY["encoder_batch_size"], progress)
+
+    def token_callback(count):
+        progress.tokens = count
+        progress.last_activity = time.monotonic()
+        if count % 100 == 0:
+            progress.emit()
+
+    def attempt():
+        receipt["generation_attempts"] += 1
+        progress.tokens = 0
+        progress.set_phase("audio_encoding")
+        progress.emit(generation_attempt=receipt["generation_attempts"], encoder_batch_size=encoder_state["batch_size"])
+        # Real generate invocations are counted here, including failed attempts.
+        with torch.inference_mode(), torch.amp.autocast("cuda", dtype=dtype):
+            return model.generate(**inputs, generation_config=config, streamer=ProgressStreamer(token_callback))
+
+    try:
+        outputs = attempt()
+    except torch.cuda.OutOfMemoryError as exc:
+        receipt["retries"].append({"reason": "cuda_oom", "detail": str(exc), "encoder_batch_size": 1})
+        encoder_state["batch_size"] = 1
+        # Release this attempt's traceback/tensors before retrying the SAME input.
+        exc.__traceback__ = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        progress.emit(retry_reason="cuda_oom", encoder_batch_size=1)
+        outputs = attempt()  # One bounded retry; never independent audio requests.
+    generated = outputs[0][prompt_len:]
+    count = int(generated.numel())
+    reason, complete = ending_assessment(count, budget, int(generated[-1].item()) if count else None, config.eos_token_id)
+    receipt.update(generated_tokens=count, end_reason=reason, complete=complete,
+                   encoder_batch_size=encoder_state["batch_size"],
+                   truncation_reasons=[] if complete else [reason])
+    return processor.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 
 def parsed_speaker_label(value, chunk_id):
@@ -36,6 +183,7 @@ def parse_args():
     parser.add_argument("--title", default="")
     parser.add_argument("--checkpoint-dir", default="")
     parser.add_argument("--run-signature", default="")
+    parser.add_argument("--task-audio-fingerprint", default="")
     return parser.parse_args()
 
 
@@ -67,6 +215,32 @@ def media_duration(path):
 
 class ModelIntegrityError(RuntimeError):
     pass
+
+
+class AudioInputAudit:
+    """Observe the original processor input without decoding or altering it."""
+
+    def __init__(self, processor, on_input=None):
+        self.processor = processor
+        self.on_input = on_input
+        self.inputs = None
+
+    def __getattr__(self, name):
+        return getattr(self.processor, name)
+
+    def __call__(self, *args, **kwargs):
+        audios = kwargs.get("audio")
+        if audios is not None and self.inputs is None:
+            rate = int(self.processor.feature_extractor.sampling_rate)
+            self.inputs = {
+                "sampling_rate": rate,
+                "sample_counts": [int(len(audio)) for audio in audios],
+                "audio_seconds": [len(audio) / rate for audio in audios],
+                "clock": "decoded_pcm_samples",
+            }
+            if self.on_input is not None:
+                self.on_input(self.inputs)
+        return self.processor(*args, **kwargs)
 
 
 def _vendored_model_root():
@@ -224,233 +398,131 @@ def save_chunk_checkpoint(checkpoint_dir, run_signature, result):
 
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # Source checkout workers live beside dependencies.lock.json; packaged
-    # workers live beside the executable. Resolve both without assuming a
-    # parent directory layout.
-    install_root = script_dir if os.path.isfile(os.path.join(script_dir, "dependencies.lock.json")) else os.path.dirname(script_dir)
     args = parse_args()
-    if not args.audio and not args.manifest:
-        raise ValueError("--audio 与 --manifest 至少提供一个。")
-    # Transformers 的 trust_remote_code 默认写入用户级 ~/.cache；在 Windows
-    # 受限目录或便携式工作流中可能没有权限，改用本次任务旁的临时缓存。
+    script_dir = Path(__file__).resolve().parent
+    install_root = script_dir if (script_dir / "dependencies.lock.json").is_file() else script_dir.parent
+    # Old block manifests must never execute, even through a direct CLI call.
+    if args.manifest:
+        jobs = json.loads(Path(args.manifest).read_text("utf8")).get("jobs", [])
+        if len(jobs) != 1 or float(jobs[0].get("offset", 0)) != 0:
+            raise ValueError("MOSS full_context 仅允许一个从任务0秒开始的完整音频请求；旧分块清单已停用。")
+        args.audio = jobs[0]["audio"]
+    else:
+        jobs = [{"audio": args.audio, "offset": 0}]
+    if not args.audio:
+        raise ValueError("需要完整任务 --audio。")
     module_cache = Path(args.output).resolve().parent / ".hf_modules_cache"
     module_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_MODULES_CACHE", str(module_cache))
-
-    # P0: Print exact interpreter + torch + CUDA reality at the very start of the worker
-    # so logs always show which python and whether it is CPU-only or real CUDA.
+    progress = ExecutionProgress()
+    receipt = {"inference_mode": INFERENCE_MODE, "cache_version": CACHE_VERSION,
+               "application_chunk_count": 0, "worker_pids": [os.getpid()], "worker_count": len({os.getpid()}),
+               "generation_attempts": 0, "retries": [], "cache_hit": False,
+               "input_tokens": None, "max_new_tokens": None, "generated_tokens": None,
+               "attention_backend": None, "dtype": None, "complete": False}
+    payload = {"inference_mode": INFERENCE_MODE, "cache_version": CACHE_VERSION,
+               "title": args.title, "execution": receipt, "chunks": []}
+    heartbeat = threading.Thread(target=progress.heartbeat, daemon=True)
+    heartbeat.start()
     try:
-        import sys as _sys
-        import torch as _torch
-        import subprocess as _subprocess
-        print("[MOSS ENV]", flush=True)
-        print("Python:", _sys.executable, flush=True)
-        print("Torch:", _torch.__version__, flush=True)
-        print("Torch __file__:", getattr(_torch, "__file__", None), flush=True)
-        cu = getattr(getattr(_torch, "version", None), "cuda", None)
-        print("Torch CUDA runtime:", cu, flush=True)
-        avail = False
-        try:
-            avail = bool(_torch.cuda.is_available())
-        except Exception:
-            avail = False
-        print("CUDA available:", avail, flush=True)
-        try:
-            if avail and _torch.cuda.device_count() > 0:
-                print("GPU:", _torch.cuda.get_device_name(0), flush=True)
-            else:
-                print("GPU: (none visible)", flush=True)
-        except Exception as _ge:
-            print("GPU: error", _ge, flush=True)
-        try:
-            _ns = _subprocess.check_output(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"], timeout=8, stderr=_subprocess.STDOUT)
-            print("nvidia-smi:", _ns.decode("utf-8", errors="replace").strip()[:300], flush=True)
-        except Exception as _ne:
-            print("nvidia-smi inside worker:", _ne, flush=True)
-    except Exception as _pe:
-        print("[MOSS ENV] probe failed:", _pe, flush=True)
-
-    import torch
-    from transformers import AutoModelForCausalLM, AutoProcessor
-
-    from moss_transcribe_diarize import parse_transcript
-    from moss_transcribe_diarize.inference_utils import (
-        build_transcription_messages,
-        generate_transcription,
-        resolve_device,
-    )
-
-    device = resolve_device("auto")
-    if device.type != "cuda":
-        raise RuntimeError("MOSS 当前工作流要求 CUDA GPU。")
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model_source = resolve_model(args.model, install_root)
-    _vendored_verify_model_files("moss", model_source, install_root=install_root)
-    prompt = DEFAULT_PROMPT
-
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
-    model_load_started = time.perf_counter()
-    print(f"加载 MOSS：{model_source}", flush=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_source,
-        trust_remote_code=True,
-        dtype="auto",
-    ).to(dtype=dtype).to(device).eval()
-    processor = AutoProcessor.from_pretrained(model_source, trust_remote_code=True)
-    model_load_seconds = time.perf_counter() - model_load_started
-    print(f"MOSS 模型加载完成：{model_load_seconds:.1f} 秒。", flush=True)
-    if args.manifest:
-        with open(args.manifest, "r", encoding="utf-8") as file:
-            jobs = json.load(file).get("jobs", [])
-    else:
-        jobs = [{"chunk_id": 1, "audio": args.audio, "offset": 0.0}]
-    if not jobs:
-        raise ValueError("MOSS manifest 中没有任务。")
-
-    chunk_results = []
-    chunk_timings = []
-    for job_index, job in enumerate(jobs, 1):
-        cached = load_chunk_checkpoint(
-            args.checkpoint_dir,
-            args.run_signature,
-            job,
-            job_index,
-        )
-        if cached is not None:
-            cached["group_id"] = str(job.get("group_id", cached.get("group_id", "default")))
-            cached["checkpoint_dir"] = str(job.get("checkpoint_dir", cached.get("checkpoint_dir", "")))
-            cached["run_signature"] = str(job.get("run_signature", cached.get("run_signature", "")))
-            chunk_results.append(cached)
-            print(
-                f"[块 {job_index}/{len(jobs)}] 命中断点缓存："
-                f"{len(cached['segments'])} 段。",
-                flush=True,
-            )
-            continue
-        audio_path = str(job["audio"])
-        duration = float(job.get("duration") or media_duration(audio_path))
-        max_new_tokens = max(2048, min(8192, int(math.ceil(duration * 12.0))))
-        print(
-            f"[块 {job_index}/{len(jobs)}] {float(job.get('offset', 0.0)):.1f}s 起，"
-            f"音频 {duration:.1f}s，最多 {max_new_tokens} tokens",
-            flush=True,
-        )
-        chunk_started = time.perf_counter()
-        last_report = {"tokens": 0}
-
-        def report_tokens(count):
-            if count - last_report["tokens"] >= 100:
-                last_report["tokens"] = count
-                print(f"[块 {job_index}/{len(jobs)}] 已生成 {count} tokens", flush=True)
-
-        messages = build_transcription_messages(audio_path, prompt=prompt)
-        result = generate_transcription(
-            model,
-            processor,
-            messages,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            device=device,
-            dtype=dtype,
-            token_callback=report_tokens,
-        )
-        generated_tokens = int(result.get("generated_tokens", 0))
-        if generated_tokens >= int(max_new_tokens * 0.96) and max_new_tokens < 8192:
-            retry_tokens = min(8192, int(math.ceil(max_new_tokens * 1.5)))
-            print(
-                f"[块 {job_index}/{len(jobs)}] 输出接近 token 上限，"
-                f"提高到 {retry_tokens} 后重试一次。",
-                flush=True,
-            )
-            last_report["tokens"] = 0
-            result = generate_transcription(
-                model,
-                processor,
-                messages,
-                max_new_tokens=retry_tokens,
-                do_sample=False,
-                device=device,
-                dtype=dtype,
-                token_callback=report_tokens,
-            )
-            max_new_tokens = retry_tokens
+        import numpy as np
+        import torch
+        import transformers
+        from transformers import AutoModelForCausalLM, AutoProcessor
+        from moss_transcribe_diarize import parse_transcript
+        from moss_transcribe_diarize.inference_utils import build_transcription_messages, load_audio_item
+        if not torch.cuda.is_available():
+            raise RuntimeError("MOSS 当前工作流要求 CUDA GPU。")
+        device = torch.device("cuda:0")
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        receipt.update(dtype=str(dtype), torch_version=torch.__version__,
+                       transformers_version=transformers.__version__, runtime=sys.executable)
+        model_source = resolve_model(args.model, install_root)
+        payload["model"] = model_source
+        _vendored_verify_model_files("moss", model_source, install_root=install_root)
+        if Path(args.audio).suffix.lower() == ".npy":
+            audio = np.load(args.audio, mmap_mode="r", allow_pickle=False)
+            if audio.ndim != 1 or audio.dtype != np.dtype("float32"):
+                raise ValueError("任务音频必须是完整 mono float32 PCM。")
+        else:
+            audio = load_audio_item(args.audio, sampling_rate=16000)
+        if not len(audio) or not np.isfinite(audio).all():
+            raise ValueError("任务音频为空或含非有限样本。")
+        fingerprint = audio_fingerprint(audio, 16000)
+        receipt.update(task_audio_duration=len(audio) / 16000, sample_rate=16000,
+                       sample_count=len(audio), task_audio_fingerprint=fingerprint,
+                       application_chunk_count=len(jobs), clock="task_pcm_zero")
+        if args.task_audio_fingerprint and fingerprint != args.task_audio_fingerprint:
+            raise ValueError("worker完整任务音频指纹与调度器不一致。")
+        progress.emit(**receipt)
+        progress.set_phase("model_loading")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        model_started = time.monotonic()
+        model = AutoModelForCausalLM.from_pretrained(model_source, trust_remote_code=True,
+                    dtype="auto", attn_implementation="sdpa").to(dtype=dtype).to(device).eval()
+        processor = AutoProcessor.from_pretrained(model_source, trust_remote_code=True)
+        if int(processor.feature_extractor.sampling_rate) != 16000:
+            raise ValueError("MOSS processor采样率不匹配任务16k时钟。")
+        receipt.update(attention_backend={"model": model.config._attn_implementation,
+                       "text": model.config.text_config._attn_implementation,
+                       "audio": model.config.audio_config._attn_implementation},
+                       model_load_seconds=round(time.monotonic() - model_started, 3))
+        messages = build_transcription_messages(args.audio, prompt=DEFAULT_PROMPT)
+        raw_text = generate_full_context(model, processor, audio, messages, device, dtype, progress, receipt)
+        payload["raw_text"] = raw_text
+        # Preserve native raw output even if parsing fails.
+        atomic_write_json(args.output, payload)
+        progress.set_phase("parsing")
         segments = []
-        for segment in parse_transcript(result["text"]):
-            start = max(0.0, float(segment.start))
-            end = max(start + 0.01, float(segment.end))
+        for segment in parse_transcript(raw_text):
             text = str(segment.text).strip()
-            if not text:
-                continue
-            segments.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "speaker": parsed_speaker_label(segment.speaker, job_index),
-                    "text": text,
-                }
-            )
-        segments.sort(key=lambda item: (item["start"], item["end"]))
+            if text:
+                start, end = float(segment.start), float(segment.end)
+                if start < 0 or end <= start or end > receipt["task_audio_duration"] + 1:
+                    receipt["complete"] = False
+                    receipt.setdefault("truncation_reasons", []).append("invalid_timestamp")
+                segments.append({"start": start, "end": end,
+                                 "speaker": parsed_speaker_label(segment.speaker, 1), "text": text})
         if not segments:
-            raise RuntimeError(f"MOSS 第 {job_index} 块无法解析为说话人时间段。")
-        chunk_result = {
-            "chunk_id": int(job.get("chunk_id", job_index)),
-            "group_id": str(job.get("group_id", "default")),
-            "offset": float(job.get("offset", 0.0)),
-            "duration": duration,
-            "max_new_tokens": max_new_tokens,
-            "prompt_tokens": int(result.get("prompt_len", 0)),
-            "generated_tokens": int(result.get("generated_tokens", 0)),
-            "raw_text": result["text"],
-            "segments": segments,
-            "checkpoint_dir": str(job.get("checkpoint_dir", "")),
-            "run_signature": str(job.get("run_signature", "")),
-        }
-        chunk_results.append(chunk_result)
-        save_chunk_checkpoint(
-            args.checkpoint_dir,
-            args.run_signature,
-            chunk_result,
-        )
-        chunk_elapsed = time.perf_counter() - chunk_started
-        chunk_timings.append(
-            {
-                "chunk_id": int(job.get("chunk_id", job_index)),
-                "audio_seconds": round(duration, 3),
-                "elapsed_seconds": round(chunk_elapsed, 3),
-            }
-        )
-        print(
-            f"[块 {job_index}/{len(jobs)} 完成] {len(segments)} 段，"
-            f"{len({item['speaker'] for item in segments})} 位说话人，"
-            f"生成 {int(result.get('generated_tokens', 0))} tokens，"
-            f"耗时 {chunk_elapsed:.1f} 秒",
-            flush=True,
-        )
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    payload = {
-        "model": model_source,
-        "title": args.title,
-        "chunks": chunk_results,
-        "generated_tokens": sum(item["generated_tokens"] for item in chunk_results),
-        "performance": {
-            "model_load_seconds": round(model_load_seconds, 3),
-            "chunk_timings": chunk_timings,
-            "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 3),
-            "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1024**3, 3),
-        },
-    }
-    if len(chunk_results) == 1:
-        payload.update(chunk_results[0])
-    atomic_write_json(args.output, payload)
-    print(
-        f"全部完成：{len(chunk_results)} 块；峰值显存保留 "
-        f"{payload['performance']['peak_reserved_gb']:.2f} GB。",
-        flush=True,
-    )
+            raise RuntimeError("MOSS 整段输出无法解析为说话人时间段；原始输出已保留。")
+        segments.sort(key=lambda row: (row["start"], row["end"]))
+        # A parser can silently skip an unfinished final clause: retain a review flag.
+        import re
+        if not re.search(r"\[[0-9]+(?:\.[0-9]+)?\]\s*$", raw_text):
+            receipt["complete"] = False
+            receipt.setdefault("truncation_reasons", []).append("unfinished_transcript_tail")
+        receipt.update(raw_segment_count=len(segments),
+                       raw_speaker_distribution=dict(Counter(row["speaker"] for row in segments)),
+                       last_transcript_end=max(row["end"] for row in segments))
+        chunk = {"chunk_id": 1, "offset": 0.0, "duration": receipt["task_audio_duration"],
+                 "audio_input": {"sampling_rate": 16000, "sample_counts": [len(audio)],
+                                 "audio_seconds": [len(audio) / 16000], "clock": "task_pcm_zero"},
+                 "raw_text": raw_text, "segments": segments,
+                 "prompt_tokens": receipt["input_tokens"], "max_new_tokens": receipt["max_new_tokens"],
+                 "generated_tokens": receipt["generated_tokens"]}
+        payload["chunks"] = [chunk]
+        payload["generated_tokens"] = receipt["generated_tokens"]
+        progress.set_phase("handoff")
+    except Exception as exc:
+        receipt.update(failure_stage=progress.phase, end_reason=type(exc).__name__,
+                       error=str(exc), complete=False)
+        progress.emit(**receipt)
+        raise
+    finally:
+        receipt["elapsed_seconds"] = round(time.monotonic() - progress.started, 3)
+        try:
+            import torch
+            receipt["peak_allocated_gb"] = round(torch.cuda.max_memory_allocated() / 1024**3, 3)
+            receipt["peak_reserved_gb"] = round(torch.cuda.max_memory_reserved() / 1024**3, 3)
+        except Exception:
+            pass
+        payload["performance"] = {key: receipt.get(key) for key in ("model_load_seconds", "elapsed_seconds", "peak_allocated_gb", "peak_reserved_gb")}
+        atomic_write_json(args.output, payload)
+        progress.stop.set()
+        heartbeat.join(timeout=1)
+    progress.set_phase("completed" if receipt["complete"] else "needs_review")
+    progress.emit(**receipt)
 
 
 if __name__ == "__main__":

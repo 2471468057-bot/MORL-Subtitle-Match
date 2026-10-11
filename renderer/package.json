@@ -1,6 +1,6 @@
 {
   "name": "2byteasr-advanced-renderer",
-  "version": "0.5.0",
+  "version": "0.6.5",
   "private": true,
   "scripts": {
     "render": "remotion render src/index.ts SubtitleOverlay"

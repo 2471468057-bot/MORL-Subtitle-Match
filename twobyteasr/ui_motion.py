@@ -115,58 +115,6 @@ def reveal_cue(widget: QWidget) -> None:
     cue.show(); cue.raise_(); cue.animation.start()
 
 
-class _RecognitionLaunchCue(QWidget):
-    """A brief, click-through launch badge, independent of the task worker."""
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        self.setGeometry(parent.rect())
-        self.progress = 0.0
-        self.animation = QVariantAnimation(self)
-        self.animation.setDuration(480)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(1.0)
-        self.animation.valueChanged.connect(self._advance)
-        self.animation.finished.connect(self.deleteLater)
-
-    def _advance(self, value):
-        self.progress = float(value)
-        self.update()
-
-    def paintEvent(self, event):
-        import math
-        from PySide6.QtCore import QRectF
-        from PySide6.QtGui import QFont
-        from .typography import TITLE_FONT_FAMILIES
-        from .theme_manager import theme_key
-        from .ui_theme import theme_definition
-        theme = theme_definition(theme_key())
-        p = self.progress
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setOpacity(min(1., p * 8) * min(1., (1-p) * 5))
-        painter.translate(self.width()/2, min(190, self.height()/3) - math.sin(p*math.pi)*12)
-        painter.scale(.92 + .08*math.sin(min(1., p*2)*math.pi/2), 1.)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(theme.accent))
-        painter.drawRoundedRect(QRectF(-154, -35, 308, 70), 30, 30)
-        painter.setPen(QColor(theme.text_on_accent))
-        font = QFont(); font.setFamilies(list(TITLE_FONT_FAMILIES)); font.setPixelSize(21)
-        painter.setFont(font)
-        painter.drawText(QRectF(-140, -26, 220, 52), Qt.AlignmentFlag.AlignCenter, "字幕，出发！")
-        painter.setBrush(QColor(theme.text_on_accent)); painter.setPen(Qt.PenStyle.NoPen)
-        for i in range(3):
-            painter.drawEllipse(QRectF(80+i*17, -4-6*max(0., math.sin(p*math.pi*3-i*.8)), 8, 8))
-
-
-def recognition_launch_cue(widget: QWidget) -> None:
-    if widget is None or reduced_motion() or not widget.isVisible():
-        return
-    cue = _RecognitionLaunchCue(widget)
-    cue.show(); cue.raise_(); cue.animation.start()
-
-
 __all__ = [
     "MOTION_EMPHASIS_MS", "MOTION_FAST_MS", "MOTION_STANDARD_MS",
     "motion_duration", "reduced_motion", "system_reduced_motion",

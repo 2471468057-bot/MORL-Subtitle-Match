@@ -32,6 +32,9 @@ class GlossaryBindingResolver:
         )
 
     def _identity(self, value: str) -> str:
+        resolve = getattr(self.legacy, "resolve_glossary_identity", None)
+        if callable(resolve):
+            return str(resolve(str(value or "")) or "")
         canonicalize = getattr(self.legacy, "canonicalize_runtime_game_name", str)
         identity = getattr(self.legacy, "runtime_game_identity", str)
         return str(identity(canonicalize(str(value or ""))))
@@ -47,6 +50,11 @@ class GlossaryBindingResolver:
         name = str(content_name or "").strip()
         identity = self._identity(content_id or name)
         matched: list[GlossaryBinding] = []
+        catalog = getattr(self.legacy, "glossary_catalog", lambda: [])() or []
+        for entry in catalog:
+            if identity and str(entry.get("id", "")) == identity:
+                matched.append(GlossaryBinding(id=identity, label=str(entry.get("name", name)), kind="library"))
+                break
         profiles = getattr(self.legacy, "load_game_profiles", lambda: {})() or {}
         for profile_name, profile in profiles.items():
             if not isinstance(profile, Mapping):

@@ -80,10 +80,22 @@ class HealthBoard:
         self.deadline = None
         self.cancel_check = None
         self.receipts = []
+        self.request_limit = None
+        self.requests_started = 0
+        self.request_budget = None
 
     def request_timeout(self):
         if self.cancel_check is not None:
             self.cancel_check()
+        if self.request_limit is not None and self.requests_started >= self.request_limit:
+            from .glossary_skill import GlossarySearchError
+            raise GlossarySearchError('source_budget_exhausted', '已达本次来源请求预算；保留已读取正文与候选并继续可完成的 AI 整理。')
+        if self.request_budget is not None:
+            if self.request_budget['remaining'] <= 0:
+                from .glossary_skill import GlossarySearchError
+                raise GlossarySearchError('source_budget_exhausted', '已达本次来源请求预算；保留已读取正文与候选并继续可完成的 AI 整理。')
+            self.request_budget['remaining'] -= 1
+        self.requests_started += 1
         if self.deadline is None:
             return _REQUESTS_TIMEOUT
         from urllib3.util import Timeout

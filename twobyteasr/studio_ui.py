@@ -208,6 +208,7 @@ class SubtitleStudioPage(
 ):
 
     return_requested = Signal()
+    glossary_proofread_requested = Signal()
 
     recognition_requested = Signal(str, str, str)
 
@@ -287,17 +288,22 @@ class SubtitleStudioPage(
         if previous is not None:
             previous.unsubscribe(self._consume_state_delta)
         self.session.project = value
+        # These QObjects are children of this page. close() alone kept one of
+        # each alive per project switch, still holding the previous project.
         scene = getattr(self, '_caption_scene', None)
         if scene is not None:
             scene.close()
+            scene.deleteLater()
             self._caption_scene = None
         cache = getattr(self, '_caption_playback_cache', None)
         if cache is not None:
             cache.close()
+            cache.deleteLater()
             self._caption_playback_cache = None
         pixels = getattr(self, '_caption_pixel_cache', None)
         if pixels is not None:
             pixels.close()
+            pixels.deleteLater()
             self._caption_pixel_cache = None
         self.session.active_cue_id = ""
         self.session.active_cue_ids = frozenset()
@@ -807,7 +813,7 @@ class SubtitleStudioPage(
         except (OSError, ValueError, TypeError):
             values = {}
         loaded = {
-            command_id: str(values.get(command_id) or default)
+            command_id: str(values[command_id]) if command_id in values else default
             for command_id, default in studio_default_shortcuts().items()
         }
         # 2026-09-03：合并工具默认键 M→B（用户指定，B 与 V/C 相邻）。设置对话框
@@ -821,6 +827,17 @@ class SubtitleStudioPage(
             loaded["reasr_review"] = STUDIO_COMMANDS["reasr_review"][1]
         if loaded.get("toggle_review", "").strip().upper() == "SHIFT+R":
             loaded["toggle_review"] = STUDIO_COMMANDS["toggle_review"][1]
+        # New defaults never steal an existing custom binding. Leave the new
+        # command unbound and make the conflict visible in shortcut settings.
+        conflicts=[]
+        for command in ('track_forward_tool','video_transition','audio_transition'):
+            if command in values:continue
+            key=QKeySequence(loaded[command]).toString(QKeySequence.PortableText)
+            owners=[name for name,value in loaded.items() if name!=command and name in values
+                    and QKeySequence(value).toString(QKeySequence.PortableText)==key]
+            if owners:
+                loaded[command]='';conflicts.append(command)
+        self._new_shortcut_conflicts=conflicts
         return loaded
 
     def _studio_trace(self, event: str, **fields: object) -> None:
@@ -931,6 +948,9 @@ class SubtitleStudioPage(
         self._command_callbacks = {
             "play_pause": self._toggle_playback,
             "selection_tool": lambda: self._set_timeline_tool("selection"),
+            "track_forward_tool": lambda: self._set_timeline_tool("track_forward"),
+            "video_transition": lambda: self._apply_default_transition("video"),
+            "audio_transition": lambda: self._apply_default_transition("audio"),
             "razor_tool": lambda: self._set_timeline_tool("razor"),
             "split_at_playhead": self._split_video_at_playhead,
             "merge_tool": lambda: self._set_timeline_tool("merge"),
@@ -968,6 +988,11 @@ class SubtitleStudioPage(
             "add_subtitle": self._add_subtitle_at_playhead,
             "track_gain": self._show_track_gain,
         }
+        if getattr(self,'_new_shortcut_conflicts',None):
+            bind_text(self.save_state,'新增快捷键与已有自定义绑定冲突，已保留原绑定；请在快捷键设置中改绑')
+        if hasattr(self,'track_forward_tool_button'):
+            binding=self._shortcut_values.get('track_forward_tool','')
+            bind_text(self.track_forward_tool_button,'轨道向前选择 ({key}) · Shift 单轨',property='toolTip',key=binding or tr('未绑定'))
         self._shortcut_lookup.clear()
         for command_id in self._command_callbacks:
             sequence = self._shortcut_values.get(command_id, "")
@@ -1017,6 +1042,7 @@ class SubtitleStudioPage(
         QEvent.Type.MouseButtonDblClick,
         QEvent.Type.MouseButtonPress,
         QEvent.Type.InputMethodQuery,
+        QEvent.Type.InputMethod,
         QEvent.Type.ShortcutOverride,
         QEvent.Type.KeyPress,
         QEvent.Type.Wheel,
@@ -1032,6 +1058,9 @@ class SubtitleStudioPage(
 
     def eventFilter(self, watched, event) -> bool:
         event_type = event.type()
+        if event_type == QEvent.Type.InputMethod:
+            self._studio_ime_composing=bool(event.preeditString())
+            return False
         scroll = getattr(self, 'project_library_scroll', None)
         if scroll is not None and watched is scroll.viewport() and event_type == QEvent.Type.Resize:
             if self.project is None and hasattr(self, '_hub_card_widgets'):
@@ -1194,6 +1223,9 @@ class SubtitleStudioPage(
                 and not watched_is_editor
                 and not self._editing_has_focus()
             ):
+                if event.key() == Qt.Key.Key_Escape and self.timeline.cancel_selection_gesture():
+                    event.accept()
+                    return True
                 if self._review_mode and event.key() == Qt.Key.Key_Escape:
                     self._exit_review()
                     event.accept()
@@ -1229,6 +1261,10 @@ class SubtitleStudioPage(
         self._performance_dialog.activateWindow()
 
     def _dispatch_shortcut_sequence(self, sequence: str) -> bool:
+        if self._editing_has_focus() or getattr(self,"_studio_ime_composing",False):
+            return False
+        if sequence.casefold() in ("esc","escape") and self.timeline.cancel_selection_gesture():
+            return True
         if sequence.casefold() == "ctrl+shift+p":
             self._show_performance_panel()
             return True
@@ -1244,10 +1280,14 @@ class SubtitleStudioPage(
         if (
             sequence.casefold() == "ctrl+a"
             and self.project
-            and self._cue_list_has_focus()
         ):
-            self._select_all_timeline_cues()
-            return True
+            focus = QApplication.focusWidget()
+            if focus is self.timeline or (focus and self.timeline.isAncestorOf(focus)):
+                self.timeline.select_all_clips()
+                return True
+            if self._cue_list_has_focus():
+                self._select_all_timeline_cues()
+                return True
         if sequence in {"E", "e"} and self.project:
             self._studio_trace(
                 "KEY_E",
@@ -1571,7 +1611,7 @@ class SubtitleStudioPage(
             return
         messages = {
             "studio": "Space：播放 / 暂停    Q / W：播放头前 / 后波纹剪切（未锁视频轨）    双击时间轴字幕：直接编辑",
-            "razor": "C：剃刀（按住拖动看两句预览，松开切开）    V：返回选择",
+            "razor": "C：剃刀（移动鼠标看切分预览，点击切开，Esc 取消）    V：返回选择",
             "priority_review": "Enter：确认并继续    Space：重听    Ctrl+Shift+R：重新识别    E：编辑",
         }
         if key not in messages or key in self._session_teach_hints or not self._teach_hints.should_show(key):
@@ -1938,10 +1978,11 @@ class SubtitleStudioPage(
         return self.cue_controller.nudge(delta)
 
     def _set_timeline_tool(self, mode: str) -> None:
-        mode = mode if mode in {"razor", "merge"} else "selection"
+        mode = mode if mode in {"razor", "merge", "track_forward"} else "selection"
         self.timeline.set_tool_mode(mode)
         self.selection_tool_button.setChecked(mode == "selection")
         self.razor_tool_button.setChecked(mode == "razor")
+        self.track_forward_tool_button.setChecked(mode == "track_forward")
         merge_button = getattr(self, "merge_tool_button", None)
         if merge_button is not None:
             merge_button.setChecked(mode == "merge")
@@ -1986,7 +2027,41 @@ class SubtitleStudioPage(
     def _merge_next(self) -> None:
         return self.cue_controller.merge_next()
 
+    def _apply_default_transition(self,media):
+        from .studio_transition_ui import apply_default
+        apply_default(self,media)
+
+    def _move_selected_clip_group(self,selection,delta):
+        from .studio_selection import move_selection_command
+        try:command=move_selection_command(self.project,selection,delta,page=self,locked_speakers=self.timeline.locked_speakers)
+        except (ValueError,KeyError) as exc:
+            self.save_state.setText(tr(str(exc)));return
+        self.undo_stack.push(command)
+
+    def _copy_selected_clip_group(self, selection, delta):
+        from .studio_selection import copy_selection_command
+        try:
+            command = copy_selection_command(self.project, selection, delta, page=self,
+                                             locked_speakers=self.timeline.locked_speakers)
+        except (ValueError, KeyError) as exc:
+            self.save_state.setText(tr(str(exc)))
+            return
+        self.undo_stack.push(command)
+        self.timeline._publish_clip_selection(command.copied_selection)
+
     def _delete_current(self) -> None:
+        if self._editing_has_focus():return
+        from .studio_transition_ui import delete_selected
+        if delete_selected(self):return
+        if self.timeline._unified_selection and self.timeline.clip_selection().count:
+            from .studio_selection import delete_selection_command
+            try:command=delete_selection_command(self.project,self.timeline.clip_selection(),page=self,locked_speakers=self.timeline.locked_speakers)
+            except (ValueError,KeyError) as exc:
+                self.save_state.setText(tr(str(exc)));return
+            self.undo_stack.push(command)
+            from .studio_selection import ClipSelection
+            self.timeline._publish_clip_selection(ClipSelection())
+            return
         from .studio_track_delete import delete_current
         return delete_current(self)
 
@@ -2395,6 +2470,9 @@ class SubtitleStudioPage(
         self._set_major_panel_visible("cue_list", not self.cue_list_panel.isVisible())
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape and not self._editing_has_focus() and self.timeline.cancel_selection_gesture():
+            event.accept()
+            return
         if self._review_mode and event.key() == Qt.Key.Key_Escape:
             self._exit_review()
             event.accept()
@@ -2446,14 +2524,19 @@ class SubtitleStudioPage(
                     bind_text(self.cue_filter_buttons[key], '{label} {count}', label=tr(label), count='0' if key == 'all' else '--')
             return
         counts = {"all": total, "priority": 0, "critical": 0, "pending": 0, "issue": 0, "done": 0}
+        # One risk table and QC result for the whole pass (per-cue lookups
+        # rebuilt the table each time: O(n^2), ~0.5 s per edit at 3000 cues).
+        from .studio_review import cached_review_risks
+        risks = cached_review_risks(self.project)
+        qc_result = cached_qc_result(self.project)
         for cue in view_cues:
             status = _cue_status(self.project, cue)
             counts[status] += 1
-            if not _cue_explicitly_confirmed(self.project, cue) and _cue_review_level(self.project, cue) == "suggested":
+            if not _cue_explicitly_confirmed(self.project, cue) and _cue_review_level(self.project, cue, risks) == "suggested":
                 counts["priority"] += 1
             if not _cue_explicitly_confirmed(self.project, cue) and any(
                 issue.severity == QCSeverity.CRITICAL
-                for issue in cached_qc_result(self.project).for_cue(_source_key(cue))
+                for issue in qc_result.for_cue(_source_key(cue))
             ):
                 counts["critical"] += 1
         captions = {"all": "全部", "priority": "建议确认", "critical": "需要检查", "pending": "待确认", "issue": "有问题", "done": "已完成"}
@@ -2537,6 +2620,22 @@ class SubtitleStudioPage(
         offset_menu = menu.addMenu("整体偏移")
         for delta in (-100, -50, 50, 100):
             offset_menu.addAction(f"{delta:+d} ms", lambda delta=delta, ids=selected_ids: self._apply_timing_offset(ids, delta))
+        if self.project is not None:
+            # 2026-10-09 (M16, user): the in/out row left the toolbar; the
+            # range is named, reached and cleared here.
+            from .project_range import effective_range, range_summary
+            menu.addSeparator()
+            summary, has_range = range_summary(self.project)
+            title = menu.addAction(tr("入出点范围：{range}", range=summary) if has_range
+                                   else tr("入出点范围：未设置（在播放头按 I / O 设置）"))
+            title.setEnabled(False)
+            if has_range:
+                menu.addAction(tr("跳到入点"), lambda: self._seek(effective_range(self.project)[0] / 1000.0))
+                menu.addAction(tr("跳到出点"), lambda: self._seek(effective_range(self.project)[1] / 1000.0))
+                menu.addAction(_icon("fa5s.times"), tr("清除入出点范围"), self._clear_range)
+            else:
+                menu.addAction(tr("在播放头设置入点（I）"), self._mark_in)
+                menu.addAction(tr("在播放头设置出点（O）"), self._mark_out)
         menu.exec(global_pos)
 
     def _apply_timing_offset(self, cue_ids: list[str], offset_ms: int) -> None:

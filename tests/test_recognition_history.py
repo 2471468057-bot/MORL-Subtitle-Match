@@ -99,7 +99,8 @@ def test_success_with_review_and_info_remains_completed(tmp_path):
 
     record = parse_recognition_report(path)
 
-    assert record.status_label == "完成"
+    assert record.status == "completed"
+    assert record.status_label == "已完成 · 有待检查项"
     assert record.review_count == 8
     assert record.anomaly_count == 0
     assert not record.has_anomaly
@@ -117,7 +118,8 @@ def test_warning_severity_drives_history_anomaly_semantics(tmp_path):
 
     record = parse_recognition_report(path)
 
-    assert record.status_label == "警告"
+    assert record.status == "partial"
+    assert record.status_label == "部分完成"
     assert record.anomaly_count == 1
     assert record.review_count == 1
     assert record.has_anomaly
@@ -259,7 +261,7 @@ def test_history_detail_uses_product_summary_and_developer_json_view(tmp_path):
     assert "FireRedASR2-AED" in labels
     assert "Qwen3-ASR 1.7B" in labels
     assert "DeepSeek · deepseek-v4-pro" in labels
-    assert "多模型争议\n8 条" in labels
+    assert "多模型争议\n8 项问题" in labels
     assert "分轨 SRT · 2" in labels
     assert "D:/private" not in labels
     assert detail.stage_table.cellWidget(0, 1).findChild(QLabel).text() == "完成"
@@ -419,3 +421,34 @@ def test_filtered_empty_state_differs_from_no_records(tmp_path):
     assert page.empty_title.text() == "没有符合搜索条件的记录"
     assert not page.empty_start.isVisibleTo(page)
     page.deleteLater()
+
+
+def test_history_new_outcome_labels_rebind_across_languages(tmp_path, monkeypatch):
+    from twobyteasr import i18n
+    from twobyteasr.i18n import apply_ui_language
+    app = _app()
+    payload = _report_payload()
+    payload['result']['segment_count'] = 31
+    payload['result']['cue_count'] = 32
+    payload['polishing_summary'] = {'success_batches': 1, 'success_cues': 31, 'fallback_cues': 0,
+                                    'term_context': {'accepted_edits': 6}}
+    payload['terminology_summary'] = {'status': 'unsupported', 'reason': 'current provider has no retrieval', 'unverified_count': 31}
+    source = tmp_path / 'localized_字幕任务报告.json'
+    source.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    monkeypatch.setattr(i18n, 'current_language', lambda: 'en')
+    translations = {'处理结果': 'Processing result', '核心处理': 'Core processing', '文字校对': 'Text proofreading',
+        '处理记录': 'Input records', '实际接受修改': 'Accepted edits', '{count} 条处理记录': '{count} input records',
+        '{count} 处文字修改': '{count} text edits', 'AI文字校对已完成': 'Text proofreading completed',
+        '联网核验未执行（当前通道不支持）': 'Online verification not run (unsupported)'}
+    for key, value in translations.items():
+        monkeypatch.setitem(i18n._TRANSLATIONS['en'], key, value)
+    detail = RecognitionHistoryDetail(parse_recognition_report(source))
+    labels = '\n'.join(label.text() for label in detail.findChildren(QLabel))
+    assert 'Core processing' in labels and '31 input records' in labels and '6 text edits' in labels
+    assert 'Text proofreading completed' in labels and 'Online verification not run (unsupported)' in labels
+    apply_ui_language(detail, 'zh')
+    labels = '\n'.join(label.text() for label in detail.findChildren(QLabel))
+    assert '核心处理' in labels and '31 条处理记录' in labels and '6 处文字修改' in labels
+    assert 'Core processing' not in labels and 'input records' not in labels
+    detail.deleteLater()
+    app.processEvents()

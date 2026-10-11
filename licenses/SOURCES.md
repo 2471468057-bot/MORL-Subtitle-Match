@@ -85,3 +85,10 @@ test.4实际播放器是独立mpv.exe，通过HWND及JSON命名管道通信；�
 splitter准确构建39ddfbb2283857327c5f31635059c399eaab7b4c无LICENSE/COPYING，README未声明GPL；不能用主仓库或新版README替它授权。新增[splitter-licensed/PROVENANCE.json](source-materials/remotion-4.0.513/splitter-licensed/PROVENANCE.json)为明确GPL的固定50b6a0c0e7e3076e33044254b560f466b67cd245原样20件，逐字节等于39旧输入，原LICENSE/README和GPL全文齐全。此20件来源/许可交付关闭；不是给旧版整个commit追溯授权。
 
 旧版Cargo.toml、clean.mjs、compile-av1.mjs、compile-ffmpeg.mjs、compile-x265.mjs、const.mjs、Dockerfile、Dockerfile-aws、README.md与该GPL版不同且缺旧版明确授权，原内部证据保留，独立源码范围不提供。只有此9件需要新文件级授权解释；脚本许可与产出FDK混合媒体库的权利分别判断。自有API源码无需等待此完整媒体CS缺口。独立源码r2不是完整Setup的Corresponding Source；既有外部构建材料请求没有重复改写、仍未发送。
+## 2026-10-07授权回复与实际依赖更新
+
+Remotion4.0.513已回复：**所请求覆盖GPL下游的特殊豁免已拒绝**；Rust/FFmpeg按各自许可。原请求的准确原生构建材料未提供，额外组合权利未提供，两项**分别未解决**；没有将所有项写成拒绝或已获许可。个人免费资格、非商用声明、Company订阅及独立进程不能代替这些权利。
+
+当前生产高级字幕仍保留；直接/传递npm包、真实API、compositor/Rust/媒体DLL、Chromium、自动npm安装/备用CLI、两个独立onedir及配对B内部材料已分别核对。现有HTML档案可独立求值，正常Studio宿主仍调用Remotion；最小纯CDP验证不会偷偷替换全部AI功能。原封存Setup/候选/A/B/C声明与自有GPL-3.0-only、0.2.6-test.3分界保持。
+
+[组件、实际材料及发布门](REMOTION_DEPENDENCY_AUDIT.md)。新统一候选保留既有实现并继续标公开发布阻塞；纯源码C不代替内部B及原生对应材料。

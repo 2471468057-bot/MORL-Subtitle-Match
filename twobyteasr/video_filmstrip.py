@@ -97,13 +97,10 @@ class FilmstripCache(QObject):
         if not source.lower().endswith('.flv'):
             return source
         from .indexed_media import GLOBAL_INDEXED_MEDIA
-        GLOBAL_INDEXED_MEDIA.resolve(source)  # 非阻塞 kick，remux 未启动时点火
         optimized = GLOBAL_INDEXED_MEDIA.optimized_target(source)
         if optimized is not None:
             return str(optimized)
-        if GLOBAL_INDEXED_MEDIA.status(source).get('state') == 'FAILED':
-            return source
-        return None
+        return source
 
     def key(self,source,source_ms,width=128,lod_ms=1000):
         return f'{self.identity(source)}-t{max(0,int(source_ms))}-{width}x72-lod{int(lod_ms)}-srgb3'
@@ -265,6 +262,7 @@ class FilmstripCache(QObject):
         import av
         self.root.mkdir(parents=True,exist_ok=True)
         containers=OrderedDict()
+        container_leases={}
         decoders={}
         try:
             while True:
@@ -296,6 +294,9 @@ class FilmstripCache(QObject):
                 job_started=time.perf_counter()
                 try:
                     destination=self.root/(key+'.jpg')
+                    if destination.is_file():
+                        from .storage_service import register_cache
+                        register_cache(destination, 'thumbnail', producer='video_filmstrip', source=job[4])
                     image=QImage(str(destination)) if priority<3 and destination.is_file() else QImage()
                     if not image.isNull():
                         metadata=destination.with_suffix('.json')
@@ -314,7 +315,14 @@ class FilmstripCache(QObject):
                     if handle_key not in containers:
                         # 3s 开窗余量：波形全量解码与缩略图常共用优化副本，
                         # 冷盘/IO 风暴下 1s 超时曾把整批可视格打成永久失败。
-                        container=av.open(decode_source,timeout=(3.,3.))
+                        from .storage_service import cache_lease
+                        lease=cache_lease(decode_source);lease.__enter__()
+                        try:
+                            container=av.open(decode_source,timeout=(3.,3.))
+                        except Exception:
+                            lease.__exit__(None,None,None)
+                            raise
+                        container_leases[handle_key]=lease
                         stream=container.streams.video[0]
                         # Full-frame decoding is required for dense subsecond
                         # samples; frame threading avoids serial slice-only H264.
@@ -326,6 +334,7 @@ class FilmstripCache(QObject):
                         while len(containers)>4:
                             old_handle,old_container=containers.popitem(last=False)
                             old_container[0].close()
+                            container_leases.pop(old_handle).__exit__(None,None,None)
                             decoders.pop(old_handle,None)
                     containers.move_to_end(handle_key)
                     container,stream=containers[handle_key]
@@ -378,14 +387,20 @@ class FilmstripCache(QObject):
                         temporary=self.root/(key+'.part')
                         if image.save(str(temporary),'JPG',82):
                             temporary.replace(destination)
+                            from .storage_service import register_cache
+                            register_cache(destination, 'thumbnail', producer='video_filmstrip', source=job[4])
+                            from .storage_service import register_cache
+                            register_cache(destination,'thumbnail',source=source,producer='video_filmstrip')
                             destination.with_suffix('.json').write_text(json.dumps({'exact':exact,'requested_ms':job[2],'lod_ms':job[6],
                                 'pts_ms':round(float(frame.pts*frame.time_base)*1000-origin/1000)}),encoding='utf8')
+                            register_cache(destination.with_suffix('.json'), 'thumbnail', producer='video_filmstrip', source=job[4])
                 except Exception as exc:
                     self.metrics['errors']+=1
                     self._fail(key,exc)
                     if len(self.trace)<4096:self.trace.append(dict(error=str(exc),key=key,generation=generation))
         finally:
             for container,stream in containers.values():container.close()
+            for lease in container_leases.values():lease.__exit__(None,None,None)
 
     def paint(self,painter,block,source,left,right,source_in,source_out):
         painter.save();painter.setClipRect(block,Qt.ClipOperation.IntersectClip)

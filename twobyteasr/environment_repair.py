@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from twobyteasr import environment as env_module
 from twobyteasr.processes import run_hidden_subprocess
 
-_ROLE_ORDER = ("main", "moss", "firered_llm", "nemotron")
-_ROLE_LABELS = {"nemotron": "Nemotron", "main": "Main", "moss": "MOSS", "firered_llm": "FireRed LLM"}
+_ROLE_ORDER = ("main", "moss", "firered_llm")
+_ROLE_LABELS = {"main": "Main", "moss": "MOSS", "firered_llm": "FireRed LLM"}
 _POWERSHELL = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass"]
 
 

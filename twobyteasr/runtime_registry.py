@@ -27,12 +27,11 @@ from pathlib import Path
 
 from twobyteasr.runtime_paths import user_data_root
 
-RUNTIME_ROLES = ("main", "moss", "firered_llm", "nemotron", "glm_asr", "canary")
+RUNTIME_ROLES = ("main", "moss", "firered_llm", "glm_asr", "canary")
 
 _ROLE_VENV_NAMES = {
     "canary": ".venv-canary",
     "glm_asr": ".venv-glm-asr",
-    "nemotron": ".venv-nemotron",
     "main": ".venv-main",
     "moss": ".venv-moss",
     "firered_llm": ".venv-firered-llm",
@@ -47,7 +46,6 @@ _ROLE_DIRS = {
 _ROLE_ENV_OVERRIDES = {
     "canary": ("TWOBYTEASR_CANARY_PYTHON",),
     "glm_asr": ("TWOBYTEASR_GLM_ASR_PYTHON",),
-    "nemotron": ("TWOBYTEASR_NEMOTRON_PYTHON",),
     "main": ("TWOBYTEASR_MAIN_PYTHON", "TWOBYTEASR_MAIN_RUNTIME_PYTHON"),
     "moss": ("TWOBYTEASR_MOSS_PYTHON", "TWOBYTEASR_MOSS_RUNTIME_PYTHON"),
     "firered_llm": ("TWOBYTEASR_FIRERED_LLM_PYTHON",),
