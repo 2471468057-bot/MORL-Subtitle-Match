@@ -129,3 +129,9 @@ design-previews/
 
 # Finished local release attachments; never commit installers or QA data.
 /releases/
+
+# GPL compliance source tarballs - store as Release assets, not in working tree
+licenses/source-materials/**/*.tar.xz
+licenses/source-materials/**/*.tar.gz
+licenses/source-materials/**/*.tar.bz2
+
