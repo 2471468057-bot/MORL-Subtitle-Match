@@ -13,6 +13,8 @@
 
 2026-10-11 起，官网由 Cloudflare Pages 从 GitHub `main` 构建：根目录 `website`，构建命令 `npm run build`，输出目录 `product-build`，Node 22（`.node-version`）。`main` 上改动 `website/` 的提交会自动重新部署；提交信息带 `[skip ci]` 的不会触发 Cloudflare 构建，只想跳过 GitHub Actions 时用 `[skip actions]`。
 
+下载按钮走 Pages Functions（`functions/`，逻辑在 `server/latest-release.js`）：`/download/windows` 每次查 GitHub 最新一次正式发布（`releases/latest`，草稿和预发布不算），302 到其中的 `2ByteASR-Setup-<版本>.exe`；`/api/release` 给页面按钮显示版本和大小。发新版只要在 GitHub Publish，网站不用改。还没有正式发布时按钮显示“安装包即将发布”。GitHub API 限流时退回网页的 `releases/latest` 跳转找版本号。可在 Cloudflare 项目里加机密 `GITHUB_TOKEN`（只读）提高限额；仓库若改回私有，没有它就下载不了。
+
 GitHub 上只放构建需要的源码、脚本和测试；`review*/`、`product-review/`、`deliverables/`、`build/`、`src/`（旧版交互演示）这些审核材料和旧件只留在本地工作区。
 
 ## 页面结构

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/build-product.mjs",
     "preview": "node scripts/serve-product.mjs",
-    "test": "node --test --test-isolation=none tests/product-control.test.mjs tests/product-bundle.test.mjs tests/product-editing.test.mjs tests/product-site.test.mjs tests/product-i18n.test.mjs",
+    "test": "node --test --test-isolation=none tests/product-control.test.mjs tests/product-bundle.test.mjs tests/product-editing.test.mjs tests/product-site.test.mjs tests/product-i18n.test.mjs tests/site-download.test.mjs",
     "verify": "node scripts/verify-product.mjs",
     "fonts": "python -X utf8 scripts/subset-fonts.py",
     "i18n": "python -X utf8 scripts/extract_i18n.py"

@@ -3,7 +3,8 @@ import { Icon } from "./icons.jsx";
 import { Spk } from "./kit.jsx";
 import { HomeWindow } from "./home-window.jsx";
 import { StudioWindow } from "./studio.jsx";
-import { VERSION } from "./data.js";
+import { DOWNLOAD } from "./data.js";
+import { releaseVersion, useLatestRelease } from "./release.js";
 import { RECOGNIZED_CUTS } from "./demo.js";
 import { useReveal } from "./motion.js";
 import { COPY, rich } from "./i18n/index.jsx";
@@ -91,6 +92,8 @@ function ProductStage({ reduced }) {
 }
 
 export function Hero({ reduced }) {
+  // Straight to the newest installer; before any release, to the download section.
+  const rel = useLatestRelease();
   return (
     <section className="hero" id="top">
       <div className="wrap">
@@ -101,7 +104,7 @@ export function Hero({ reduced }) {
           <div className="hero-side">
             <p className="hero-lede">{rich(COPY.hero.lede)}</p>
             <div className="hero-actions">
-              <a className="btn primary" href="#download">
+              <a className="btn primary" href={rel?.available === false ? "#download" : DOWNLOAD}>
                 <Icon name="download" size={18} />
                 {COPY.hero.download}
               </a>
@@ -114,7 +117,7 @@ export function Hero({ reduced }) {
               {COPY.hero.meta.map((m) => (
                 <span key={m}>{m}</span>
               ))}
-              <span>{VERSION}</span>
+              <span>{releaseVersion(rel)}</span>
             </p>
           </div>
         </div>

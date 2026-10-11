@@ -9,6 +9,12 @@ export const asset = (p) => globalThis.window?.__PRODUCT_ASSETS?.[p] || p;
 export const BRAND = A + "brand-256.png";
 export const RELEASES = "https://github.com/NOTBAD314/2ByteASR/releases";
 export const ISSUES = "https://github.com/NOTBAD314/2ByteASR/issues";
+// The download routes are Pages Functions (website/functions); the offline
+// single-file pages use the deployed site.
+export const SITE = "https://2byteasr.pages.dev";
+const ONLINE = /^https?:$/.test(globalThis.location?.protocol || "");
+export const DOWNLOAD = (ONLINE ? "" : SITE) + "/download/windows";
+export const RELEASE_API = ONLINE ? "/api/release" : null;
 export const VERSION =
   catalog.version + (catalog.channel === "testing" ? COPY.testing : "");
 

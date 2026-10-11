@@ -122,10 +122,12 @@ export default {
   download: {
     title: "Get started with 2ByteASR",
     sub: "Windows x64 · {version}. The app is free; local models download as you need them.",
-    releases: "Downloads and release notes",
+    setup: "Download the Windows installer",
+    pending: "Installer coming soon",
+    releases: "Release notes and source",
     issues: "Report an issue",
     steps: [
-      ["Download and install", "Get the installer from the releases page and check its SHA256 and release notes."],
+      ["Download and install", "Use the button above to get the latest installer. Its SHA256 and release notes are on the release page."],
       ["Prepare models", "Download local models for the goal you pick, or enter an online API in Settings. The installer does not include every model, so the first setup needs an internet connection."],
       ["Import and check", "Start with a short video. Check the text, timing and speakers, then polish and export in Studio."],
     ],

@@ -246,6 +246,11 @@ svg {
   background: var(--berry-hi);
   border-color: var(--berry-hi);
 }
+.btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
 .btn.small {
   min-height: 36px;
   padding: 0 14px;

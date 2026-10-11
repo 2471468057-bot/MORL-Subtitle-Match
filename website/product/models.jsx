@@ -3,7 +3,8 @@ import { Icon } from "./icons.jsx";
 import { Mascot } from "./kit.jsx";
 import { ModelLogo, GoalList, PlanApp, usePlan } from "./plans.jsx";
 import { useReveal } from "./motion.js";
-import { ISSUES, MEDIA_FORMATS, RELEASES, ROLES, VERSION, catalog, sizeLabel } from "./data.js";
+import { DOWNLOAD, ISSUES, MEDIA_FORMATS, RELEASES, ROLES, catalog, sizeLabel } from "./data.js";
+import { bytesLabel, releaseVersion, useLatestRelease } from "./release.js";
 import { COPY, rich, t } from "./i18n/index.jsx";
 import "./models.css";
 
@@ -148,6 +149,11 @@ export function ModelsChapter({ reduced }) {
 
 export function Download() {
   const D = COPY.download;
+  // Version and size of the newest published installer; until a version is
+  // released the button says so instead of leading to an error page.
+  const rel = useLatestRelease();
+  const pending = rel?.available === false;
+  const size = bytesLabel(rel?.windows?.size);
   return (
     <section id="download" className="download" aria-labelledby="download-title">
       <div className="wrap">
@@ -155,13 +161,25 @@ export function Download() {
           <Mascot size={96} />
           <div>
             <h2 id="download-title">{rich(D.title)}</h2>
-            <p>{t(D.sub, { version: VERSION })}</p>
+            <p>{t(D.sub, { version: releaseVersion(rel) + (size ? ` · ${size}` : "") })}</p>
           </div>
           <div className="dl-actions">
-            <a className="btn primary" href={RELEASES} target="_blank" rel="noreferrer">
-              <Icon name="download" size={18} />
-              {D.releases}
-            </a>
+            {pending ? (
+              <span className="btn primary" aria-disabled="true">
+                {D.pending}
+              </span>
+            ) : (
+              <a className="btn primary" href={DOWNLOAD}>
+                <Icon name="download" size={18} />
+                {D.setup}
+              </a>
+            )}
+            {!pending && (
+              <a className="btn" href={rel?.notes || RELEASES} target="_blank" rel="noreferrer">
+                {D.releases}
+                <Icon name="external" size={15} />
+              </a>
+            )}
             <a className="btn" href={ISSUES} target="_blank" rel="noreferrer">
               {D.issues}
               <Icon name="external" size={15} />
