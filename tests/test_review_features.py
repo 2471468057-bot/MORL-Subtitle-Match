@@ -85,6 +85,43 @@ def test_first_run_guide_switches_presets_without_waiting_for_cuda_probe(monkeyp
     dialog.close()
 
 
+@pytest.mark.parametrize(
+    ("code", "gpu_name", "style", "phrase"),
+    [
+        # Fresh install: no PyTorch yet, but the card is there; one-click install brings CUDA PyTorch.
+        ("torch_missing", "NVIDIA GeForce RTX 4060 Laptop GPU", "statusGood", "一键安装会同时装好 CUDA 版 PyTorch"),
+        ("torch_missing", "", "statusBad", "未检测到 NVIDIA 显卡或驱动"),
+        ("cpu_torch", "NVIDIA GeForce RTX 4060 Laptop GPU", "statusBad", "当前设备还不能运行"),
+    ],
+)
+def test_first_run_guide_cuda_text_on_fresh_install(monkeypatch, code, gpu_name, style, phrase):
+    import gc
+
+    from twobyteasr import ui
+    from twobyteasr.hardware import CudaRuntimeStatus
+
+    app = QApplication.instance() or QApplication([])
+    # Earlier dialogs may still be cyclic garbage; collect them here on the GUI thread, not in
+    # whichever worker thread (e.g. a real CUDA probe's output pump) happens to trigger GC later.
+    gc.collect()
+    status = CudaRuntimeStatus(False, code, "", "", gpu_name)
+    monkeypatch.setattr(ui, "detect_cuda_runtime", lambda: status)
+    dialog = ui.GuidedSetupDialog()
+    deadline = time.monotonic() + 2
+    while dialog._cuda_status is None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert dialog._cuda_status is status
+    assert dialog.selected_backends() == dialog.PRESETS["quality"]
+    assert dialog.gpu_info.objectName() == style
+    assert phrase in dialog.gpu_info.text()
+    if gpu_name and code == "torch_missing":
+        assert gpu_name in dialog.gpu_info.text()
+    dialog.close()
+    dialog.deleteLater()
+    app.processEvents()
+
+
 def test_merge_media_paths_appends_and_dedupes(tmp_path):
     from twobyteasr.ui import _merge_media_paths
 

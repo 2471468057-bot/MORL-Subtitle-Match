@@ -1,5 +1,14 @@
 # 分发材料状态
 
+## 2026-10-13：0.7.0 现状（本节优先）
+
+0.7.0 按与 0.6.5 相同的结论公开分发（[GPL3_ROUTE.md 的 2026-10-11 节](GPL3_ROUTE.md)）：
+
+- 新增随包第三方组件是本机 MCP 服务的官方 SDK 依赖链（17 个发行包，另 8 个原离线 wheel 组件进入主程序），全部为宽松许可（MIT、BSD、Apache-2.0、PSF），已登记到[组件目录](COMPONENTS.md)第 605–621 条与[机器索引](component-index.json)，原许可文件在 `materials/frozen/`；新增可下载的日语 CTC 对齐模型登记在[模型表](MODELS.md)第 622 条。
+- Remotion/GSAP 仍由作者对自有代码的附加许可覆盖；PR #2 贡献者（CODE-A-DUCK）于 2026-10-13 对其贡献的代码（`renderer/populate-fonts.mjs` 与 `renderer/service.mjs` 的字体复制段落）给予同样的附加许可。Remotion 4.0.513、GSAP 3.15.0 与随附的 257 个 npm 包与 0.6.5 完全相同。
+- 对应源码：Release 附 `2ByteASR-Source-0.7.0.zip`，第三方固定源码沿用 0.6.5 的附件；仍缺的与 0.6.5 相同（gyan FFmpeg 9.0 的构建脚本、可能的补丁与部分链接库版本，见 [SOURCES.md](SOURCES.md)）。
+- 待核：`pytest` 被沿依赖链收入主程序（应在打包规则里排除）、`pywin32` 子项目范围、CTC 模型的基础模型与训练数据条款。
+
 ## 2026-10-11：0.6.5 现状（本节优先）
 
 0.6.5（r9，源码指纹 `88dd5077…66fbfb`，tag `v0.6.5`）的安装包和附件按 [GPL3_ROUTE.md 的 2026-10-11 节](GPL3_ROUTE.md) 的结论公开分发：
