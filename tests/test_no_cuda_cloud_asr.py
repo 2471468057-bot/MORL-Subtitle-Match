@@ -242,6 +242,17 @@ def test_mosi_keyterms_keep_spelling_and_official_limits():
     assert reasons == {'longer_than_30_characters', 'over_20_terms'}
 
 
+def mosi_form(raw: bytes) -> dict:
+    """Parts of an uploaded multipart body: name -> (filename, content type, bytes)."""
+    import email.parser
+    message = email.parser.BytesParser().parsebytes(
+        b'Content-Type: ' + raw.split(b'\r\n', 1)[0][2:].join([b'multipart/form-data; boundary="', b'"'])
+        + b'\r\n\r\n' + raw)
+    return {part.get_param('name', header='content-disposition'):
+            (part.get_filename(), part.get_content_type(), part.get_payload(decode=True))
+            for part in message.get_payload()}
+
+
 class MosiClient:
     """Fake MOSI HTTP client: records submissions, scripted poll statuses."""
 
@@ -256,6 +267,9 @@ class MosiClient:
         self.submit_error = submit_error
 
     def post(self, url, **kw):
+        # Like a real HTTP stack, the whole body is sent before any response
+        # (or a lost response) can happen.
+        kw['form'] = mosi_form(kw['data'].read())
         self.posts.append((url, kw))
         if self.submit_error:
             raise self.submit_error
@@ -283,10 +297,13 @@ def test_mosi_async_upload_poll_and_segment_rows(tmp_path):
     endpoint = mosi_endpoint(**keyterm_hints(['MOSS', 'S0pp']))
     rows = transcribe(np.zeros(32000, dtype=np.float32), endpoint, tmp_path, client=client, sleep=lambda *_: None)
     url, kw = client.posts[0]
+    form = {name: value for name, (_, _, value) in kw['form'].items()}
     assert url == 'https://api.mosi.cn/v1/audio/transcriptions'
-    assert kw['data']['model'] == 'moss-transcribe-diarize-pro' and kw['data']['diarize'] == 'true'
-    assert kw['data']['async'] == 'true' and json.loads(kw['data']['keyterms']) == ['MOSS', 'S0pp']
-    assert kw['files']['file'][0] == 'audio.wav' and kw['headers']['Authorization'] == 'Bearer sk-test'
+    assert form['model'] == b'moss-transcribe-diarize-pro' and form['diarize'] == b'true'
+    assert form['async'] == b'true' and json.loads(form['keyterms']) == ['MOSS', 'S0pp']
+    assert kw['form']['file'][:2] == ('audio.wav', 'audio/wav') and form['file'][:4] == b'RIFF'
+    assert kw['headers']['Authorization'] == 'Bearer sk-test'
+    assert kw['headers']['Content-Length'] == str(len(kw['data']))
     assert [row['speaker'] for row in rows] == ['API_S01', 'API_S02']
     assert all(row['timestamp_source'] == 'mosi_native_sentence' and row['timing_precision'] == 'segment'
                for row in rows)
@@ -308,6 +325,125 @@ def test_mosi_lost_upload_response_is_never_resubmitted(tmp_path):
             transcribe(np.zeros(16000, dtype=np.float32), mosi_endpoint(), tmp_path, client=client)
         assert error.value.category == 'submission_uncertain'
     assert len(client.posts) == 1
+
+
+def test_mosi_interrupted_upload_is_uploaded_again_without_confirmation(tmp_path):
+    """MOSI cannot accept a body whose closing boundary was never sent."""
+    import requests
+    from twobyteasr.mosi_asr import transcribe
+
+    class Interrupted(MosiClient):
+        def post(self, url, **kw):
+            kw['data'].read(1000)
+            raise requests.exceptions.ConnectionError('write operation timed out')
+
+    interrupted = Interrupted()
+    with pytest.raises(ASRProtocolError) as error:
+        transcribe(np.zeros(16000, dtype=np.float32), mosi_endpoint(), tmp_path, client=interrupted)
+    assert error.value.category == 'upload_interrupted' and '不会计费' in str(error.value)
+    assert error.value.problem.category == 'network'
+    events, healthy = [], MosiClient()
+    rows = transcribe(np.zeros(16000, dtype=np.float32), mosi_endpoint(), tmp_path, client=healthy,
+                      sleep=lambda *_: None, progress=lambda state, *_: events.append(state))
+    assert rows and len(healthy.posts) == 1 and 'retry_incomplete_upload' in events
+    assert list(tmp_path.rglob('previous-task-*.json'))
+
+
+def test_mosi_upload_is_not_bounded_by_the_connect_timeout(tmp_path, monkeypatch):
+    """2026-10-14: a 110 MB WAV died 15 s into the upload. requests sends the
+    body under the connect timeout; one HTTPS write of a whole in-memory body
+    had to finish within it. A loopback HTTPS server reading ~2 MB/s shows the
+    difference. Both socket buffers are fixed at 64 KB like a slow real link:
+    Windows loopback otherwise buffers megabytes (plain HTTP absorbs the whole
+    body) and waits for them to drain."""
+    import http.server
+    import ipaddress
+    import socket
+    import ssl
+    import threading
+    import time
+    from datetime import datetime, timedelta, timezone
+    import requests
+    import urllib3
+    pytest.importorskip('cryptography')
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    from twobyteasr import mosi_asr
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'isolated local fixture')])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]),
+                           critical=False)
+            .sign(key, hashes.SHA256()))
+    pem, private = tmp_path / 'ca.pem', tmp_path / 'key.pem'
+    pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                          serialization.NoEncryption()))
+
+    class Slow(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            remaining = int(self.headers['Content-Length'])
+            while remaining:
+                block = self.rfile.read(min(remaining, 65536))
+                if not block:
+                    return
+                remaining -= len(block)
+                time.sleep(.032)
+            self._reply({'id': 't1', 'task_id': 't1', 'status': 'PENDING', 'retry_after': 2})
+
+        def do_GET(self):
+            self._reply({'id': 't1', 'status': 'SUCCESS', 'text': '你好。',
+                         'segments': [{'speaker': 'S01', 'text': '你好。', 'start': 0.1, 'end': 0.6}]})
+
+        def _reply(self, payload):
+            data = json.dumps(payload).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    class Server(http.server.ThreadingHTTPServer):
+        def server_bind(self):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+            super().server_bind()
+
+    server = Server(('127.0.0.1', 0), Slow)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(pem, private)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f'https://127.0.0.1:{server.server_port}/v1'
+    audio = np.zeros(16000 * 90, dtype=np.float32)           # 2.9 MB WAV, about 1.5 s at this rate
+    monkeypatch.setattr(urllib3.connection.HTTPConnection, 'default_socket_options',
+                        [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1), (socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)])
+    monkeypatch.setattr(mosi_asr, 'UPLOAD_TIMEOUT', (1, 30))
+    monkeypatch.setenv('REQUESTS_CA_BUNDLE', str(pem))
+    monkeypatch.setenv('NO_PROXY', '127.0.0.1')
+    try:
+        if sys.platform == 'win32':
+            # The previous in-memory upload: one TLS write bounded by the connect
+            # timeout (how Windows sockets time it; other platforms may not reproduce it).
+            with pytest.raises(requests.exceptions.ConnectionError, match='write operation timed out'):
+                requests.post(base + '/audio/transcriptions', files={'file': ('a.wav', b'\0' * 2880000)},
+                              timeout=(1, 30), verify=str(pem))
+        started = time.monotonic()
+        rows = mosi_asr.transcribe(audio, mosi_endpoint(url=base), tmp_path / 'jobs', sleep=lambda *_: None)
+        assert time.monotonic() - started > 1.5                        # really slower than the timeout
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert len(rows) == 1 and rows[0]['text'].startswith('你好')
 
 
 def test_mosi_insufficient_credits_is_a_definitive_rejection(tmp_path):
@@ -450,6 +586,33 @@ def test_cloud_worker_runs_with_the_app_itself(monkeypatch, tmp_path):
     (tmp_path / 'asr_api_worker.py').write_text('', encoding='utf-8')
     command = cloud_api_worker.cloud_worker_command(tmp_path)
     assert command[1:] == ['-u', str(tmp_path / 'asr_api_worker.py')]
+
+
+def test_cloud_worker_reads_a_chinese_path_request_on_a_gbk_windows(monkeypatch):
+    """2026-10-14 MOSS Pro on a 1-hour recording: the frozen worker's pipes
+    used the ANSI code page (936) and ``企鹅带带北极熊\\`` swallowed a
+    backslash: ``Invalid \\escape: line 1 column 61 (char 60)``."""
+    import io
+    import json
+    from twobyteasr import cloud_api_worker
+    source = r'H:\record\Bilibili\Bilibili\企鹅带带北极熊\2026-10-14 16-30-16 洛克！开门大吉升级了！.flv'
+    request = json.dumps(dict(source_path=source, output='unused'), ensure_ascii=False).encode('utf-8')
+    with pytest.raises(json.JSONDecodeError, match='Invalid'):
+        json.loads(request.decode('gbk', errors='replace'))  # the failure this test guards against
+    stderr = io.BytesIO()
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(request), encoding='gbk', errors='replace'))
+    monkeypatch.setattr(sys, 'stdout', io.TextIOWrapper(io.BytesIO(), encoding='gbk'))
+    monkeypatch.setattr(sys, 'stderr', io.TextIOWrapper(stderr, encoding='gbk', write_through=True))
+    seen = {}
+
+    def fail(parsed):
+        seen.update(parsed)
+        raise RuntimeError('上传时网络中断 🎮')  # not encodable in GBK
+
+    monkeypatch.setattr(cloud_api_worker, 'run', fail)
+    assert cloud_api_worker.main() == 1
+    assert seen['source_path'] == source
+    assert '上传时网络中断 🎮' in stderr.getvalue().decode('utf-8')
 
 
 def test_aligner_worker_falls_back_to_cpu_float32():

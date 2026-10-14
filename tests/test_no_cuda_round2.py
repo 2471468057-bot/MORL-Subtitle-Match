@@ -65,6 +65,7 @@ class Mosi:
 
     def post(self, url, **kw):
         self.posts.append(url)
+        kw['data'].read()  # the whole body is sent before a response can be lost
         if self.error:
             raise self.error
         return Response({'id': 't1', 'task_id': 't1', 'status': 'PENDING', 'retry_after': 2})

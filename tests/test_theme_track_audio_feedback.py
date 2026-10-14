@@ -147,7 +147,7 @@ def test_three_fit_modes_produce_distinct_nonmatching_aspects():
 def test_dark_home_cards_follow_each_theme_and_grape_is_burgundy():
     from twobyteasr.home_studio_entry import studio_paper_colors
     from twobyteasr.ui_theme import THEMES
-    assert len({studio_paper_colors(t)[0] for t in THEMES.values()}) == 5
+    assert len({studio_paper_colors(t)[0] for t in THEMES.values()}) == len(THEMES)
     grape = THEMES['grape']
     assert QColor(grape.accent).red() > QColor(grape.accent).blue()
     assert QColor(grape.app_background).blue() > QColor(grape.app_background).red()

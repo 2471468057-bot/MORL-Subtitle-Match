@@ -42,7 +42,8 @@ def isolated_settings(tmp_path, monkeypatch):
 
 
 def test_theme_tokens_complete_and_valid():
-    assert set(THEMES) == {"warm", "plum", "lavender", "slate", "grape"}
+    assert set(THEMES) == {"warm", "plum", "lavender", "slate", "grape", "frost", "obsidian", "midnight",
+                           "verdant", "neon", "cinema", "graphite", "sand", "paper", "contrast"}
     for theme in THEMES.values():
         assert isinstance(theme, ThemeDefinition)
         for field in TOKEN_FIELDS:
@@ -57,7 +58,7 @@ def test_retheme_qss_covers_every_theme():
     for key, theme in THEMES.items():
         token_values = {
             value.lower() for value in theme.__dict__.values() if isinstance(value, str)
-        }
+        } | {theme.text_on_accent.lower(), theme.on_vivid.lower()}  # ink on accent / status fills
         for name, qss in (("studio", STUDIO_QSS), ("secondary", SECONDARY_SURFACE_QSS), ("app", APP_QSS)):
             remapped = retheme_qss(qss, theme)
             leftovers = {
