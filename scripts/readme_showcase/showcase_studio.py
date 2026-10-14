@@ -20,7 +20,7 @@ import traceback
 REPO = Path(__file__).resolve().parents[2]
 # Names typed into the speaker manager per UI language (2026-10-14: neutral
 # host/teammate names to match the test-card sample).
-SPEAKER_NAMES = {'zh': ('主播', '队友'), 'en': ('Host', 'Teammate'), 'ja': ('配信者', '相方')}
+SPEAKER_NAMES = {'zh': ('主播', '队友'), 'en': ('Host', 'Teammate'), 'ja': ('配信者', '相方'), 'ko': ('스트리머', '팀원')}
 BASE = Path(os.environ.get('README_SHOWCASE_DIR') or Path(__file__).resolve().parents[2] / 'tmp' / 'readme-showcase').resolve()
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
