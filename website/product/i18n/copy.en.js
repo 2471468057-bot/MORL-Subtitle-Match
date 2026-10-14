@@ -123,6 +123,8 @@ export default {
     title: "Get started with 2ByteASR",
     sub: "Windows x64 · {version}. The app is free; local models download as you need them.",
     setup: "Download the Windows installer",
+    mac: "Download for Mac",
+    macNote: "**Apple silicon (M series) on macOS 15 or later only**, experimental. Not notarized by Apple: the first time, Control-click the app and choose Open. If macOS still blocks it, click Open Anyway in System Settings › Privacy & Security.",
     pending: "Installer coming soon",
     releases: "Release notes and source",
     issues: "Report an issue",

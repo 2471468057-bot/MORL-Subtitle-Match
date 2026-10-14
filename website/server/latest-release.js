@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Finds the desktop app's newest published GitHub Release for the site's
-// download button (Cloudflare Pages Functions in ../functions). GitHub's
+// download buttons (Cloudflare Pages Functions in ../functions). GitHub's
 // releases/latest only returns a published, non-prerelease release, so drafts
 // are never served.
 //
@@ -10,13 +10,20 @@
 
 export const DEFAULT_REPO = "NOTBAD314/2ByteASR";
 
-// Download name -> release attachment. The installer is named after the
-// version (2ByteASR-Setup-0.6.5.exe); `file` builds that name from a tag when
-// only the tag is known.
+// Download name -> release attachment. The installers are named after the
+// version (2ByteASR-Setup-0.7.1.exe, 2ByteASR-0.7.1-macos-arm64-Setup.dmg);
+// `file` builds that name from a tag when only the tag is known. `optional`
+// attachments are not in every release (the Mac build is experimental), so
+// that fallback first asks whether the file is there.
 export const ASSETS = {
   windows: {
     match: /^2ByteASR-Setup-[\w.+-]+\.exe$/i,
     file: (version) => `2ByteASR-Setup-${version}.exe`,
+  },
+  macos: {
+    match: /^2ByteASR-[\w.+-]+-macos-arm64-Setup\.dmg$/i,
+    file: (version) => `2ByteASR-${version}-macos-arm64-Setup.dmg`,
+    optional: true,
   },
 };
 
@@ -66,9 +73,21 @@ async function fromWeb(repo, fetchImpl) {
   const assets = {};
   for (const [name, spec] of Object.entries(ASSETS)) {
     const file = spec.file(version);
-    assets[name] = { name: file, size: null, url: base + encodeURIComponent(file), api: null };
+    const url = base + encodeURIComponent(file);
+    if (spec.optional && !(await attached(url, fetchImpl))) continue;
+    assets[name] = { name: file, size: null, url, api: null };
   }
   return { repo, tag: decoded, version, published: null, notes: `https://github.com/${repo}/releases/tag/${tag}`, assets };
+}
+
+// An attachment's download link redirects to the file; a missing one is 404.
+async function attached(url, fetchImpl) {
+  try {
+    const res = await fetchImpl(url, { method: "HEAD", redirect: "manual", headers: { "user-agent": UA } });
+    return res.status >= 300 && res.status < 400;
+  } catch {
+    return false;
+  }
 }
 
 // Newest published release, or null when there is none (or the repository is
@@ -100,16 +119,18 @@ export async function downloadUrl(asset, env = {}, fetchImpl = fetch) {
   return asset.url;
 }
 
-// What the page needs to label its button.
+// What the page needs to label its buttons. `available` follows the Windows
+// installer; `macos` is null when this release has no Mac build.
 export function summary(rel) {
   if (!rel) return { available: false };
-  const setup = rel.assets.windows;
+  const label = (a) => (a ? { name: a.name, size: a.size } : null);
   return {
-    available: Boolean(setup),
+    available: Boolean(rel.assets.windows),
     version: rel.version,
     tag: rel.tag,
     published: rel.published,
     notes: rel.notes,
-    windows: setup ? { name: setup.name, size: setup.size } : null,
+    windows: label(rel.assets.windows),
+    macos: label(rel.assets.macos),
   };
 }

@@ -123,6 +123,8 @@ export default {
     title: "开始使用兔白字幕",
     sub: "Windows x64 · {version}。软件免费，本地模型按需下载。",
     setup: "下载 Windows 安装包",
+    mac: "下载 Mac 版",
+    macNote: "**仅支持 Apple 芯片（M 系列）与 macOS 15 及以上**，实验支持。没有 Apple 公证：第一次打开请按住 Control 点按 App，选“打开”；仍被拦下时，到“系统设置 › 隐私与安全性”点“仍要打开”。",
     pending: "安装包即将发布",
     releases: "版本说明与源码",
     issues: "问题反馈",

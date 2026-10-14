@@ -14,6 +14,7 @@ export const ISSUES = "https://github.com/NOTBAD314/2ByteASR/issues";
 export const SITE = "https://2byteasr.pages.dev";
 const ONLINE = /^https?:$/.test(globalThis.location?.protocol || "");
 export const DOWNLOAD = (ONLINE ? "" : SITE) + "/download/windows";
+export const DOWNLOAD_MAC = (ONLINE ? "" : SITE) + "/download/macos";
 export const RELEASE_API = ONLINE ? "/api/release" : null;
 export const VERSION =
   catalog.version + (catalog.channel === "testing" ? COPY.testing : "");

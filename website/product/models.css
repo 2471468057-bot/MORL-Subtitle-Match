@@ -319,6 +319,29 @@
   flex-wrap: wrap;
   gap: 12px;
 }
+.dl-mac {
+  display: flex;
+  align-items: center;
+  gap: 14px 24px;
+  margin: 36px 0 0;
+  padding: 16px 22px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surf-1);
+}
+.dl-mac p {
+  margin: 0;
+  color: var(--tx-2);
+  font-size: 14.5px;
+  line-height: 1.75;
+}
+.dl-mac strong {
+  color: var(--tx);
+  font-weight: 500;
+}
+:lang(ja) .dl-mac strong {
+  font-weight: 600;
+}
 .dl-steps {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -384,6 +407,10 @@
   }
   .dl-head {
     grid-template-columns: 1fr;
+  }
+  .dl-mac {
+    flex-direction: column;
+    align-items: flex-start;
   }
   .models-search {
     margin-left: 0;

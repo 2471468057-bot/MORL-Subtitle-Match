@@ -3,7 +3,7 @@ import { Icon } from "./icons.jsx";
 import { Mascot } from "./kit.jsx";
 import { ModelLogo, GoalList, PlanApp, usePlan } from "./plans.jsx";
 import { useReveal } from "./motion.js";
-import { DOWNLOAD, ISSUES, MEDIA_FORMATS, RELEASES, ROLES, catalog, sizeLabel } from "./data.js";
+import { DOWNLOAD, DOWNLOAD_MAC, ISSUES, MEDIA_FORMATS, RELEASES, ROLES, catalog, sizeLabel } from "./data.js";
 import { bytesLabel, releaseVersion, useLatestRelease } from "./release.js";
 import { COPY, rich, t } from "./i18n/index.jsx";
 import "./models.css";
@@ -154,6 +154,8 @@ export function Download() {
   const rel = useLatestRelease();
   const pending = rel?.available === false;
   const size = bytesLabel(rel?.windows?.size);
+  // The Mac build is experimental: hidden only once the release is known to lack it.
+  const mac = !pending && rel?.macos !== null;
   return (
     <section id="download" className="download" aria-labelledby="download-title">
       <div className="wrap">
@@ -186,6 +188,15 @@ export function Download() {
             </a>
           </div>
         </div>
+        {mac && (
+          <div className="dl-mac">
+            <a className="btn" href={DOWNLOAD_MAC}>
+              <Icon name="download" size={18} />
+              {D.mac}
+            </a>
+            <p>{rich(D.macNote)}</p>
+          </div>
+        )}
         <ol className="dl-steps">
           {D.steps.map(([h, p], i) => (
             <li key={h} style={{ "--n": ["var(--violet)", "var(--apricot)", "var(--mauve)"][i] }}>

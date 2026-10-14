@@ -1,9 +1,14 @@
-// Download routes (Pages Functions) against a stubbed GitHub.
+// Download routes (Pages Functions) against a stubbed GitHub, and the built
+// pages' download links.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { downloadUrl, latestRelease, summary } from "../server/latest-release.js";
+import fs from "node:fs";
+import { ASSETS, downloadUrl, latestRelease, summary } from "../server/latest-release.js";
 import { onRequestGet as download, onRequestHead } from "../functions/download/[name].js";
 import { onRequestGet as releaseApi } from "../functions/api/release.js";
+import zh from "../product/i18n/copy.zh.js";
+import en from "../product/i18n/copy.en.js";
+import ja from "../product/i18n/copy.ja.js";
 
 const REPO = "NOTBAD314/2ByteASR";
 const asset = (name, size = 1) => ({
@@ -20,9 +25,12 @@ const RELEASE = {
     asset("2ByteASR-Source-0.6.5.zip"),
     asset("2ByteASR-Setup-0.6.5-fix-20261013.exe", 2),
     asset("2ByteASR-Setup-0.6.5.exe", 1009166375),
+    asset("2ByteASR-0.6.5-fix-1-macos-arm64-Setup.dmg", 3),
+    asset("2ByteASR-0.6.5-macos-arm64-Setup.dmg", 546572457),
     asset("SHA256SUMS.txt"),
   ],
 };
+const WINDOWS_ONLY = { ...RELEASE, assets: RELEASE.assets.filter((a) => !a.name.endsWith(".dmg")) };
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -52,12 +60,14 @@ async function withFetch(fetchImpl, fn) {
 const request = (path, lang = "zh-CN,zh;q=0.9") =>
   new Request(`https://2byteasr.pages.dev${path}`, { headers: { "accept-language": lang } });
 
-test("only the published latest release is asked for, and its own installer is picked", async () => {
+test("only the published latest release is asked for, and its own installers are picked", async () => {
   const gh = github({ [API]: () => json(RELEASE) });
   const rel = await latestRelease({}, gh.fetchImpl);
   assert.equal(gh.calls[0].url, API); // releases/latest never returns drafts or pre-releases
+  assert.equal(gh.calls.length, 1);
   assert.equal(rel.version, "0.6.5");
   assert.equal(rel.assets.windows.name, "2ByteASR-Setup-0.6.5.exe");
+  assert.equal(rel.assets.macos.name, "2ByteASR-0.6.5-macos-arm64-Setup.dmg");
   assert.deepEqual(summary(rel), {
     available: true,
     version: "0.6.5",
@@ -65,7 +75,19 @@ test("only the published latest release is asked for, and its own installer is p
     published: "2026-10-12T00:00:00Z",
     notes: RELEASE.html_url,
     windows: { name: "2ByteASR-Setup-0.6.5.exe", size: 1009166375 },
+    macos: { name: "2ByteASR-0.6.5-macos-arm64-Setup.dmg", size: 546572457 },
   });
+});
+
+test("the Mac and Windows patterns never pick each other's installer", () => {
+  const { windows, macos } = ASSETS;
+  for (const v of ["0.7.1", "0.8.0-rc.1", "1.0.0+fix"]) {
+    assert.ok(windows.match.test(windows.file(v)) && !macos.match.test(windows.file(v)), v);
+    assert.ok(macos.match.test(macos.file(v)) && !windows.match.test(macos.file(v)), v);
+  }
+  assert.equal(macos.file("0.7.1"), "2ByteASR-0.7.1-macos-arm64-Setup.dmg");
+  for (const other of ["2ByteASR-0.7.1-macos-x86_64-Setup.dmg", "2ByteASR-0.7.1-macos-arm64-Setup.dmg.sig", "2ByteASR-0.7.1-app-1cc2d3cbe544.zip"])
+    assert.ok(!macos.match.test(other) && !windows.match.test(other), other);
 });
 
 test("a release without an installer is not offered", async () => {
@@ -73,6 +95,14 @@ test("a release without an installer is not offered", async () => {
   const rel = await latestRelease({}, gh.fetchImpl);
   assert.equal(rel.assets.windows, undefined);
   assert.equal(summary(rel).available, false);
+  assert.equal(summary(rel).macos, null);
+});
+
+test("a release without the Mac build still offers Windows", async () => {
+  const rel = await latestRelease({}, github({ [API]: () => json(WINDOWS_ONLY) }).fetchImpl);
+  assert.equal(rel.assets.macos, undefined);
+  assert.equal(summary(rel).available, true);
+  assert.equal(summary(rel).macos, null);
 });
 
 test("when the API is rate limited the web redirect still finds the newest tag", async () => {
@@ -84,6 +114,27 @@ test("when the API is rate limited the web redirect still finds the newest tag",
   assert.equal(rel.version, "0.7.0");
   assert.equal(rel.assets.windows.url, `https://github.com/${REPO}/releases/download/v0.7.0/2ByteASR-Setup-0.7.0.exe`);
   assert.equal(gh.calls[1].init.redirect, "manual");
+  // GitHub could not be asked whether the Mac build is attached: no Mac button
+  assert.equal(rel.assets.macos, undefined);
+});
+
+test("the web fallback offers the Mac build only when its download link exists", async () => {
+  const DMG = `https://github.com/${REPO}/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg`;
+  const routes = (dmgStatus) => ({
+    [API]: () => json({ message: "API rate limit exceeded" }, 429),
+    [WEB]: () => new Response(null, { status: 302, headers: { location: `https://github.com/${REPO}/releases/tag/v0.7.1` } }),
+    [DMG]: () => new Response(null, { status: dmgStatus, headers: dmgStatus === 302 ? { location: "https://release-assets.githubusercontent.com/x" } : {} }),
+  });
+  const gh = github(routes(302));
+  const rel = await latestRelease({}, gh.fetchImpl);
+  assert.equal(rel.assets.macos.url, DMG);
+  const head = gh.calls.find((c) => c.url === DMG);
+  assert.equal(head.init.method, "HEAD");
+  assert.equal(head.init.redirect, "manual");
+  assert.deepEqual(summary(rel).macos, { name: "2ByteASR-0.7.1-macos-arm64-Setup.dmg", size: null });
+  const missing = await latestRelease({}, github(routes(404)).fetchImpl);
+  assert.equal(missing.assets.macos, undefined);
+  assert.ok(missing.assets.windows);
 });
 
 test("no published release (or a private repository without a token) means nothing to download", async () => {
@@ -133,15 +184,63 @@ test("/download/windows explains itself in the visitor's language before the fir
   assert.match(await down.text(), /coming soon/);
   const other = await download({ params: { name: "linux" }, env: {}, request: request("/download/linux") });
   assert.equal(other.status, 404);
+  const mac = await withFetch(gh.fetchImpl, () =>
+    download({ params: { name: "macos" }, env: {}, request: request("/download/macos", "en-US") }),
+  );
+  assert.equal(mac.status, 404);
+  assert.match(await mac.text(), /coming soon/);
+});
+
+test("/download/macos redirects to the newest Mac installer", async () => {
+  const res = await withFetch(github({ [API]: () => json(RELEASE) }).fetchImpl, () =>
+    download({ params: { name: "macos" }, env: {}, request: request("/download/macos") }),
+  );
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("location"), `https://github.com/${REPO}/releases/download/v0.6.5/2ByteASR-0.6.5-macos-arm64-Setup.dmg`);
+  assert.equal(res.headers.get("cache-control"), "no-store");
+});
+
+test("/download/macos says when the newest release has no Mac build", async () => {
+  const gh = github({ [API]: () => json(WINDOWS_ONLY) });
+  const zh = await withFetch(gh.fetchImpl, () =>
+    download({ params: { name: "macos" }, env: {}, request: request("/download/macos") }),
+  );
+  assert.equal(zh.status, 404);
+  const text = await zh.text();
+  assert.match(text, /<html lang="zh-CN">[\s\S]*这个版本没有 Mac 安装包[\s\S]*href="\/#download"/);
+  assert.doesNotMatch(text, /即将发布/);
+  const en = await withFetch(gh.fetchImpl, () =>
+    download({ params: { name: "macos" }, env: {}, request: request("/download/macos?lang=en") }),
+  );
+  assert.match(await en.text(), /No Mac installer in this version/);
+  // Windows is untouched by a missing Mac build
+  const win = await withFetch(gh.fetchImpl, () =>
+    download({ params: { name: "windows" }, env: {}, request: request("/download/windows") }),
+  );
+  assert.equal(win.status, 302);
 });
 
 test("/api/release labels the button, and says when GitHub could not be asked", async () => {
   const ok = await withFetch(github({ [API]: () => json(RELEASE) }).fetchImpl, () => releaseApi({ env: {} }));
-  assert.equal((await ok.json()).windows.size, 1009166375);
+  const body = await ok.json();
+  assert.equal(body.windows.size, 1009166375);
+  assert.equal(body.macos.size, 546572457);
   assert.match(ok.headers.get("cache-control"), /max-age=300/);
   const none = await withFetch(github({ [API]: () => json({}, 404) }).fetchImpl, () => releaseApi({ env: {} }));
   assert.deepEqual(await none.json(), { available: false });
   const down = await withFetch(github({}).fetchImpl, () => releaseApi({ env: {} }));
   assert.deepEqual(await down.json(), { available: null });
   assert.equal(down.headers.get("cache-control"), "no-store");
+});
+
+test("each language page links the Mac installer with its own note", () => {
+  const read = (p) => fs.readFileSync(new URL(p, import.meta.url), "utf8");
+  // esbuild writes non-ASCII text as \uXXXX escapes; decode before looking at characters.
+  const decode = (s) => s.replace(/\\u\{([0-9a-f]+)\}|\\u([0-9a-f]{4})/gi, (_, a, b) => String.fromCodePoint(parseInt(a || b, 16)));
+  for (const [file, copy] of [["product.js", zh], ["product-en.js", en], ["product-ja.js", ja]]) {
+    const js = decode(read(`../product-build/${file}`));
+    assert.ok(js.includes("/download/macos"), file);
+    assert.ok(js.includes(copy.download.mac) && js.includes(copy.download.macNote), file);
+    assert.match(copy.download.macNote, /macOS 15[\s\S]*Control/, file);
+  }
 });
