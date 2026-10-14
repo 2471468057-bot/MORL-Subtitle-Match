@@ -244,3 +244,61 @@ test("each language page links the Mac installer with its own note", () => {
     assert.match(copy.download.macNote, /macOS 15[\s\S]*Control/, file);
   }
 });
+
+// GitCode mirror (mainland China). 2026-10-14: github.com downloads failed on a
+// mainland line while GitCode served the same files at ~14 MB/s.
+const GITCODE_TAG = "https://api.gitcode.com/api/v5/repos/Notbad314/2ByteASR/releases/tags/v0.6.5";
+const GITCODE_FILE = "https://gitcode.com/Notbad314/2ByteASR/releases/download/v0.6.5/";
+const mirrored = (names, tag = "v0.6.5") => () =>
+  json({ tag_name: tag, assets: names.map((name) => ({ name, browser_download_url: GITCODE_FILE + name })) });
+const visitor = (path, country) => {
+  const req = request(path);
+  if (country) Object.defineProperty(req, "cf", { value: { country } });
+  return req;
+};
+const go = (routes, name, req) =>
+  withFetch(github(routes).fetchImpl, () => download({ params: { name }, env: {}, request: req }));
+
+test("visitors in mainland China get the identical installer from GitCode", async () => {
+  const routes = { [API]: () => json(RELEASE), [GITCODE_TAG]: mirrored(["2ByteASR-Setup-0.6.5.exe", "2ByteASR-0.6.5-macos-arm64-Setup.dmg"]) };
+  const win = await go(routes, "windows", visitor("/download/windows", "CN"));
+  assert.equal(win.status, 302);
+  assert.equal(win.headers.get("location"), GITCODE_FILE + "2ByteASR-Setup-0.6.5.exe");
+  const mac = await go(routes, "macos", visitor("/download/macos", "CN"));
+  assert.equal(mac.headers.get("location"), GITCODE_FILE + "2ByteASR-0.6.5-macos-arm64-Setup.dmg");
+  const elsewhere = await go(routes, "windows", visitor("/download/windows", "JP"));
+  assert.equal(elsewhere.headers.get("location"), `https://github.com/${REPO}/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe`);
+});
+
+test("?source= picks the mirror explicitly in either direction", async () => {
+  const routes = { [API]: () => json(RELEASE), [GITCODE_TAG]: mirrored(["2ByteASR-Setup-0.6.5.exe"]) };
+  const chosen = await go(routes, "windows", visitor("/download/windows?source=gitcode", "US"));
+  assert.equal(chosen.headers.get("location"), GITCODE_FILE + "2ByteASR-Setup-0.6.5.exe");
+  const github_ = await go(routes, "windows", visitor("/download/windows?source=github", "CN"));
+  assert.match(github_.headers.get("location"), /^https:\/\/github\.com\//);
+});
+
+test("a GitCode mirror that lags or fails never serves an old or missing file", async () => {
+  const gh = `https://github.com/${REPO}/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe`;
+  const older = await go({ [API]: () => json(RELEASE), [GITCODE_TAG]: mirrored(["2ByteASR-Setup-0.6.4.exe"], "v0.6.4") },
+    "windows", visitor("/download/windows", "CN"));
+  assert.equal(older.headers.get("location"), gh);
+  const missing = await go({ [API]: () => json(RELEASE), [GITCODE_TAG]: mirrored(["SHA256SUMS.txt"]) },
+    "windows", visitor("/download/windows", "CN"));
+  assert.equal(missing.headers.get("location"), gh);
+  const down = await go({ [API]: () => json(RELEASE) }, "windows", visitor("/download/windows", "CN"));
+  assert.equal(down.headers.get("location"), gh);
+  const head = await withFetch(github({ [API]: () => json(RELEASE), [GITCODE_TAG]: mirrored(["2ByteASR-Setup-0.6.5.exe"]) }).fetchImpl,
+    () => onRequestHead({ params: { name: "windows" }, env: {}, request: visitor("/download/windows", "CN") }));
+  assert.equal(head.headers.get("location"), GITCODE_FILE + "2ByteASR-Setup-0.6.5.exe");
+});
+
+test("each language page offers the GitCode links", () => {
+  const read = (p) => fs.readFileSync(new URL(p, import.meta.url), "utf8");
+  const decode = (s) => s.replace(/\\u\{([0-9a-f]+)\}|\\u([0-9a-f]{4})/gi, (_, a, b) => String.fromCodePoint(parseInt(a || b, 16)));
+  for (const [file, copy] of [["product.js", zh], ["product-en.js", en], ["product-ja.js", ja]]) {
+    const js = decode(read(`../product-build/${file}`));
+    assert.ok(js.includes("?source=gitcode"), file);
+    for (const key of ["mirror", "mirrorWindows", "mirrorMac"]) assert.ok(js.includes(copy.download[key]), `${file} ${key}`);
+  }
+});

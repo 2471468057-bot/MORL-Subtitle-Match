@@ -126,6 +126,9 @@ export default {
     mac: "Download for Mac",
     macNote: "**Apple silicon (M series) on macOS 15 or later only**, experimental. Not notarized by Apple: the first time, Control-click the app and choose Open. If macOS still blocks it, click Open Anyway in System Settings › Privacy & Security.",
     pending: "Installer coming soon",
+    mirror: "Visitors in mainland China download from the GitCode mirror automatically. You can also pick it directly:",
+    mirrorWindows: "Windows installer (GitCode)",
+    mirrorMac: "Mac (GitCode)",
     releases: "Release notes and source",
     issues: "Report an issue",
     steps: [

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // /download/windows, /download/macos -> that installer of the newest published
-// GitHub Release.
-import { ASSETS, downloadUrl, latestRelease } from "../../server/latest-release.js";
+// GitHub Release; visitors in mainland China (or ?source=gitcode) get the
+// identical file from the GitCode mirror when it carries that version.
+import { ASSETS, downloadUrl, gitcodeAsset, latestRelease, preferredSource } from "../../server/latest-release.js";
 
 const PENDING = {
   zh: ["安装包即将发布", "现在还没有公开的版本。请稍后再来，或先看看产品介绍。", "返回官网", "zh-CN", "/"],
@@ -44,9 +45,10 @@ export async function onRequestGet({ params, env, request }) {
   }
   const asset = rel?.assets[name];
   if (!asset) return pending(request, 404, name === "macos" && rel?.assets.windows ? NO_MAC : PENDING);
+  const mirror = preferredSource(request) === "gitcode" ? await gitcodeAsset(rel, name, env) : null;
   return new Response(null, {
     status: 302,
-    headers: { location: await downloadUrl(asset, env), "cache-control": "no-store" },
+    headers: { location: mirror ? mirror.url : await downloadUrl(asset, env), "cache-control": "no-store" },
   });
 }
 

@@ -15,6 +15,10 @@ export const SITE = "https://2byteasr.pages.dev";
 const ONLINE = /^https?:$/.test(globalThis.location?.protocol || "");
 export const DOWNLOAD = (ONLINE ? "" : SITE) + "/download/windows";
 export const DOWNLOAD_MAC = (ONLINE ? "" : SITE) + "/download/macos";
+// The same installers from the GitCode mirror. Visitors in mainland China are
+// sent there automatically; these links choose it explicitly.
+export const DOWNLOAD_CN = DOWNLOAD + "?source=gitcode";
+export const DOWNLOAD_MAC_CN = DOWNLOAD_MAC + "?source=gitcode";
 export const RELEASE_API = ONLINE ? "/api/release" : null;
 export const VERSION =
   catalog.version + (catalog.channel === "testing" ? COPY.testing : "");

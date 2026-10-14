@@ -119,6 +119,42 @@ export async function downloadUrl(asset, env = {}, fetchImpl = fetch) {
   return asset.url;
 }
 
+// GitCode carries every release file under the same tag and name (the release
+// script's `gitcode` step). Measured 2026-10-14 on a mainland line without a
+// proxy: github.com downloads failed outright, GitCode gave ~14 MB/s.
+export const GITCODE_REPO = "Notbad314/2ByteASR";
+
+// Visitors in mainland China get GitCode; ?source=gitcode|github overrides.
+export function preferredSource(request) {
+  const asked = new URL(request.url).searchParams.get("source");
+  if (asked === "gitcode" || asked === "github") return asked;
+  return request.cf?.country === "CN" ? "gitcode" : "github";
+}
+
+// The GitCode copy of `rel`'s attachment `name`, or null while GitCode does not
+// have that very tag and file (a mirror that lags never serves an old version).
+export async function gitcodeAsset(rel, name, env = {}, fetchImpl = fetch) {
+  const asset = rel?.assets?.[name];
+  if (!asset) return null;
+  const repo = env.GITCODE_REPO || GITCODE_REPO;
+  try {
+    const res = await fetchImpl(
+      `https://api.gitcode.com/api/v5/repos/${repo}/releases/tags/${encodeURIComponent(rel.tag)}`,
+      { headers: { accept: "application/json", "user-agent": UA }, cf: { cacheTtl: 300, cacheEverything: true } },
+    );
+    if (!res.ok) return null;
+    const mirror = await res.json();
+    if (mirror?.tag_name !== rel.tag || !(mirror.assets || []).some((a) => a.name === asset.name)) return null;
+    return {
+      name: asset.name,
+      size: asset.size,
+      url: `https://gitcode.com/${repo}/releases/download/${encodeURIComponent(rel.tag)}/${encodeURIComponent(asset.name)}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // What the page needs to label its buttons. `available` follows the Windows
 // installer; `macos` is null when this release has no Mac build.
 export function summary(rel) {

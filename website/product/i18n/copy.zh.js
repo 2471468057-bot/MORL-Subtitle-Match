@@ -126,6 +126,9 @@ export default {
     mac: "下载 Mac 版",
     macNote: "**仅支持 Apple 芯片（M 系列）与 macOS 15 及以上**，实验支持。没有 Apple 公证：第一次打开请按住 Control 点按 App，选“打开”；仍被拦下时，到“系统设置 › 隐私与安全性”点“仍要打开”。",
     pending: "安装包即将发布",
+    mirror: "在中国大陆会自动从 GitCode 国内镜像下载，也可以直接选：",
+    mirrorWindows: "Windows 安装包（GitCode）",
+    mirrorMac: "Mac 版（GitCode）",
     releases: "版本说明与源码",
     issues: "问题反馈",
     steps: [

@@ -126,6 +126,9 @@ export default {
     mac: "Mac 版をダウンロード",
     macNote: "**Apple シリコン（M シリーズ）・macOS 15 以降のみ**、実験的サポート。Apple の公証を受けていないため、初回は Control キーを押しながら App をクリックして「開く」を選んでください。それでも開けない場合は「システム設定 › プライバシーとセキュリティ」で「このまま開く」をクリックします。",
     pending: "インストーラーは近日公開",
+    mirror: "中国本土からは自動で GitCode ミラーからダウンロードします。直接選ぶこともできます：",
+    mirrorWindows: "Windows 版（GitCode）",
+    mirrorMac: "Mac 版（GitCode）",
     releases: "リリースノートとソース",
     issues: "不具合を報告",
     steps: [

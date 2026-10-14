@@ -15,6 +15,8 @@
 
 下载按钮走 Pages Functions（`functions/`，逻辑在 `server/latest-release.js`）：`/download/windows` 每次查 GitHub 最新一次正式发布（`releases/latest`，草稿和预发布不算），302 到其中的 `2ByteASR-Setup-<版本>.exe`；`/download/macos` 同理指向 `2ByteASR-<版本>-macos-arm64-Setup.dmg`（实验版，只支持 Apple 芯片）；`/api/release` 给页面按钮显示版本和大小。发新版只要在 GitHub Publish，网站不用改。还没有正式发布时按钮显示“安装包即将发布”；最新版本没附 Mac 安装包时页面不显示 Mac 按钮，`/download/macos` 说明这一版没有 Mac 版。GitHub API 限流时退回网页的 `releases/latest` 跳转找版本号，Mac 安装包再用一次 HEAD 确认确实存在。可在 Cloudflare 项目里加机密 `GITHUB_TOKEN`（只读）提高限额；仓库若改回私有，没有它就下载不了。
 
+**国内镜像（GitCode）**：中国大陆访客（Cloudflare 判定 `CN`）访问这两个下载地址时，若 GitCode 镜像 [`Notbad314/2ByteASR`](https://gitcode.com/Notbad314/2ByteASR) 的同一标签里有同名文件，就 302 到 GitCode；否则仍去 GitHub，所以镜像没同步好时不会给出旧版本。`?source=gitcode` / `?source=github` 可手动指定；下载区另有“国内下载（GitCode）”链接。镜像由桌面仓库的 `scripts/release_pipeline.py gitcode` 在每次 GitHub 发布后上传。2026-10-14 在大陆线路实测：GitHub 下载失败，GitCode 约 14 MB/s。
+
 GitHub 上只放构建需要的源码、脚本和测试；`review*/`、`product-review/`、`deliverables/`、`build/`、`src/`（旧版交互演示）这些审核材料和旧件只留在本地工作区。
 
 ## 页面结构
@@ -42,7 +44,7 @@ cd website
 npm install           # 也可以复用 ../renderer/node_modules 里的 esbuild 与 React
 npm run build         # 输出 product-build/；每次先清空
 node scripts/build-readme-scenes.mjs
-npm test              # 34 项
+npm test              # 38 项
 npm run preview       # 另开一个终端
 npm run verify        # Chrome / Edge 无头浏览器的真实点击检查，结果写到 ../tmp/product-page-verify
 ```

@@ -3,7 +3,7 @@ import { Icon } from "./icons.jsx";
 import { Mascot } from "./kit.jsx";
 import { ModelLogo, GoalList, PlanApp, usePlan } from "./plans.jsx";
 import { useReveal } from "./motion.js";
-import { DOWNLOAD, DOWNLOAD_MAC, ISSUES, MEDIA_FORMATS, RELEASES, ROLES, catalog, sizeLabel } from "./data.js";
+import { DOWNLOAD, DOWNLOAD_CN, DOWNLOAD_MAC, DOWNLOAD_MAC_CN, ISSUES, MEDIA_FORMATS, RELEASES, ROLES, catalog, sizeLabel } from "./data.js";
 import { bytesLabel, releaseVersion, useLatestRelease } from "./release.js";
 import { COPY, rich, t } from "./i18n/index.jsx";
 import "./models.css";
@@ -196,6 +196,18 @@ export function Download() {
             </a>
             <p>{rich(D.macNote)}</p>
           </div>
+        )}
+        {!pending && (
+          <p className="dl-mirror">
+            {D.mirror}{" "}
+            <a href={DOWNLOAD_CN}>{D.mirrorWindows}</a>
+            {mac && (
+              <>
+                {" · "}
+                <a href={DOWNLOAD_MAC_CN}>{D.mirrorMac}</a>
+              </>
+            )}
+          </p>
         )}
         <ol className="dl-steps">
           {D.steps.map(([h, p], i) => (
