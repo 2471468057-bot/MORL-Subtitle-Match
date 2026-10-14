@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "updated": "2026-10-09",
-  "source": "feature animations: HyperFrames HTML compositions rendered to animated WebP; screenshots: real desktop window captures, development build 2026-10-09",
-  "sample": "self-made side-scroller art + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
-  "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B, AI segmentation/proofreading off",
-  "edits": "screenshots: scale, rounded frame, palette encoding, crops; export.png has the local output path masked",
-  "total_bytes": 17072170,
+  "updated": "2026-10-14",
+  "source": "screenshots and razor/review clips: real window captures of the v0.7.1 source (same commit as the 0.7.1 installers), isolated profile, 2026-10-14; clips*.webp: HyperFrames illustration from 2026-10-09 with sample data; caption-effects.gif: sample works made with AI Subtitle Design, 2026-09-30",
+  "sample": "self-made test card + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
+  "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B on an RTX 5070 Ti, AI segmentation/proofreading off; 14 subtitles, 2 speakers",
+  "edits": "crops, scaling, rounded frames, two windows layered on a plain ground (hero*), palette PNG and WebP encoding; export.png has the local output path masked; no interface text or result redrawn",
+  "total_bytes": 8960175,
   "files": [
     {
       "path": "docs/assets/readme/caption-effects.gif",
@@ -41,67 +41,91 @@
     },
     {
       "path": "docs/assets/readme/completion.png",
-      "bytes": 90017,
+      "bytes": 87885,
       "width": 1760,
       "height": 1173,
       "frames": 1,
-      "sha256": "04dbd766ab4d55a29f76934e2f11e8605d5757c2bbb2ec652b001412b752b5c2"
+      "sha256": "e91f56224bbb90317948809317d987b504a6dad6a4599a7f37a0002559c5649e"
     },
     {
       "path": "docs/assets/readme/export.png",
-      "bytes": 89092,
+      "bytes": 64263,
       "width": 1760,
-      "height": 1173,
+      "height": 1100,
       "frames": 1,
-      "sha256": "65b104b5d2c2cfabe3f71467467c9bb7726b18fd832bf5db3229f8179d36ec6e"
+      "sha256": "aaf09e302caaf030f1e814c368ab323cc5a027faa3511de70b6acaba3c19c035"
     },
     {
       "path": "docs/assets/readme/glossary-en.png",
-      "bytes": 118654,
+      "bytes": 114907,
       "width": 1760,
-      "height": 1100,
+      "height": 1152,
       "frames": 1,
-      "sha256": "13e63699adbf96b4b0e87af346bbfd117662250e17bc9f16359ad5a669fdc286"
+      "sha256": "c490feb301671f0a26f2d2db474275264a4041a1a835e89119c0317ed9a071a3"
     },
     {
       "path": "docs/assets/readme/glossary-ja.png",
-      "bytes": 120238,
+      "bytes": 118919,
       "width": 1760,
-      "height": 1100,
+      "height": 1152,
       "frames": 1,
-      "sha256": "0994530b9dbcb9c2f3043eb1219e21b124ed5bf5575e7eaeaf4c0e684dfe8136"
+      "sha256": "70dae4b563945110cb336be14f298a4ed30b69cd0ceda0bbc8070f281de75413"
     },
     {
       "path": "docs/assets/readme/glossary.png",
-      "bytes": 118335,
+      "bytes": 135043,
       "width": 1760,
-      "height": 1173,
+      "height": 1274,
       "frames": 1,
-      "sha256": "6a17d58118a1b0e295888415beb0c4de445f8690e811e54745350821dc4d6b8e"
+      "sha256": "7904c9bf785240303229a5d2e444bf1dae5e950a62e27c436c5716305c78539a"
+    },
+    {
+      "path": "docs/assets/readme/hero-en.png",
+      "bytes": 220801,
+      "width": 2000,
+      "height": 1430,
+      "frames": 1,
+      "sha256": "4b26f291089bd671948b0cdfcbcdac1fd45f2bdba381cfc734d8bb1b6ce6c649"
+    },
+    {
+      "path": "docs/assets/readme/hero-ja.png",
+      "bytes": 219804,
+      "width": 2000,
+      "height": 1430,
+      "frames": 1,
+      "sha256": "5d0d7471f2a656a6dd6230cbeac389ade49ae01b48b6fe49864034098815452b"
+    },
+    {
+      "path": "docs/assets/readme/hero.png",
+      "bytes": 216857,
+      "width": 2000,
+      "height": 1430,
+      "frames": 1,
+      "sha256": "db6aa8a919c89d9c1c5649ae0bd6a6f1a2ad8b6dfc5c05cf4bdf0ef795cbe518"
     },
     {
       "path": "docs/assets/readme/home-en.png",
-      "bytes": 102521,
+      "bytes": 95369,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "8018d70abf944577b597560d3d2d832ef85d28611114979321a6830dbac8af87"
+      "sha256": "0769ddaa7456fa77e184b72a83094c295ed4669eeda5e6a685793902c9ed694b"
     },
     {
       "path": "docs/assets/readme/home-ja.png",
-      "bytes": 104970,
+      "bytes": 99492,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "c800a549f48b5552e76a1814aedf843fd5be46cc4ff0df02248f39897955f8ac"
+      "sha256": "2544756b70e7d6333ed14870fa4fe53eb6624fabf2817ddacf2fa41ab590657d"
     },
     {
       "path": "docs/assets/readme/home.png",
-      "bytes": 96088,
+      "bytes": 83720,
       "width": 1760,
       "height": 1173,
       "frames": 1,
-      "sha256": "0d3cd12aaf10ca563243085ed560770ce143c2f013a4ba0372b3d9275e1ba62a"
+      "sha256": "2f4e15b53b1bb9657f2511e3bd772b98276b38283a7cd0af5edb8cc4584d58cb"
     },
     {
       "path": "docs/assets/readme/icon.png",
@@ -113,195 +137,147 @@
     },
     {
       "path": "docs/assets/readme/progress.png",
-      "bytes": 170821,
+      "bytes": 168078,
       "width": 1760,
       "height": 1173,
       "frames": 1,
-      "sha256": "ae833826ddb65a9947d79a0713119ae8cb62355106058f53b684e32bf87f8e22"
+      "sha256": "3ca6565d9b3b5158c2dbac9d695b5d80dd95dfdf1dbf85b878030b485e5e518a"
     },
     {
       "path": "docs/assets/readme/razor-en.webp",
-      "bytes": 652052,
-      "width": 1100,
-      "height": 550,
-      "frames": 184,
-      "sha256": "ff56f7691dbef2ee605f843faac94be0e7a66b459e118a255749dec747155164"
+      "bytes": 288926,
+      "width": 1320,
+      "height": 396,
+      "frames": 22,
+      "sha256": "ea92f2bfe7f4037c303e9522636c99e1500285c71150e8334b57ca6bd12ac0be"
     },
     {
       "path": "docs/assets/readme/razor-ja.webp",
-      "bytes": 661954,
-      "width": 1100,
-      "height": 550,
-      "frames": 174,
-      "sha256": "10d56701fadb2e1347de4f1b1548448239a12f59c52da92c37ce71ee1e846a73"
+      "bytes": 282202,
+      "width": 1320,
+      "height": 396,
+      "frames": 22,
+      "sha256": "f6fb9fa885faed30400208307f0c39eff8085ea90c3b20ceb5a9f6c78f6460dc"
     },
     {
       "path": "docs/assets/readme/razor.webp",
-      "bytes": 655824,
-      "width": 1100,
-      "height": 550,
-      "frames": 188,
-      "sha256": "d26e8462aa37cb2465b3f5ace06e0aecd7d6ce0ddeefb2756df7f4e27cb4f3dd"
+      "bytes": 287180,
+      "width": 1320,
+      "height": 430,
+      "frames": 22,
+      "sha256": "af1552ebe6d1fe985e4f55bebb05bec0d8bc7dfb75499b8844a806a5ddcbc01c"
     },
     {
       "path": "docs/assets/readme/review-en.webp",
-      "bytes": 774924,
-      "width": 1100,
-      "height": 550,
-      "frames": 188,
-      "sha256": "e9e78e4d0dd0acf03f6bea75c974083aefacad007d09debb614d78c35641dbfe"
+      "bytes": 24184,
+      "width": 1180,
+      "height": 220,
+      "frames": 3,
+      "sha256": "611074d8539959504252a7fa502eed6ad69e2a053b174da330d03ef2abbce529"
     },
     {
       "path": "docs/assets/readme/review-ja.webp",
-      "bytes": 783992,
-      "width": 1100,
-      "height": 550,
-      "frames": 175,
-      "sha256": "064dac6349b16e5516148805d5c037ea10cc7bac8e549b2babaa7502486a9ef4"
+      "bytes": 35372,
+      "width": 1180,
+      "height": 220,
+      "frames": 4,
+      "sha256": "7d73ef2d6276a69fb752fbe655f982b12480ced100f3ddad6e363e1e9178c9d4"
     },
     {
       "path": "docs/assets/readme/review.webp",
-      "bytes": 805300,
-      "width": 1100,
-      "height": 550,
-      "frames": 180,
-      "sha256": "554b7364b1223800ed91c20da4d06237ed8653d1ddfd3ec6f11b7201f6dfab0b"
-    },
-    {
-      "path": "docs/assets/readme/roles-en.webp",
-      "bytes": 1055952,
-      "width": 1100,
-      "height": 550,
-      "frames": 237,
-      "sha256": "73be9d69b50ff74e1829f0598ef7ebf4f8b8a3ca96579c487742f0170004f41b"
-    },
-    {
-      "path": "docs/assets/readme/roles-ja.webp",
-      "bytes": 905956,
-      "width": 1100,
-      "height": 550,
-      "frames": 222,
-      "sha256": "bb7384baf5ccebd0d8e2f98a82b21b4c182f68bbff8bf44ee49a11383a409395"
-    },
-    {
-      "path": "docs/assets/readme/roles.webp",
-      "bytes": 962326,
-      "width": 1100,
-      "height": 550,
-      "frames": 244,
-      "sha256": "a120b3c52af4c88b1dcd4e0c85cf70dfce867f2b88c75a8e5e804aa5e935c244"
+      "bytes": 25154,
+      "width": 1005,
+      "height": 261,
+      "frames": 3,
+      "sha256": "42fadae37af19cf31e23ea08de191fed4f2677ddcfd46c66ab31feb16b94e5a1"
     },
     {
       "path": "docs/assets/readme/speakers-en.png",
-      "bytes": 85443,
-      "width": 1557,
-      "height": 1038,
+      "bytes": 88286,
+      "width": 1600,
+      "height": 1059,
       "frames": 1,
-      "sha256": "45e4973343074fecf925e5ca00de6f0fcff22ca38f43fca811b765f6ea9088ac"
+      "sha256": "2221fd32dc9bbfd2b7e6e9a50f205fd01a1269b092c377e20486b5a29d078b2f"
     },
     {
       "path": "docs/assets/readme/speakers-ja.png",
-      "bytes": 84238,
-      "width": 1557,
-      "height": 1038,
+      "bytes": 89090,
+      "width": 1600,
+      "height": 1059,
       "frames": 1,
-      "sha256": "62a1d9fc605328c2432f3010bee753d8bc18096382e10188891419bad0e6d669"
+      "sha256": "0b12093754422a6efd55a1a16fb36621e8d39309c59f8c318edcc88ba55ac86c"
     },
     {
       "path": "docs/assets/readme/speakers.png",
-      "bytes": 69735,
-      "width": 1540,
-      "height": 1027,
+      "bytes": 77136,
+      "width": 1600,
+      "height": 1059,
       "frames": 1,
-      "sha256": "a283bb13789b9c18ae705079772a1984fd7a0a4ec7aa3143baaf5b9368cac1d4"
+      "sha256": "a032e54b3402fbea18b01744e177abdc5e067e1f8f27d16ec58ea839bf5d7a97"
     },
     {
       "path": "docs/assets/readme/studio-en.png",
-      "bytes": 144810,
+      "bytes": 123675,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "34f4d16e92dbe6dac79f051af817a8ccb3ed7f3ed1eef46aef24bdc753d23951"
+      "sha256": "a0452a3d56288d6169954e6a2e87d48412694e4d9c101b147cd7f920d366ea4a"
     },
     {
       "path": "docs/assets/readme/studio-ja.png",
-      "bytes": 142710,
+      "bytes": 122629,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "95580ea2c8865807cee8a0a7d58d767037519dc62b430d83b68cf8f7cc769d8f"
+      "sha256": "79e5556b6c3621f3d15492d64c23abc0fd5da5f0a26dbdd61480f58504db403c"
     },
     {
       "path": "docs/assets/readme/studio.png",
-      "bytes": 149059,
+      "bytes": 128914,
       "width": 1760,
-      "height": 1173,
+      "height": 1100,
       "frames": 1,
-      "sha256": "58607cf2298a36d1f1d4bb7d6f85a62be4efc52ec6243af93fe9cec7cf4482c6"
-    },
-    {
-      "path": "docs/assets/readme/terms-en.webp",
-      "bytes": 937168,
-      "width": 1100,
-      "height": 550,
-      "frames": 157,
-      "sha256": "948da0971a74db2faf9687d8c5e8fc327138e2e94e0bdc2370ed3512137221a3"
-    },
-    {
-      "path": "docs/assets/readme/terms-ja.webp",
-      "bytes": 739534,
-      "width": 1100,
-      "height": 550,
-      "frames": 155,
-      "sha256": "fc5a3803a081170d42af67a662d49204cc51da032268bcc0f6bd60e796cdb7c3"
-    },
-    {
-      "path": "docs/assets/readme/terms.webp",
-      "bytes": 685090,
-      "width": 1100,
-      "height": 550,
-      "frames": 140,
-      "sha256": "fff6240ec0446a765c6e750826d649600250f9fc5230343f5129dde0e3e5842d"
+      "sha256": "74ba0f199152e736b17762789e46b8789301e632f39cae840fc6433997121e7d"
     },
     {
       "path": "docs/assets/readme/themes.png",
-      "bytes": 112955,
+      "bytes": 124747,
       "width": 1964,
       "height": 876,
       "frames": 1,
-      "sha256": "0116fca9f4a3a2e64ad0603ce11c9b1c9af2b4976bd08e7821373d590a2127b0"
+      "sha256": "1b717302992b6cfe200918cf65fbf829bc4bd88444c8bfb802d3d93647a1bbfb"
     },
     {
       "path": "docs/assets/readme/tracks.png",
-      "bytes": 50942,
+      "bytes": 41731,
       "width": 1760,
-      "height": 387,
+      "height": 330,
       "frames": 1,
-      "sha256": "a383773cd3f0c450b6bcc74f8b49ab64479aa0b0091e447475724eb40c737821"
+      "sha256": "b5c32b02378a1b41c2669fd5aa89eacabbb00aad84a616f60ef29fea8c33e7f4"
     },
     {
       "path": "docs/assets/readme/workshop-en.png",
-      "bytes": 182397,
+      "bytes": 176233,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "a77749f8fb936111a7b4009d0e824a00b0cf281a764364327da5e3524d510501"
+      "sha256": "ffd5784b3f23ed5326903c54e2ed4306a4161db54b64018b2811278c7956a603"
     },
     {
       "path": "docs/assets/readme/workshop-ja.png",
-      "bytes": 176142,
+      "bytes": 173914,
       "width": 1760,
       "height": 1100,
       "frames": 1,
-      "sha256": "0f66e3b39bc58b11f35ae053eabfb73da43d9782c7c5afef1dfdf3452a428aa3"
+      "sha256": "184d5c510696bb70c96713ea50498a65aa62c713f67e7b0165dcfa5d1b70b15c"
     },
     {
       "path": "docs/assets/readme/workshop.png",
-      "bytes": 167857,
+      "bytes": 170590,
       "width": 1760,
       "height": 1173,
       "frames": 1,
-      "sha256": "df342f858d31fbfdd70f4112f89e2b2e1bf50d1db6b9c3584dc6e8c5c341f560"
+      "sha256": "6b5199f1297444fe4bc9b38074e80c9ae8e17d5ec502f4682ecaa10d1ad4d64b"
     }
   ]
 }

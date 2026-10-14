@@ -1,53 +1,81 @@
 # 2ByteASR: a tour of the interface
 
-Everything below is the real app (development build, 2026-10-09). The sample is a self-made animation with two synthetic Chinese voices, recognised locally with MOSS + FireRedASR2-AED + Qwen3-ASR. How the assets were made is described in the [asset notes](assets/readme/README.md) (Chinese). Clips without "English UI" in the caption show the Chinese interface.
+Except for the last section, "Illustrations", everything below is the **real 0.7.1 interface**, captured on 2026-10-14 from the source of tag `v0.7.1`, running in an isolated test folder that never touched anyone's data. The sample is a self-made test card with two synthetic Chinese voices, transcribed locally with MOSS + FireRedASR2-AED + Qwen3-ASR (NVIDIA RTX 5070 Ti). Captions without "Chinese interface" show the English interface; the subtitles are Chinese because the speech is. How the assets were made is described in the [asset notes](assets/readme/README.md) (Chinese).
+
+[Back to the README](../README_EN.md) · [User guide](product-guide.en.md) · [中文](product-demo.zh-CN.md) · [日本語](product-demo.ja.md)
 
 ## Home and recognition
 
-![Home screen in English: media drop zone, the three recognition roles, AI smart segmentation and content terms](assets/readme/home-en.png)
+![Home screen in English: drop zone, recent project, the Primary transcription, Subtitle timeline and Text review cards, AI smart segmentation, Content & terms and the Start subtitles button](assets/readme/home-en.png)
 
-Home (English UI): drop in media, choose primary transcription, subtitle timeline and text review, then click "Start subtitles".
+Home: drop in media, check the recognition plan, and click "Start subtitles".
 
-![Progress page: current step, step log and the full run log](assets/readme/progress.png)
+![Progress page (Chinese interface): local recognition at step 6, Qwen reviewing the text, with each step's time and result on the left and the full run log on the right](assets/readme/progress.png)
 
-Progress: the current step, the time and result of each step, and the full run log.
+Progress (Chinese interface): the current step, each step's time and result, and the full run log.
 
-![Completion page: subtitle count, elapsed time, items to check and a subtitle preview](assets/readme/completion.png)
+![Completion page (Chinese interface): 14 subtitles, 2:03, one item to check, entry points to export subtitles, open Subtitle Studio or return, and a subtitle preview](assets/readme/completion.png)
 
-Completion: subtitle count, elapsed time, items to check and a full preview.
+Completion (Chinese interface): subtitle count, time taken, items to check and a preview. A finished run does not mean every line is confirmed; items to check can be reviewed in the Studio.
 
 ## Subtitle Studio
 
-![Subtitle Studio in English](assets/readme/studio-en.png)
+![Subtitle Studio in English: Captions List, video preview, Tools Panel, and a timeline with Host and Teammate subtitle tracks, a video track and the audio waveform](assets/readme/studio-en.png)
 
-Studio (English UI): captions list, video preview, style panel and a timeline with one track per speaker.
+The captions list, video preview, style panel and a timeline with one track per speaker share one window.
 
-![Speaker manager in English: names, colours and default styles](assets/readme/speakers-en.png)
+![Timeline close-up (Chinese interface): one subtitle track each for the host and the teammate, then the video track and the audio waveform](assets/readme/tracks.png)
 
-Speaker manager (English UI): names, colours and default styles.
+Speaker tracks (Chinese interface): each speaker's lines sit on their own track, which can be hidden or locked; drag a line to another track to give it to that speaker.
 
-![Timeline: each speaker on their own subtitle track](assets/readme/tracks.png)
+![Speaker Management in English: subtitle counts and total duration for Host and Teammate; name, colour and default style; merge speakers, assign selected subtitles, set as streamer, keep only this speaker's subtitles](assets/readme/speakers-en.png)
 
-Speaker tracks: each person's lines go on their own track automatically.
+Speaker Management: rename, set colours and default styles, merge speakers split by mistake; every bulk action can be undone at once.
+
+## Recorded in the app
+
+![Razor and merge: preview the merged length, then split along the per-character timing blocks; a cut inside a character keeps it in the first part](assets/readme/razor-en.webp)
+
+Merge two lines into one, then split it again between characters with the razor.
+
+![Review mode: MOSS and FireRed wrote 他, Qwen wrote 它; choosing Qwen's reading makes it current](assets/readme/review-en.webp)
+
+Review mode: readings of the same line side by side, with the differing character and its source model highlighted; one click applies one.
+
+## Term library and Model workshop
+
+![Term library in English: libraries per game, Add term, AI Web Update, Smart term building, Bulk import and the term table](assets/readme/glossary-en.png)
+
+Term library: correct spellings, aliases and common misrecognitions per game, with source and confirmation status. Some labels are still Chinese in the 0.7.1 English interface.
+
+![Model workshop in English: models listed by role with size, how they run and the reference index](assets/readme/workshop-en.png)
+
+Model workshop: choose models by role and see their size, how they run and the reference index (a relative guide, not an accuracy figure).
 
 ## Export
 
-![Encode finished: codec, resolution, bitrate and time taken](assets/readme/export.png)
+![Render complete page (Chinese interface): H.264, 1920×1080, 30 fps, 00:34, 1.0 MB, with the local output path covered](assets/readme/export.png)
 
-Encode finished (the local output path is masked).
+Render complete (Chinese interface). The local output path in the screenshot is covered.
 
-## Terms, models and themes
+## Five interface themes
 
-![Term library in English](assets/readme/glossary-en.png)
+![Subtitle Studio in the five themes (Chinese interface): Deep Grape, Warm Cream, Warm Night, Lavender, Slate](assets/readme/themes.png)
 
-Term library (English UI): terms, misrecognitions, sources and confirmation status per game.
+Deep Grape (default), Warm Cream, Warm Night, Lavender and Slate (Chinese interface).
 
-![Model workshop in English](assets/readme/workshop-en.png)
+## Illustrations (not recordings of the app)
 
-Model workshop (English UI): models per role with size, runtime and reference scores.
+### Highlight candidates
 
-![Five UI themes](assets/readme/themes.png)
+![Illustrative animation: a chat activity curve marks highlight moments, and a candidate is added to the edit](assets/readme/clips-en.webp)
 
-Five UI themes: Deep Grape / Burgundy, Warm Cream / Green, Warm Night / Cream, Lavender Workspace and Slate / Editorial.
+**This is an illustrative animation made on 2026-10-09**: the interface was simplified and redrawn from the software at the time, and the chat, candidate titles and reasons are sample data, not analysis results. The real feature is the Clip Assistant in the Studio; see the [README](../README_EN.md#find-highlight-candidates-in-stream-replays).
 
-[Back to the overview](../README_EN.md) · [User guide](product-guide.en.md)
+### AI Subtitle Design examples
+
+![Two sample works made with AI Subtitle Design: woodcut lettering and a CRT scoreboard, each entering, holding and exiting](assets/readme/caption-effects.gif)
+
+The woodcut and CRT scoreboard effects are **sample works** made with AI Subtitle Design (an asset from 2026-09-30), not built-in presets. AI Subtitle Design needs an AI service you configure; the ordinary font, outline and entrance/exit presets need no AI.
+
+[Back to the README](../README_EN.md) · [User guide](product-guide.en.md)
