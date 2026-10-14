@@ -36,6 +36,10 @@ DEFAULT_SETTINGS = {
         "oss_prefix": "asr-temp/",
         "oss_signed_url_ttl": 86400,
         "oss_auto_delete": True,
+        # 2026-10-13：录音文件识别的音频交接方式。auto = 已设置自己 OSS 的沿用 OSS，
+        # 其余用服务商官方暂存上传（48 小时后自动删除，不需要 OSS）；
+        # provider_temporary / own_oss 为用户明确选择。
+        "filetrans_upload": "auto",
         "firered_asr_backend": "local",
         "polish_transport": "openai_compatible",
         "polish_protocol": "auto",
@@ -73,6 +77,12 @@ DEFAULT_SETTINGS = {
         "use_ai_grouping": True,
         "unified_glm_processing": True,
         "prefer_arabic_numbers": True,
+        # 2026-10-13：新任务的字幕标点。original=保留原文（升级与默认都不改变输出），
+        # add=添加标点，none=不加标点。只影响显示与导出，识别文字原样保存。
+        "subtitle_punctuation": "original",
+        # 2026-10-14：已安装的日语 CTC 对齐模型是否用于日语识别的句首校正。
+        # 默认使用（与之前安装即自动使用一致）；模型工坊卡片「使用 / 取消使用」切换。
+        "use_ja_ctc_aligner": True,
     },
     "cache": {
         "force_refresh_polish": False,
@@ -295,13 +305,15 @@ def _merge_known_settings(defaults, payload):
             "funasr_nano",
             "glm_asr_nano",
             "canary_qwen",
+            "mlx_qwen3_asr",
+            "mlx_qwen3_asr_1_7b",
             "api",
             "none",
         },
         "qwen_asr_backend": {
             "api", "local", "firered_llm", "whisper_turbo", "sensevoice", "funasr_nano", "off"
         },
-        "firered_asr_backend": {"local", "qwen_aligner", "whisper_turbo", "paraformer", "off"},
+        "firered_asr_backend": {"local", "qwen_aligner", "mlx_qwen_aligner", "whisper_turbo", "paraformer", "off"},
     }
     for key, allowed in allowed_backends.items():
         value = result["models"][key]
@@ -310,7 +322,7 @@ def _merge_known_settings(defaults, payload):
             warnings.append(
                 f"models.{key} must be one of {sorted(allowed)}; default was used"
             )
-    allowed_language = {"recognition_language": {"auto", "zh", "ja"},
+    allowed_language = {"recognition_language": {"auto", "zh", "ja", "en"},
                         "output": {"original", "translation", "bilingual"},
                         "translation_script": {"zh-Hans", "zh-Hant"}}
     for key, allowed in allowed_language.items():
@@ -335,6 +347,7 @@ def _merge_known_settings(defaults, payload):
         "dashscope_filetrans",
         "dashscope_asr_flash",
         "spark_wss",
+        "mosi_transcriptions",
     }
     # 三十八轮：旧 openrouter multipart 通道已删除——存量配置迁移到字级通道
     # （同模型同端点，请求体升级为 JSON input_audio + word 粒度）。

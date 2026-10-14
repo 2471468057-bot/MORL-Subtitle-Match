@@ -25,19 +25,37 @@ def test_card_is_listed_under_the_timeline_tab_and_downloads_the_locked_model():
     assert not card.recommended
 
 
-def test_auto_used_model_shows_its_own_installed_text_instead_of_integrating():
-    page = SimpleNamespace(_removing=set())
-    text, enabled = ModelWorkshopPage._action_text(page, _card(), "downloaded")
-    assert text == "自动使用" and enabled is False
-    assert _card().auto_stage == "已安装 · 日语识别时自动使用"  # detail badge
+def test_installed_ctc_can_be_turned_off_and_on_by_the_user():
+    # 2026-10-14: the card offered a disabled 「自动使用」; the user wants to choose.
+    page = SimpleNamespace(_removing=set(), runtime_settings={"switches": {}})
+    assert ModelWorkshopPage._action_text(page, _card(), "downloaded") == ("取消使用", True)
+    page.runtime_settings["switches"]["use_ja_ctc_aligner"] = False
+    assert ModelWorkshopPage._action_text(page, _card(), "downloaded") == ("使用", True)
+    assert _card().auto_stage == "已安装 · 日语识别时自动使用"  # detail badge while on
     qwen = next(model for model in MODELS if model.key == "qwen_aligner")
     assert ModelWorkshopPage._action_text(page, qwen, "downloaded") == ("已下载 · 接入中", False)
 
 
+def test_ctc_switch_is_saved_and_recognition_skips_it_when_off():
+    from twobyteasr.settings import DEFAULT_SETTINGS, load_runtime_settings
+    assert DEFAULT_SETTINGS["switches"]["use_ja_ctc_aligner"] is True
+    memory = {"switches": {}}
+    ctc_alignment.set_enabled(False, memory)
+    assert memory["switches"]["use_ja_ctc_aligner"] is False
+    assert load_runtime_settings()[0]["switches"]["use_ja_ctc_aligner"] is False
+    assert ctc_alignment.enabled() is False
+    events = []
+    legacy = SimpleNamespace(RUNTIME_SETTINGS=memory, record_run_event=lambda name, **kw: events.append((name, kw)))
+    assert ctc_alignment.apply_to_runtime_cues([SimpleNamespace(start=0.0, end=1.0, text="テスト")], None, legacy) == []
+    assert events[-1][1].get("skipped") == "disabled_by_user"
+    ctc_alignment.set_enabled(True, memory)
+    assert ctc_alignment.enabled() is True and memory["switches"]["use_ja_ctc_aligner"] is True
+
+
 def test_auto_source_tries_the_pinned_modelscope_copy_then_hugging_face():
     plans = repository_download.planned_sources(SPEC, "AUTO")
-    assert [plan.mode for plan in plans] == ["MODELSCOPE", "HF_OFFICIAL"]
-    modelscope, official = plans
+    assert [plan.mode for plan in plans] == ["MODELSCOPE", "HF_OFFICIAL", "HF_MIRROR"]
+    modelscope, official, _mirror = plans
     # The ModelScope commit whose five files were checked against the locked SHA-256.
     assert modelscope.revision == "18a6b5970be543c1171a30e5f2889c63878acd2e"
     assert official.revision == SPEC["revision"]

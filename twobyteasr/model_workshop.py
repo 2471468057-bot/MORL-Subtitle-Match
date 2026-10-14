@@ -50,7 +50,7 @@ from twobyteasr.download_sources import (
     DownloadSourceError,
 )
 
-from twobyteasr.i18n import apply_ui_language, current_language, translate
+from twobyteasr.i18n import apply_ui_language, current_language, translate, ui_literal
 from twobyteasr.llm_config import resolve_api_key
 from twobyteasr.model_storage import ModelStorageDialog
 from twobyteasr.processes import popen_hidden_subprocess, run_hidden_subprocess
@@ -246,6 +246,20 @@ except Exception:  # pragma: no cover - data invariant guard
     raise
 
 
+def _auto_stage_enabled(model, runtime_settings) -> bool:
+    """Installed helpers run unless the user turned them off (2026-10-14)."""
+    if model.key == "ja_ctc_aligner":
+        from .ctc_alignment import enabled
+        return enabled(runtime_settings if isinstance(runtime_settings, dict) else None)
+    return True
+
+
+def _set_auto_stage_enabled(model, value: bool, runtime_settings) -> None:
+    if model.key == "ja_ctc_aligner":
+        from .ctc_alignment import set_enabled
+        set_enabled(value, runtime_settings)
+
+
 @dataclass(frozen=True)
 class WorkshopModel:
     key: str
@@ -285,6 +299,9 @@ class WorkshopModel:
     # Models a pipeline step uses automatically once installed (no role to
     # select): the installed state shows this text instead of "接入中".
     auto_stage: str = ""
+    # Host platforms the model can run on ("darwin-arm64"); empty = the
+    # existing per-platform rules apply.
+    platforms: tuple[str, ...] = ()
 
 
 MODELS = (
@@ -293,11 +310,26 @@ MODELS = (
         '协议接入；真实服务验证待完成',
         '单会话不超过 60 秒，长音频连续切块，动态修订替换。没有原生说话人能力；时间证据不足时由所选对齐模型补充。可保留已有字幕的说话人标签。',(),
         api_preset='spark_asr_v2',asr_capabilities=('ASR_TEXT',),adapter_bindings=(('primary','api'),('review','api'))),
-    WorkshopModel('qwen31_filetrans','api','Qwen Audio 3.1｜长音频转写','QF',
-        '长文件异步 · 保存 task_id 后继续查询','在线 · 百炼 Key + 用户 OSS','不占本地空间',
-        '协议接入；真实服务验证待完成',
-        'qwen-audio-3.1-asr-flash-filetrans：单文件不超过 12 小时；原生分离按官方建议限 2 小时单声道。临时对象与签名链接由你的 OSS 提供，结果成功持久化后清理。超时不会自动重新付费提交。',(),
+    # 2026-10-13: Qwen Cloud, the official international Qwen API (no workspace
+    # host). 2026-10-14 (ADR 0112): regular use needs the user's own OSS; the
+    # provider's temporary upload is a labelled trial only.
+    WorkshopModel('qwen_cloud_filetrans','api','Qwen Cloud｜录音文件识别','QC',
+        '长文件异步 · Qwen-Audio-3.1 或 Qwen3-ASR','在线 · Qwen Cloud API Key + 自己的 OSS','不占本地空间',
+        '不需要显卡与本地模型；正式使用需要自己的 OSS 私有存储',
+        'Qwen 官方国际站（home.qwencloud.com）的录音文件识别：Qwen-Audio-3.1 返回字/词级时间与说话人，Qwen3-ASR 返回字/词级时间（无说话人）。音频先传到你自己的 OSS 私有存储，用限时签名链接交给服务商，结果保存后删除；服务商临时上传只供试用（48 小时失效，官方说明勿用于生产）。单文件不超过 12 小时。Key 与阿里云百炼（中国站）的不能互换。超时不会自动重新付费提交。',(),
+        api_preset='qwen_cloud_filetrans',asr_capabilities=('ASR_TEXT','TIMESTAMP','DIARIZATION'),adapter_bindings=(('primary','api'),('review','api'))),
+    WorkshopModel('qwen31_filetrans','api','阿里云百炼｜录音文件识别','QF',
+        '长文件异步 · Qwen3-ASR 或 Qwen-Audio-3.1','在线 · 百炼 Key + API Host','不占本地空间',
+        '不需要显卡；正式使用需要自己的 OSS 私有存储',
+        '同一个百炼 Key 下两个模型：Qwen3-ASR-Flash（字/词级时间，无说话人，不支持热词）与 Qwen-Audio-3.1（字/词级时间与说话人，支持热词）。单文件不超过 12 小时；说话人区分官方建议 2 小时内。音频先传到你自己的 OSS 私有存储，用限时签名链接交给百炼，结果成功保存后删除；百炼临时上传只供试用（48 小时失效，官方说明勿用于生产）。超时不会自动重新付费提交。',(),
         api_preset='qwen31_filetrans',asr_capabilities=('ASR_TEXT','TIMESTAMP','DIARIZATION'),adapter_bindings=(('primary','api'),('review','api'))),
+    # 2026-10-13: cloud MOSS on the MOSI platform; independent of the local
+    # "moss" card (no shared settings, key or job state).
+    WorkshopModel('mosi_moss_pro','api','MOSS-Transcribe-Diarize Pro 云端','MP',
+        '云端多人转写 · 本地文件直传','在线 · 只需 MOSI API Key','不占本地空间',
+        '不需要显卡与本地模型；句段级时间',
+        'MOSI 平台的 moss-transcribe-diarize-pro：上传本次音频，返回文字、句段起止时间与说话人。单次最长 60 分钟，更长自动分段且各段说话人不合并。只有句段时间；需要按字剪辑时可再配本地对齐模型。按音频时长计费（官方价格页 ¥2.00/小时，2026-10-13 核对）。',(),
+        api_preset='mosi_moss_pro',asr_capabilities=('ASR_TEXT','TIMESTAMP','DIARIZATION'),adapter_bindings=(('primary','api'),)),
     WorkshopModel(
         "moss",
         "primary",
@@ -625,10 +657,10 @@ MODELS = (
         "Qwen3-ForcedAligner 0.6B",
         "Qa",
         "11 种语言 · 字/词级强制对齐",
-        "本地 · NVIDIA CUDA",
+        "本地 · NVIDIA CUDA 或 CPU（较慢）",
         "约 1.8 GB",
         "官方字词时间戳 · 已接入",
-        "Qwen 官方强制对齐模型，可根据 MOSS 已有文字生成字级或词级时间戳；可直接替换 FireRed 作为多语种时间轴后端。",
+        "Qwen 官方强制对齐模型，可根据已有文字（MOSS、本地或云端识别）生成字级或词级时间戳；可直接替换 FireRed 作为多语种时间轴后端。没有 NVIDIA 显卡时用 CPU 运行，结果相同但更慢。",
         (("字词对齐", 94), ("多语言", 76), ("运行速度", 72)),
         (),
         ("qwen_aligner",),
@@ -663,6 +695,78 @@ MODELS = (
         languages=("日本語",),
         asr_capabilities=("ALIGNMENT",),
         auto_stage="已安装 · 日语识别时自动使用",
+    ),
+    WorkshopModel(
+        "mlx_qwen3_asr_0_6b",
+        "primary",
+        "Qwen3-ASR 0.6B（Apple Silicon）",
+        "Qm",
+        "M 系列芯片 Mac 本地识别 · 不需要 NVIDIA",
+        "本地 · Apple Silicon（MLX）",
+        "约 1.0 GB",
+        "社区 MLX 移植 · 兔白尚未在真 Mac 上验收",
+        "Qwen3-ASR 0.6B 的 MLX 8-bit 版本（mlx-community），在 M 系列芯片的 Mac 上本地识别，不上传音频。它按语音段给出文字，不给字词时间，也不区分说话人；需要字词时间时，请同时安装“Qwen3 对齐模型（Apple Silicon）”。",
+        (("运行速度", 86), ("文字精度", 74), ("硬件友好", 92)),
+        (),
+        ("mlx_qwen3_asr_0_6b",),
+        "mlx_qwen3_asr_0_6b",
+        runtime_available=True,
+        logo_asset="qwen.png",
+        icon_name="fa5s.microchip",
+        icon_color="#ffffff",
+        icon_background="#6f63c9",
+        languages=("多语言", "中文", "日本語"),
+        asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
+        adapter_bindings=(("primary", "mlx_qwen3_asr"),),
+        platforms=("darwin-arm64",),
+    ),
+    WorkshopModel(
+        "mlx_qwen3_asr_1_7b",
+        "primary",
+        "Qwen3-ASR 1.7B（Apple Silicon）",
+        "QM",
+        "M 系列芯片 Mac 本地识别 · 更准、更慢",
+        "本地 · Apple Silicon（MLX）",
+        "约 2.5 GB",
+        "社区 MLX 移植 · 兔白尚未在真 Mac 上验收",
+        "Qwen3-ASR 1.7B 的 MLX 8-bit 版本（mlx-community），比 0.6B 更准但更慢、占用更多内存。只按语音段给文字，不给字词时间，不区分说话人。",
+        (("运行速度", 70), ("文字精度", 84), ("硬件友好", 80)),
+        (),
+        ("mlx_qwen3_asr_1_7b",),
+        "mlx_qwen3_asr_1_7b",
+        runtime_available=True,
+        logo_asset="qwen.png",
+        icon_name="fa5s.microchip",
+        icon_color="#ffffff",
+        icon_background="#5a4fb8",
+        languages=("多语言", "中文", "日本語"),
+        asr_capabilities=("ASR_TEXT", "LANGUAGE_ID"),
+        adapter_bindings=(("primary", "mlx_qwen3_asr_1_7b"),),
+        platforms=("darwin-arm64",),
+    ),
+    WorkshopModel(
+        "mlx_qwen_aligner",
+        "timeline",
+        "Qwen3 对齐模型（Apple Silicon）",
+        "Qa",
+        "字/词级强制对齐 · 不是语音识别模型",
+        "本地 · Apple Silicon（MLX）",
+        "约 1.3 GB",
+        "回执与 CUDA/CPU 版相同 · 尚未在真 Mac 上验收",
+        "Qwen3-ForcedAligner 0.6B 的 MLX 8-bit 版本：只给已有文字（本地或云端识别的结果）配上字/词时间，它本身不会把语音转成文字。对齐在本机进行，不上传音频。",
+        (("字词对齐", 92), ("多语言", 76), ("硬件友好", 90)),
+        (),
+        ("mlx_qwen_aligner",),
+        "mlx_qwen_aligner",
+        runtime_available=True,
+        logo_asset="qwen.png",
+        icon_name="fa5s.magic",
+        icon_color="#ffffff",
+        icon_background="#8a78df",
+        languages=("多语言", "11种"),
+        asr_capabilities=("ALIGNMENT",),
+        adapter_bindings=(("timeline", "mlx_qwen_aligner"),),
+        platforms=("darwin-arm64",),
     ),
     WorkshopModel(
         "funasr_nano",
@@ -709,6 +813,27 @@ def _adapter_backend(model: WorkshopModel, role: str) -> str | None:
     return dict(model.adapter_bindings).get(role)
 
 
+MLX_DOWNLOAD_KEYS = frozenset({"mlx_qwen3_asr_0_6b", "mlx_qwen3_asr_1_7b", "mlx_qwen_aligner"})
+# MOSS / FireRed on the Apple GPU (2026-10-14): prepared by
+# macos_model_prepare.prepare_local; an Intel Mac has no Apple GPU.
+MAC_GPU_DOWNLOAD_KEYS = frozenset({"moss", "firered_aed"})
+MAC_GPU_INSTALL_KEYS = frozenset({"moss", "firered_vad", "speaker_embedding", "firered_aed"})
+MAC_GPU_MODE = "本地 · Apple 芯片 GPU（MPS）· 建议 16 GB 以上内存"
+
+
+def model_mode_text(model: WorkshopModel) -> str:
+    """How the model runs on this computer (the Windows text stays as written)."""
+    if sys.platform == 'darwin' and model.download_key in MAC_GPU_DOWNLOAD_KEYS:
+        return MAC_GPU_MODE
+    return model.mode
+
+
+def _host_platform_tag() -> str:
+    import platform
+    machine = platform.machine().lower()
+    return f"{sys.platform}-{ {'aarch64': 'arm64', 'amd64': 'x86_64'}.get(machine, machine) }"
+
+
 def _model_roles(model: WorkshopModel) -> tuple[str, ...]:
     return tuple(
         role
@@ -743,7 +868,7 @@ def _api_combo_label(models: dict) -> tuple[str, bool]:
     preset = ASR_API_PRESETS.get(provider, {})
     # 组合卡窄列：短服务商名 + 模型 id 最后一段（microsoft/mai-transcribe-2 →
     # OpenRouter · mai-transcribe-2），完整形态在 api tab 副标题显示。
-    label = str(preset.get("short") or preset.get("label") or provider)
+    label = translate(str(preset.get("short") or preset.get("label") or provider), current_language())
     ready = bool(read_asr_api_key(provider, str(models.get("qwen_asr_api_url", "") or ""))[0])
     short_model = model_id.rsplit("/", 1)[-1]
     text = f"{label} · {short_model}" if short_model else label
@@ -765,7 +890,7 @@ def _stars(score: int) -> str:
 
 
 CANONICAL_MODEL_ORDER = (
-    'spark_asr_v2','qwen31_filetrans',
+    'qwen_cloud_filetrans','spark_asr_v2','qwen31_filetrans','mosi_moss_pro',
     "moss",
     "firered",
     "qwen_local",
@@ -779,6 +904,9 @@ CANONICAL_MODEL_ORDER = (
     "funasr_nano",
     "qwen_aligner",
     "ja_ctc_aligner",
+    "mlx_qwen3_asr_0_6b",
+    "mlx_qwen3_asr_1_7b",
+    "mlx_qwen_aligner",
     "groq_api",
     "openai_api",
     "mai_latest",
@@ -930,7 +1058,7 @@ _TECHNICAL_PROFILES = {
     "qwen_aligner": {
         "purpose": "根据已有文字生成字级或词级强制对齐时间轴。",
         "strengths": "适合已有可靠初稿时精修字幕边界，并支持多语种对齐。",
-        "limits": "它不是从零转写模型；需要已有文字，并且本机运行依赖 CUDA。",
+        "limits": "它不是从零转写模型；需要已有文字。没有 NVIDIA CUDA 时用 CPU 运行，较慢。",
         "io": "输入音频加已有文本；输出字/词与音频时间边界的对齐结果。",
         "source": "Qwen3-ForcedAligner 官方模型卡。",
         "url": "https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B",
@@ -1052,7 +1180,7 @@ _TECHNICAL_PROFILES_EN = {
     "qwen_aligner": {
         "purpose": "Character- or word-level forced alignment from existing text.",
         "strengths": "Refines subtitle boundaries when a reliable draft already exists and supports multilingual alignment.",
-        "limits": "It is not a from-scratch transcriber: existing text is required, and local use depends on CUDA.",
+        "limits": "It is not a from-scratch transcriber: existing text is required. Without NVIDIA CUDA it runs on the CPU, more slowly.",
         "io": "Input: audio plus existing text. Output: character / word alignment time boundaries.",
         "source": "Qwen3-ForcedAligner official model card.",
     },
@@ -1096,7 +1224,7 @@ def model_task_badges(model: WorkshopModel) -> tuple[str, ...]:
     if languages:
         badges.append(str(languages))
     badges.append("在线 API" if model.api_preset else "本地")
-    return tuple(translate(text, current_language()) for text in dict.fromkeys(badges))[:5]
+    return tuple(ui_literal(text, current_language()) for text in dict.fromkeys(badges))[:5]
 
 
 def model_workflow(model: WorkshopModel) -> str:
@@ -2418,7 +2546,7 @@ class ModelCard(QFrame):
         meta_stack.setSpacing(3)
         size_row = QHBoxLayout()
         size_row.setContentsMargins(0, 0, 0, 0)
-        size_text = _install_size_label(model.size)
+        size_text = ui_literal(_install_size_label(model.size), current_language())
         self.size_label = PillLabel(size_text, "workshopSizeBadge")
         bind_text(self.size_label, '体积 {size_text}', property='accessibleName', size_text=size_text)
         self.size_label.setToolTip(SIZE_NOTE)
@@ -2703,6 +2831,18 @@ class _DownloadTitleBar(QFrame):
         super().mouseReleaseEvent(event)
 
 
+# Display names for download sources when an event carries only the internal mode.
+_SOURCE_NAMES = {'MODELSCOPE': 'ModelScope', 'HF_OFFICIAL': 'Hugging Face 官方', 'HF_MIRROR': 'HF 镜像（可能回源官方）'}
+
+# Plain-language reason shown when AUTO moves on to the next download source.
+_SOURCE_FAILURE_REASONS = {
+    'network_timeout': '连接超时', 'dns': '域名无法解析', 'connection': '连接中断', 'proxy': '代理无法连接',
+    'tls_certificate': '证书验证失败', 'http_access': '拒绝访问', 'source_unavailable': '没有该文件',
+    'rate_limited': '暂时限流', 'checksum': '文件校验未通过', 'invalid_response': '返回内容不正确',
+    'revision_incompatible': '版本与锁定不同', 'disk_space': '磁盘空间不足', 'permission': '没有写入权限',
+}
+
+
 class ModelDownloadDialog(QDialog):
     diagnostic_finished = Signal(object)
     completed = Signal(bool, str)
@@ -2762,12 +2902,20 @@ class ModelDownloadDialog(QDialog):
         title = QLabel(
             f"Preparing {self.display_name}"
             if language == "en"
-            else f"正在准备 {self.display_name}"
+            else ui_literal("正在准备 {name}", language).format(name=self.display_name)
         )
         title.setObjectName("workshopDetailTitle")
         layout.addWidget(title)
         note = QLabel("窗口会一直保留；可断点续传，不需要重新安装 2ByteASR。")
-        if sys.platform == 'darwin':
+        if sys.platform == 'darwin' and set(self.download_keys) <= MLX_DOWNLOAD_KEYS:
+            note.setText('Apple Silicon 本地模型（MLX）：首次准备会联网下载私有运行库（不含 PyTorch）与模型，'
+                         '完成后用自带的英文样本实际跑一次推理。社区 MLX 实现，兔白尚未在真机完成验收。')
+            note.setWordWrap(True)
+        elif sys.platform == 'darwin' and set(self.download_keys) <= MAC_GPU_INSTALL_KEYS:
+            note.setText('Apple 芯片 GPU（MPS）：首次准备会联网下载 PyTorch 运行库与模型，完成后在这台 Mac 上用自带样本实际跑一次，'
+                         '通过才启用。MOSS 与 FireRed 用的是共享内存，建议 16 GB 以上；内存较小时请先关闭其他程序。')
+            note.setWordWrap(True)
+        elif sys.platform == 'darwin':
             from .platform_macos import macos_copy
             note.setText(macos_copy(
                 '当前使用 SenseVoice CPU：模型 MPS 适配尚未验证。首次准备自动联网；取消后已校验资源保持。',
@@ -2843,6 +2991,8 @@ class ModelDownloadDialog(QDialog):
         self.start_button = QPushButton("开始下载")
         if sys.platform == 'darwin' and self.download_keys == ('sensevoice',):
             self.start_button.setProperty('platformPrepare', 'sensevoice-cpu')
+        elif sys.platform == 'darwin' and set(self.download_keys) <= MAC_GPU_INSTALL_KEYS:
+            self.start_button.setProperty('platformPrepare', 'mac-gpu')
         self.start_button.setObjectName("workshopPrimary")
         self.start_button.clicked.connect(self.start)
         actions.addWidget(self.start_button)
@@ -2923,13 +3073,21 @@ class ModelDownloadDialog(QDialog):
         if detached:
             self._finish_with_error(tr('模型外部目录已解除关联。请在模型存储管理中选择受管存储位置，或重新关联原目录后再下载；不会覆盖已解除关联的外部文件。'))
             return
+        if set(self.download_keys) & MLX_DOWNLOAD_KEYS and not _host_platform_tag() == 'darwin-arm64':
+            self._finish_with_error(tr('MLX 模型只能在 Apple Silicon（M 系列芯片）的 Mac 上使用；没有开始下载。'))
+            return
         if sys.platform == 'darwin':
-            if self.download_keys != ('sensevoice',):
+            mac_gpu = bool(self.download_keys) and set(self.download_keys) <= MAC_GPU_INSTALL_KEYS
+            if mac_gpu and _host_platform_tag() != 'darwin-arm64':
+                self._finish_with_error(tr('MOSS 与 FireRed 需要 Apple 芯片（M 系列）Mac 的 GPU；这台 Mac 没有，没有开始下载。'))
+                return
+            if (self.download_keys != ('sensevoice',) and not set(self.download_keys) <= MLX_DOWNLOAD_KEYS
+                    and not mac_gpu):
                 from .platform_macos import macos_copy
                 self._finish_with_error(macos_copy(
-                    '本次 macOS 实验仅支持 SenseVoice CPU；其他本地模型尚未完成原生适配。',
-                    'This macOS experiment supports SenseVoice CPU. Other local models are not yet adapted.',
-                    '今回の macOS 実験版は SenseVoice CPU のみ対応しています。他のローカルモデルは未対応です。'))
+                    '本次 macOS 实验支持 SenseVoice CPU、MLX、MOSS 与 FireRed；其他本地模型尚未完成原生适配。',
+                    'This macOS build supports SenseVoice CPU, MLX, MOSS and FireRed. Other local models are not yet adapted.',
+                    '今回の macOS 版は SenseVoice CPU・MLX・MOSS・FireRed に対応しています。他のローカルモデルは未対応です。'))
                 return
         elif os.name != "nt":
             self.log.appendPlainText(
@@ -2960,7 +3118,12 @@ class ModelDownloadDialog(QDialog):
         self.pause_button.setVisible(True)
         bind_text(self.pause_button, translate('暂停下载', language))
         if sys.platform == 'darwin':
-            self._start_macos_cpu()
+            if set(self.download_keys) <= MLX_DOWNLOAD_KEYS:
+                self._start_macos_mlx()
+            elif set(self.download_keys) <= MAC_GPU_INSTALL_KEYS:
+                self._start_macos_local()
+            else:
+                self._start_macos_cpu()
             return
         script = self.root / "scripts" / "download_models.ps1"
         powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
@@ -2994,6 +3157,54 @@ class ModelDownloadDialog(QDialog):
         self.process.start(program, arguments)
         if not self.process.waitForStarted(5000):
             self._finish_with_error("无法启动模型下载器。请运行“配置或修复 2ByteASR”后重试。")
+
+    def _start_macos_mlx(self):
+        from twobyteasr.runtime_paths import get_runtime_paths, user_data_root
+        from twobyteasr.processes import sanitized_child_environment
+        arguments = ['--macos-prepare-mlx', '--root', str(self.root), '--models',
+                     str(get_runtime_paths().model_root), '--keys', ','.join(self.download_keys),
+                     '--source', str(self.source_combo.currentData() or 'AUTO')]
+        program = sys.executable
+        if not getattr(sys, 'frozen', False):
+            arguments.insert(0, str(self.root / 'scripts/macos_launch.py'))
+        environment = QProcessEnvironment()
+        for key, value in sanitized_child_environment().items():
+            environment.insert(key, value)
+        environment.insert('PYTHONUTF8', '1')
+        environment.insert('PYTHONIOENCODING', 'utf-8')
+        environment.insert('_PYI_RESET_ENVIRONMENT', '1')
+        self.process.setProcessEnvironment(environment)
+        user_data_root().mkdir(parents=True, exist_ok=True)
+        self.process.setWorkingDirectory(str(user_data_root()))
+        self.log.appendPlainText('[模型工坊] 准备 Apple Silicon MLX 运行库与模型：' + '、'.join(self.download_keys))
+        self.process.start(program, arguments)
+        if not self.process.waitForStarted(5000):
+            self._finish_with_error('无法启动 MLX 准备进程；已有运行库和模型文件保持。')
+
+    def _start_macos_local(self):
+        """MOSS / FireRed: private PyTorch runtimes + locked models, checked on the Apple GPU."""
+        from twobyteasr.runtime_paths import get_runtime_paths, user_data_root
+        from twobyteasr.processes import sanitized_child_environment
+        arguments = ['--macos-prepare-local', '--root', str(self.root), '--models',
+                     str(get_runtime_paths().model_root), '--keys', ','.join(self.download_keys),
+                     '--source', str(self.source_combo.currentData() or 'AUTO')]
+        program = sys.executable
+        if not getattr(sys, 'frozen', False):
+            arguments.insert(0, str(self.root / 'scripts/macos_launch.py'))
+        environment = QProcessEnvironment()
+        for key, value in sanitized_child_environment().items():
+            environment.insert(key, value)
+        environment.insert('PYTHONUTF8', '1')
+        environment.insert('PYTHONIOENCODING', 'utf-8')
+        environment.insert('_PYI_RESET_ENVIRONMENT', '1')
+        self.process.setProcessEnvironment(environment)
+        user_data_root().mkdir(parents=True, exist_ok=True)
+        self.process.setWorkingDirectory(str(user_data_root()))
+        self.log.appendPlainText(tr('[模型工坊] 准备 Apple 芯片 GPU（MPS）运行库与模型：') + '、'.join(self.download_keys)
+                                 + tr('；首次需要联网下载运行库（约 1–3 GB）和模型，完成后会在这台 Mac 上实际试跑一次。'))
+        self.process.start(program, arguments)
+        if not self.process.waitForStarted(5000):
+            self._finish_with_error(tr('无法启动 Mac 准备进程；已有运行库和模型文件保持。'))
 
     def _start_macos_cpu(self):
         from twobyteasr.runtime_paths import get_runtime_paths, user_data_root
@@ -3059,6 +3270,27 @@ class ModelDownloadDialog(QDialog):
         bind_text(self.activity_status, '{state} · 已用 {value1} 秒 · 最后日志：{age}', state=state, value1=int(now - self._started_at), age=age)
 
     def _handle_progress_line(self, line: str):
+        state = self._download_state()
+        if line.startswith("[2BYTEASR_CACHE] "):
+            try:
+                payload = json.loads(line[len("[2BYTEASR_CACHE] "):])
+            except json.JSONDecodeError:
+                return
+            name = str(payload.get("file") or "")
+            state['done'][(state['model_seq'], name)] = int(payload.get("bytes") or 0)
+            state['note'] = tr('已沿用校验过的文件：{name}（不重新下载）', name=name)
+            state['note_kind'] = 'cache'
+            self.progress_status.setText("\n".join(item for item in (self._overall_progress_line(), self._source_detail_line()) if item))
+            return
+        if '次中断（已有进展' in line or line.lstrip().startswith('[恢复分片]'):
+            state['resumes'] += 1
+            state['note'] = tr('网络中断，已从断点续传（第 {count} 次），已下载的部分不会重下', count=state['resumes'])
+            return
+        if line.startswith('[重试] '):
+            state['resumes'] += 1
+            state['note'] = tr('来源暂时没有响应，稍后自动重试（第 {count} 次），已下载的部分保留', count=state['resumes'])
+            self.progress_status.setText("\n".join(item for item in (self._overall_progress_line(), self._source_detail_line()) if item))
+            return
         # Structured file marker emitted by downloaders: reveals the real filename immediately
         if line.startswith("[2BYTEASR_FILE] "):
             try:
@@ -3069,18 +3301,24 @@ class ModelDownloadDialog(QDialog):
             fsize = int(payload.get("size") or 0)
             idx = payload.get("index")
             tot = payload.get("total")
+            if fname and isinstance(idx, int):
+                state['file_key'] = (state['model_seq'], fname)
+                if state.get('note_kind') == 'cache':
+                    state.update(note='', note_kind='')  # the reuse note belonged to an earlier file
             if fname:
                 if not self._files_seen or self._files_seen[-1] != fname:
                     self._files_seen.append(fname)
                 self._current_file = fname
                 self._total_bytes_hint = fsize
+                # The downloader repeats each file with only name and size; the
+                # repository marker before it already set "file i / n".
                 if isinstance(idx, int) and idx > 0:
                     self._overall_file_index = idx
-                else:
+                elif 'size' not in payload:
                     self._overall_file_index = max(1, len(self._files_seen))
                 if isinstance(tot, int) and tot > 0:
                     self._overall_file_total = tot
-                else:
+                elif 'size' not in payload:
                     self._overall_file_total = max(self._overall_file_total, len(self._files_seen))
                 # Emit a log line for visibility
                 self.log.appendPlainText(f"正在下载：{fname}")
@@ -3094,11 +3332,34 @@ class ModelDownloadDialog(QDialog):
                 payload = json.loads(line[len(source_marker):])
             except json.JSONDecodeError:
                 return
-            label = payload.get("label") or payload.get("mode") or "下载源"
+            label = (payload.get("label") or _SOURCE_NAMES.get(str(payload.get("mode") or ""))
+                     or payload.get("mode") or "下载源")
             host = payload.get("host") or ""
             status = payload.get("status") or ""
             attempt = payload.get("attempt")
             total = payload.get("total")
+            # Events carrying a URL are the downloader's per-file attempts; only the
+            # repository-level events (no URL) say which source the model uses.
+            per_file = bool(payload.get('url'))
+            if per_file:
+                pass
+            elif status == 'trying':
+                if attempt == 1:
+                    state['model_seq'] += 1
+                state.update(source=str(label), host=str(host), attempt=int(attempt or 0), total=int(total or 0), note='')
+            elif status == 'failed':
+                state['failed'].append((str(label), str(payload.get('category') or '')))
+            elif status == 'selected':
+                state.update(source=str(label), host=str(host), verified=True,
+                             note=tr('全部文件已通过 SHA-256 校验，与锁定版本一致'))
+            if not per_file and status == 'trying' and attempt and int(attempt) > 1 and state['failed']:
+                previous, category = state['failed'][-1]
+                language = current_language()
+                reason = tr(_SOURCE_FAILURE_REASONS.get(category, '未完成'))
+                bind_text(self.progress_status, '{previous} 没有完成（{reason}），自动改试 {label}{host} · 第 {attempt}/{total} 个来源',
+                          previous=tr(previous), reason=reason, label=tr(str(label)),
+                          host=(f' ({host})' if language == 'en' else f'（{host}）') if host else '', attempt=attempt, total=total)
+                return
             host_bit = f"（{host}）" if host else ""
             language = current_language()
             if language == "en":
@@ -3163,7 +3424,18 @@ class ModelDownloadDialog(QDialog):
                 self.progress_status.setText(
                     "Downloading..." if language == "en" else line
                 )
-            elif "SHA-256" in line or "校验" in line:
+            elif line.startswith(('[工具] ', '[运行库] ', '[网络] ')):
+                # Runtime preparation (uv, private Python, packages) reports which
+                # source it is trying and why it moved on; those lines are written
+                # for people, so show them (Chinese UI) instead of a generic label.
+                detail = line.split('] ', 1)[1]
+                path = re.search(r'[A-Za-z]:\\', detail)
+                if path:  # command echoes and install paths are for the raw log only
+                    detail = detail[:path.start()].strip()
+                if detail and str(language).startswith('zh'):
+                    self.progress_status.setText(ui_literal(detail, language))
+            elif ("SHA-256" in line or "校验" in line) and self._phase in {
+                    'weights_downloading', 'downloading', 'files_verifying', 'weights_ready'}:
                 bind_text(self.progress_status, translate('正在校验模型文件完整性…', language))
             return
         try:
@@ -3182,6 +3454,9 @@ class ModelDownloadDialog(QDialog):
                 self._overall_file_total = int(payload["file_total"]) or self._overall_file_total
         except (TypeError, ValueError, json.JSONDecodeError):
             return
+        if state['file_key'] is not None:
+            done = total if payload.get('phase') == 'verify' and total else downloaded
+            state['done'][state['file_key']] = max(int(done), state['done'].get(state['file_key'], 0))
         self._update_real_progress_ui(downloaded, total, speed, phase=str(payload.get("phase", "download")), percent_hint=percent)
 
     def _update_real_progress_ui(self, downloaded: float, total: float, speed: float, *, phase: str, percent_hint: int | None = None):
@@ -3223,18 +3498,20 @@ class ModelDownloadDialog(QDialog):
             parts.append(
                 f"Downloading {fname}"
                 if language == "en"
-                else f"正在下载 {fname}"
+                else ui_literal("正在下载 {name}", language).format(name=fname)
             )
         if self._overall_file_total > 1:
             fi = max(1, self._overall_file_index or (len(self._files_seen) or 1))
             parts.append(
                 f"File {fi} / {self._overall_file_total}"
                 if language == "en"
-                else f"文件 {fi} / {self._overall_file_total}"
+                else ui_literal("文件 {index} / {total}", language).format(index=fi, total=self._overall_file_total)
             )
         if phase == "verify":
             bind_text(self.progress_status, translate('下载完成，正在校验 SHA-256 与固定版本…', language))
             return
+        overall_line = self._overall_progress_line()
+        detail_line = self._source_detail_line()
 
         size_part = ""
         if total and total > 0:
@@ -3267,29 +3544,79 @@ class ModelDownloadDialog(QDialog):
                 eta = (
                     f"About {secs//3600} h {(secs%3600)//60} min remaining"
                     if language == "en"
-                    else f"预计剩余 {secs//3600} 小时 { (secs%3600)//60 } 分"
+                    else ui_literal("预计剩余 {h} 小时 {m} 分", language).format(h=secs//3600, m=(secs%3600)//60)
                 )
             elif secs >= 60:
                 eta = (
                     f"About {secs//60} min {secs%60} sec remaining"
                     if language == "en"
-                    else f"预计剩余 {secs//60} 分 {secs%60} 秒"
+                    else ui_literal("预计剩余 {m} 分 {s} 秒", language).format(m=secs//60, s=secs%60)
                 )
             else:
                 eta = (
                     f"About {secs} sec remaining"
                     if language == "en"
-                    else f"预计剩余 {secs} 秒"
+                    else ui_literal("预计剩余 {s} 秒", language).format(s=secs)
                 )
 
+        if overall_line:
+            eta = ""  # the overall line carries the estimate for the whole model
         line = "  ·  ".join([p for p in [size_part, pct_part, spd_part, eta] if p])
         prefix = "  ".join(parts) if parts else (
-            "Downloading" if language == "en" else "下载中"
+            "Downloading" if language == "en" else ui_literal("下载中", language)
         )
         if line:
-            self.progress_status.setText(f"{prefix}\n{line}")
+            self.progress_status.setText("\n".join(item for item in (prefix, line, overall_line, detail_line) if item))
         else:
             bind_text(self.progress_status, prefix or translate('下载中…', language))
+
+    def _download_state(self) -> dict:
+        """Per-run download facts parsed from the installer's structured lines."""
+        state = getattr(self, '_dl', None)
+        if state is None or state.get('run') != self._started_at:
+            total = 0
+            try:
+                models = _load_lock(self.root).get('models', {})
+                total = sum(int((models.get(key) or {}).get('download_bytes') or 0) for key in self.download_keys)
+            except Exception:
+                total = 0
+            state = self._dl = dict(run=self._started_at, model_total=total, model_seq=0, file_key=None, done={},
+                                    source='', host='', attempt=0, total=0, failed=[], resumes=0,
+                                    verified=False, note='')
+        return state
+
+    def _overall_progress_line(self) -> str:
+        state = self._download_state()
+        total = state['model_total']
+        done = min(sum(state['done'].values()), total) if total else 0
+        if not total or not done:
+            return ''
+        percent = int(done * 100 / total)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(min(99, percent))
+        remain = ''
+        # Small config files finish before a speed is meaningful (a 1.6 MB file
+        # at 266 B/s gave "about 5337 hours" in the 2026-10-14 mainland run).
+        seconds = int((total - done) / self._speed) if self._speed and self._speed > 0 and total > done else -1
+        if self._total_bytes_hint >= 8 << 20 and 0 <= seconds < 48 * 3600:
+            remain = tr('剩余约 {h} 小时 {m} 分', h=seconds // 3600, m=(seconds % 3600) // 60) if seconds >= 3600 else (
+                tr('剩余约 {m} 分 {s} 秒', m=seconds // 60, s=seconds % 60) if seconds >= 60 else tr('剩余约 {s} 秒', s=seconds))
+        gib = 1024 ** 3
+        size = f'{done / gib:.2f} / {total / gib:.2f} GiB' if total >= gib else f'{done / 1024**2:.0f} / {total / 1024**2:.0f} MiB'
+        text = tr('整个模型 {size}（{percent}%）', size=size, percent=percent)
+        return f'{text}  ·  {remain}' if remain else text
+
+    def _source_detail_line(self) -> str:
+        state = self._download_state()
+        if not state['source']:
+            return state['note']
+        host = f" ({state['host']})" if state['host'] else ''
+        parts = [tr('来源：{label}', label=tr(state['source'])) + host]
+        if state['total'] > 1:
+            parts.append(tr('第 {attempt}/{total} 个来源', attempt=state['attempt'], total=state['total']))
+        if state['note']:
+            parts.append(state['note'])
+        return '  ·  '.join(parts)
 
     def _actionable_failure_message(self, exit_code: int) -> str:
         output = self.log.toPlainText()
@@ -3314,15 +3641,26 @@ class ModelDownloadDialog(QDialog):
                     continue
         if failures:
                 failure=failures[-1]
-                source_text=' → '.join(sources) if sources else '尚未请求权重源'
-                header=f"{self.model.name} · {source_text}（{'已尝试备援' if len(sources)>1 else '未尝试备援'}）\n"
+                if sources:
+                    tried=' → '.join(tr(_SOURCE_NAMES.get(mode, mode)) for mode in sources)
+                    header=f"{self.model.name} · {tried}（{'已尝试备援' if len(sources)>1 else '未尝试备援'}）\n"
+                elif failure.get('phase') in {'tools_preparing', 'interpreter_preparing', 'dependencies_installing'}:
+                    header=f"{self.model.name} · 运行环境准备阶段（尚未开始下载权重）\n"
+                else:
+                    header=f"{self.model.name} · 尚未请求权重源（未尝试备援）\n"
                 detail=str(failure.get('message') or failure.get('detail') or '').partition('\n')[0][:220]
                 category=failure.get('category','')
+                if category=='runtime_network':
+                    # A conflict, permission or disk problem also makes every source fail.
+                    if 'no solution found' in lowered or 'unsatisfiable' in lowered:category='dependency_conflict'
+                    elif 'os error 5' in lowered or 'access is denied' in lowered or '拒绝访问' in output:category='permission'
+                    elif 'no space left' in lowered or 'disk full' in lowered or 'os error 112' in lowered or '磁盘空间不足' in output:category='disk_space'
                 summaries={'permission':'准备目录不可写或文件被占用，请检查日志中的具体路径后重试。',
                     'disk_space':'磁盘空间不足，请为应用数据目录释放空间后重试。',
                     'http_access':'来源拒绝访问（401/403）。请检查该模型的授权要求或选择已验证来源。',
                     'source_unavailable':'锁定版本或文件不存在（404）。请复制诊断反馈，不要反复重下。',
                     'network_timeout':'来源连接或传输停滞超时。请重试或切换已验证来源。',
+                    'runtime_network':'运行环境（uv、Python、PyTorch 等）下载失败：官方来源和国内备用来源都没有连通。可以打开代理工具的 TUN（虚拟网卡）模式，或设置 HTTPS_PROXY 环境变量并重启程序后重试；已校验的文件会保留。',
                     'connection':'连接中断。已下载分片保留，请检查网络后重试。',
                     'dns':'来源域名无法解析。请检查当前网络并复制诊断。',
                     'proxy':'程序使用的代理无法连接。请检查下载诊断中的代理状态。',
@@ -3333,6 +3671,11 @@ class ModelDownloadDialog(QDialog):
                     'hardware_unsupported':'当前硬件无法执行此模型，已校验权重和运行库会保留。',
                     'dependency_conflict':'依赖版本冲突，请保留包名与版本日志；更换模型下载源不能解决此问题。'}
                 if not category and ('no solution found' in lowered or 'unsatisfiable' in lowered):category='dependency_conflict'
+                if (len(sources) > 1 and failure.get('phase') == 'weights_downloading'
+                        and category in {'network_timeout', 'connection', 'dns', 'proxy', 'tls_certificate', 'rate_limited'}):
+                    # AUTO already tried every source; "switch source" is not advice the user can act on.
+                    return header+tr('所有下载来源都没有连通。已下载并校验的部分会保留，稍后点“继续重试”会从断点继续。'
+                                     '如果一直失败：先确认这台电脑能正常打开网页再重试；仍不行时可开启代理工具的 TUN（虚拟网卡）模式后重试。')+'\n'+detail
                 if category in summaries:return header+summaries[category]+'\n'+detail
                 stage = {'tools_preparing':'工具准备失败', 'interpreter_preparing':'解释器准备失败', 'dependencies_installing':'依赖安装失败',
                          'weights_downloading':'权重下载或校验失败', 'model_loading':'模型加载失败',
@@ -5023,7 +5366,7 @@ class ModelWorkshopPage(QWidget):
             registry = scan_model_registry(install_root=Path(self.root))
         self._registry = registry
         self._installed = self._registry.installed_keys()
-        bind_text(self.available_badge, f'{self._available_count()} ' + ('models available' if language == 'en' else '个模型可用'))
+        bind_text(self.available_badge, f'{self._available_count()} ' + ('models available' if language == 'en' else ui_literal('个模型可用', language)))
         local_models = tuple(model for model in MODELS if model.install_keys)
         installed_count = sum(
             1
@@ -5067,6 +5410,8 @@ class ModelWorkshopPage(QWidget):
                 if state=='partial':badge_text='权重不完整'
                 if state=='unreadable':badge_text='目录无法读取'
                 if state=='platform_unverified':badge_text='当前平台未验证'
+                if state=='platform_unavailable' and (model.platforms or model.download_key in MAC_GPU_DOWNLOAD_KEYS):
+                    badge_text='仅限 Apple Silicon Mac'
                 card.set_state_badge(
                     translate(badge_text, language),
                     "ready"
@@ -5144,7 +5489,13 @@ class ModelWorkshopPage(QWidget):
 
     def _compute_model_state(self, model: WorkshopModel, role: str) -> str:
         models = self.runtime_settings.get("models", {})
-        if sys.platform == 'darwin' and model.download_key and model.download_key != 'sensevoice':
+        if model.platforms and _host_platform_tag() not in model.platforms:
+            return 'platform_unavailable'
+        mac_gpu = sys.platform == 'darwin' and model.download_key in MAC_GPU_DOWNLOAD_KEYS
+        if mac_gpu and _host_platform_tag() != 'darwin-arm64':
+            return 'platform_unavailable'
+        if (sys.platform == 'darwin' and model.download_key and model.download_key != 'sensevoice'
+                and not model.platforms and not mac_gpu):
             return 'platform_unavailable'
         if not model.available:
             return "planned"
@@ -5199,6 +5550,17 @@ class ModelWorkshopPage(QWidget):
         installed = bool(model.install_keys) and all(key in self._installed for key in model.install_keys)
         if not installed:
             return "missing"
+        if model.platforms:
+            # MLX models run in their own torch-free runtime (2026-10-13).
+            from .mlx_backend import runtime_python as mlx_runtime_python
+            if not mlx_runtime_python():
+                return 'runtime_missing'
+        if mac_gpu:
+            # Registered only after the readiness check ran on this Mac (prepare_local).
+            from .runtime_registry import resolve_runtime_python
+            roles = ('main', 'moss') if model.download_key == 'moss' else ('main',)
+            if not all(resolve_runtime_python(name, register=False) for name in roles):
+                return 'runtime_missing'
         if sys.platform == 'darwin' and model.download_key == 'sensevoice':
             from .environment import fast_preflight
             runtime_check = fast_preflight('main')
@@ -5243,6 +5605,8 @@ class ModelWorkshopPage(QWidget):
         if state=='platform_unverified':return '当前平台未验证',False
         if model.key in self._removing: return '正在永久删除…', False
         if state == 'platform_unavailable':
+            if model.platforms or model.download_key in MAC_GPU_DOWNLOAD_KEYS:
+                return '仅限 Apple Silicon Mac', False
             from .platform_macos import macos_copy
             return macos_copy('尚未适配 macOS', 'Not yet adapted to macOS', 'macOS 未対応'), False
         if state == 'partial': return '补齐缺失文件', True
@@ -5258,7 +5622,11 @@ class ModelWorkshopPage(QWidget):
         if state == "downloading":
             return "查看进度", True
         if state == "downloaded":
-            return ("自动使用" if model.auto_stage else "已下载 · 接入中"), False
+            if model.auto_stage:
+                # 2026-10-14: an installed helper (日语 CTC) is the user's to turn
+                # off and on, like any selected model.
+                return ("取消使用" if _auto_stage_enabled(model, self.runtime_settings) else "使用"), True
+            return "已下载 · 接入中", False
         if state == "configure":
             return "配置", True
         if state == "configured":
@@ -5424,7 +5792,7 @@ class ModelWorkshopPage(QWidget):
                 "Estimated additional download: " + (sizes or "No download needed")
             )
         else:
-            bind_text(self.download_estimate, '预计新增下载：{value0}', value0='、'.join(missing_sizes) if missing_sizes else tr('无需下载'))
+            bind_text(self.download_estimate, '预计新增下载：{value0}', value0=ui_literal('、'.join(missing_sizes)) if missing_sizes else tr('无需下载'))
 
     def _set_role(self, role: str):
         self.browser_role = role
@@ -5616,9 +5984,12 @@ class ModelWorkshopPage(QWidget):
         }[state]
         if state == 'platform_unavailable':
             badge = self._action_text(model,state)[0]
-        auto_ready = state == "downloaded" and bool(model.auto_stage)
+        auto_ready = (state == "downloaded" and bool(model.auto_stage)
+                      and _auto_stage_enabled(model, self.runtime_settings))
         if auto_ready:
             badge = model.auto_stage
+        elif state == "downloaded" and model.auto_stage:
+            badge = "已安装 · 已停用"
         self.detail_badge.setText(translate(badge, language))
         badge_tone = "ready" if state in {"selected", "installed", "configured"} or auto_ready else "missing"
         if state in {"downloaded", "downloading", "planned"} and not auto_ready:
@@ -5660,11 +6031,11 @@ class ModelWorkshopPage(QWidget):
         bind_text(self.detail_metric_section, translate('2ByteASR 参考指数', language) + ' · ' + _benchmark_scene_label(model_metric_scene(model, self._benchmark_scene), language))
         for bar, evidence in zip(self.capability_rows, detail_evidence):
             bar.set_evidence(evidence)
-        compatibility = translate(model.mode, language)
+        compatibility = translate(model_mode_text(model), language)
         if model.download_key:
             compatibility += "\n" + translate("自动来源先试 ModelScope，再试 Hugging Face 官方；HF 镜像可在下载窗口手动选择（可能回源官方）；可断点续传。", language)
             if model.auto_stage:
-                compatibility += f"\n{translate('安装后自动用于对应识别步骤，不需要选择，也不会替换现有后端。', language)}"
+                compatibility += f"\n{translate('安装后默认用于对应识别步骤；点「取消使用」停用，点「使用」恢复。不会替换现有后端。', language)}"
             elif not _runtime_role_available(model, self.browser_role):
                 compatibility += f"\n{translate('模型文件可先下载；当前角色适配尚未完成，不会替换现有后端。', language)}"
         elif model.api_preset:
@@ -5726,6 +6097,14 @@ class ModelWorkshopPage(QWidget):
         if state == "configure" and model.api_preset:
             self.api_target_role = effective_role
             self.api_preset_requested.emit(model.api_preset)
+            return
+        if state == "downloaded" and model.auto_stage:
+            try:
+                _set_auto_stage_enabled(model, not _auto_stage_enabled(model, self.runtime_settings),
+                                        self.runtime_settings)
+            except (OSError, RuntimeError, ValueError) as exc:
+                QMessageBox.warning(self, tr('无法保存设置'), str(exc))
+            self.refresh()
             return
         if state in {"selected", "installed", "configured"}:
             self._request_model_selection(model, state, role=effective_role)
@@ -6071,7 +6450,7 @@ class ModelWorkshopPage(QWidget):
             f"输入与输出\n{profile.get('io', '输入音频；输出字幕流程所需的文字或时间信息。')}\n\n"
             f"主要优点\n{profile.get('strengths', model.description)}\n\n"
             f"主要限制\n{profile.get('limits', '实际效果会受音频质量、语言和硬件配置影响。')}\n\n"
-            f"技术说明\n使用方式：{model.mode}\n"
+            f"技术说明\n使用方式：{model_mode_text(model)}\n"
             f"同组证据：{accuracy.get('caption', '准确度')} {accuracy['value']}"
             f"（{accuracy['note']}） / "
             f"速度 {speed['value']}（{speed['note']}）\n"
@@ -6292,7 +6671,7 @@ class ModelPickerPanel(QWidget):
         selected_key = self.controller._selected_model_key_for_role(self.role)
         if selected_key in self.cards:
             selected_name = self.cards[selected_key].model.name
-        (bind_text(self.current_badge, f'Current: {selected_name}') if language == 'en' else bind_text(self.current_badge, '当前：{value0}', value0=selected_name))
+        (bind_text(self.current_badge, f'Current: {selected_name}') if language == 'en' else bind_text(self.current_badge, '当前：{value0}', value0=ui_literal(selected_name)))
         # Pin for this opening. Canceling a model must not move the button
         # away under the pointer; begin_session restores catalog order.
         selected = [key for key, card in self.cards.items() if card.property("selected")]

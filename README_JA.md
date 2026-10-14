@@ -68,7 +68,13 @@
 
 ## ダウンロードとクイックスタート
 
-**現在の正式版は 0.6.5 で、今回は Windows x64 のみです。** 最新版は [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest) から入手できます。初回インストールに必要なのは [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe)（約 962 MB、SHA-256 は Release の `SHA256SUMS.txt`）だけです。初めてローカル認識を行うときは、モデルワークショップで選んだ実行環境とモデルを別途ダウンロードします。0.6.0 以前からはアンインストールせずに上書きインストールしてください。0.6.5 以降はアプリ内の「更新を確認」で変更部分だけをダウンロードし、互換性のあるモデルと環境はそのまま使います。インストーラーには Windows のコード署名がないため、「不明な発行元」と表示されることがあります。
+**現在の正式版は 0.7.1 で、Windows x64 と macOS（Apple Silicon、実験版）を提供しています。** 最新版は [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest) から入手できます。各ファイルの SHA-256 は Release の `SHA256SUMS.txt` にあります。
+
+- **Windows：** [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe)（約 1 GB）だけをダウンロードします。0.6.5・0.7.0 からはアプリ内の「更新を確認」で変更部分だけをダウンロードし、互換性のあるモデルと環境はそのまま使います。0.6.0 以前からはアンインストールせずに上書きインストールしてください。インストーラーには Windows のコード署名がないため、「不明な発行元」と表示されることがあります。
+- **macOS（実験版。Apple Silicon、macOS 15 以降）：** [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg)（約 0.5 GB）。Developer ID 署名と Apple の公証がないため、初回は Finder でアプリを Control キーを押しながらクリックし「開く」を選びます。システムのセキュリティ設定を無効にする必要はありません。Intel Mac には対応していません。GitHub の仮想 Mac でのみ検証しています。[説明](docs/deployment/macos-experimental.zh-CN.md)（中国語）を参照してください。
+- **NVIDIA GPU がない場合：** クラウド認識だけで字幕を作れます（各サービスのアカウントと API キーが必要）。ローカルモデルは不要です。
+
+初めてローカル認識を行うときは、モデルワークショップで選んだ実行環境とモデルを別途ダウンロードします。
 
 1. **インストールして起動。** Setup を実行してから起動します。
 2. **認識の準備。** モデルワークショップでローカルモデルを準備するか、利用するオンラインサービスを設定します。
@@ -80,7 +86,7 @@
 ### 動作条件
 
 - **OS：** Windows 10 22H2（19045）以降の x64。macOS 15 以降の Apple Silicon（実験版、Developer ID 署名・公証なし。[説明](docs/deployment/macos-experimental.zh-CN.md)は中国語）。
-- **ローカル認識：** モデルワークショップから必要なモデルの重みをダウンロードします。SenseVoice は CPU に対応。MOSS、FireRedASR2-AED、Qwen3-ASR などは NVIDIA CUDA を使用します。
+- **ローカル認識：** モデルワークショップから必要なモデルの重みをダウンロードします。SenseVoice は CPU に対応。Windows では MOSS、FireRedASR2-AED、Qwen3-ASR などが NVIDIA CUDA を使用し、Apple シリコンの Mac では MOSS と FireRedASR2-AED が Apple GPU を使用します（低速・実験版）。
 - **オンラインサービス：** 自分のアカウントまたは API キーを使用します。料金は各サービスの規定に従います。
 - **出力：** SRT、ASS、TXT、JSON、話者別トラック、MP4・MKV・MOV 動画。
 
@@ -93,14 +99,14 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-`main` は 0.6.5 以降のアプリのソースです。インストーラーとバイト単位で一致するビルド元はタグ `v0.6.5` で、完全なビルド入力は Release の `2ByteASR-Source-0.6.5.zip` にあります。自作コードは GPL-3.0-only で、Remotion/GSAP 向けの追加許可があります。[PROJECT_LICENSE.md](PROJECT_LICENSE.md) を参照してください。
+`main` は 0.6.5 以降のアプリのソースです。0.7.1 インストーラーとバイト単位で一致するビルド元はタグ `v0.7.1` で、完全なビルド入力は Release の `2ByteASR-Source-0.7.1.zip` にあります。自作コードは GPL-3.0-only で、Remotion/GSAP 向けの追加許可があります。[PROJECT_LICENSE.md](PROJECT_LICENSE.md) を参照してください。
 
 ## モデル一覧
 
 - **メイン転写：** MOSS-Transcribe-Diarize（複数話者と話者分離）、SenseVoice Small（CPU 可）、FireRedASR2-AED、Qwen3-ASR 1.7B、Paraformer Large、Whisper large-v3-turbo、Fun-ASR Nano、FireRedASR2-LLM、GLM-ASR-Nano、Canary-Qwen-2.5B（英語）
 - **字幕タイムライン：** FireRedASR2-AED、Qwen3-ForcedAligner 0.6B、Paraformer Large、Whisper large-v3-turbo
 - **テキストレビュー：** Qwen3-ASR 1.7B、SenseVoice Small、Whisper large-v3-turbo、FireRedASR2-LLM、Fun-ASR Nano
-- **オンライン（ご自身のアカウント）：** Qwen Audio 3.1 長時間音声、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 互換エンドポイント
+- **オンライン（ご自身のアカウント）：** MOSS Pro クラウド（MOSI、話者付き）、Alibaba Cloud Bailian / Qwen Cloud 録音ファイル認識（Qwen3-ASR の語時刻、Qwen-Audio 3.1 は話者付き）、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 互換エンドポイント
 
 モデルの重みはアプリに同梱されません。モデルワークショップから必要に応じてダウンロードし、それぞれのライセンスに従って使います。
 

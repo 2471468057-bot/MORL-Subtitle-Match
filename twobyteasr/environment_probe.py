@@ -97,6 +97,37 @@ def _strict_cuda_probe(result, runtime_label):
         )
 
 
+def _apple_silicon():
+    import platform
+    return sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def _apple_gpu_probe(result, runtime_label):
+    """Apple Silicon Mac (2026-10-14): MOSS runs on the Apple GPU (MPS), else the CPU.
+
+    There is no CUDA on a Mac; the worker picks MPS or the CPU itself, so a
+    missing MPS is recorded, not an error. A failing MPS allocation is.
+    """
+    try:
+        import torch
+
+        backend = getattr(torch.backends, "mps", None)
+        available = bool(backend is not None and backend.is_available())
+        result["mps"] = {"available": available}
+        if available:
+            tensor = torch.zeros(1, device="mps")
+            if str(tensor.device).startswith("mps"):
+                result["mps"]["tensor_test_passed"] = True
+            else:
+                result["errors"].append(f"{runtime_label}: MPS tensor allocation did not land on mps")
+    except Exception as exc:
+        result["errors"].append(f"{runtime_label} Apple GPU validation import/test failed: {exc}")
+
+
+class _NoTorchExpected(Exception):
+    pass
+
+
 def run(role, expected, *, project_root=None, firered_source_dir=None):
     """Run the probe for one environment role.
 
@@ -138,6 +169,9 @@ def run(role, expected, *, project_root=None, firered_source_dir=None):
 
     torch_base = expected.get("torch", "")
     try:
+        if not torch_base and role == "mlx":
+            # The Apple Silicon MLX runtime has no PyTorch by design.
+            raise _NoTorchExpected
         import torch
 
         result["imports"]["torch"] = True
@@ -159,6 +193,8 @@ def run(role, expected, *, project_root=None, firered_source_dir=None):
                 result["cuda"]["profile"] = "cu126"
             elif "12.8" in cuda_version:
                 result["cuda"]["profile"] = "cu128"
+    except _NoTorchExpected:
+        result["imports"]["torch"] = None
     except Exception as exc:
         result["imports"]["torch"] = False
         result["errors"].append(f"torch: import failed ({exc.__class__.__name__})")
@@ -183,7 +219,10 @@ def run(role, expected, *, project_root=None, firered_source_dir=None):
         if not result["imports"]["moss_transcribe"]:
             result["errors"].append("moss_transcribe_diarize: import failed")
 
-        _strict_cuda_probe(result, "moss")
+        if _apple_silicon():
+            _apple_gpu_probe(result, "moss")
+        else:
+            _strict_cuda_probe(result, "moss")
     elif role == "firered_llm":
         if firered_source_dir and firered_source_dir not in sys.path:
             sys.path.insert(0, firered_source_dir)
@@ -196,6 +235,20 @@ def run(role, expected, *, project_root=None, firered_source_dir=None):
                 "fireredasr2s.fireredasr2.FireRedAsr2: import failed"
             )
         _strict_cuda_probe(result, "firered_llm")
+    elif role == "mlx":
+        if sys.platform != "darwin":
+            result["errors"].append("mlx: Apple Silicon macOS only")
+        result["imports"]["mlx"] = _import_ok("mlx.core")
+        result["imports"]["mlx_audio_stt"] = _import_ok("mlx_audio.stt")
+        for name in ("mlx", "mlx_audio_stt"):
+            if not result["imports"][name]:
+                result["errors"].append(f"{name}: import failed")
+        try:
+            import mlx.core as mx
+            result["mlx"] = {"metal_available": bool(mx.metal.is_available()),
+                             "default_device": str(mx.default_device())}
+        except Exception as exc:
+            result["mlx"] = {"metal_available": None, "error": exc.__class__.__name__}
     else:
         result["errors"].append(f"unknown runtime role: {role}")
 

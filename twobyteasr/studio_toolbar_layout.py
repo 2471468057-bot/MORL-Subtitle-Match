@@ -209,7 +209,9 @@ def install_command_groups(page, parent_layout, old_layout, transport_start, vie
         if names[index] == "transport":
             # The transport reads as one centred pill (2026-10-08).
             group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            inner.setContentsMargins(10, 3, 10, 3)
+            # 6 px above and below the 32 px play circle (was 3 around 34):
+            # the controls no longer touch the pill's edge (2026-10-14).
+            inner.setContentsMargins(12, 6, 12, 6)
             flow.center_index = index
         widgets = []
         for item in items:

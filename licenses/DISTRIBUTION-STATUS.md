@@ -1,5 +1,15 @@
 # 分发材料状态
 
+## 2026-10-14：0.7.1 现状（本节优先）
+
+0.7.1 是第一次同时发 Windows 安装包与 macOS DMG。结论与 0.7.0 相同，只多了 Mac 一项：
+
+- **Windows 随包第三方组件与 0.7.0 相同**：构建环境的 Python 发行包清单逐项相同，程序目录顶层逐项相同；`licenses/`（除生成的 `licenses/python`）与 `renderer/` 的程序文件和公开 0.7.0（`e2c410ff`）逐字节相同，只有版本号不同。本版新增的是自有代码与自有素材（`assets/onboarding/` 的新手教学动画，由本项目的 HTML 设计逐帧渲染）。
+- **Remotion/GSAP 附加许可**：作者 2026-10-11 授予并写在 [PROJECT_LICENSE.md](../PROJECT_LICENSE.md)，适用于之后包含相同代码的版本；renderer 受覆盖文件与 0.7.0 相同，本版 Release 另附一份写明 0.7.1 构建身份的记录文件。
+- **gyan FFmpeg 9.0（`tools/ffmpeg`，仅 Windows）仍缺构建材料**：2026-10-14 复查，gyan.dev 与 `GyanD/codexffmpeg` 仍只公开 FFmpeg 源码提交与 README（原文在 `source-materials/gyan-ffmpeg-9.0-essentials/README.txt`），没有构建脚本、可能的补丁，13 个链接库与 openal-soft 也没有确切版本（见 [SOURCES.md](SOURCES.md)）。x265（compositor）“已满足”的结论只适用于 x265，不代表整个安装包。本版没有更换 FFmpeg：发布当天替换核心媒体程序需要完整回归。可行的解决路线是改用构建脚本与依赖提交全部公开的版本（例如 BtbN/FFmpeg-Builds 的固定 autobuild），列为后续工作。
+- **macOS DMG（Apple Silicon arm64，第一次公开）**：FFmpeg 与 mpv 来自固定 Homebrew core 提交 `0211e9c2eeea26bc0f1b382446dc076321e9a871` 的官方 bottle（`ffmpeg-full` 9.0.2、`mpv` 0.41.0 及其依赖，见 `packaging/macos/native-dependencies.lock.json` 与 `MEDIA_INPUTS.md`）；构建配方（formula）、上游源码地址与 SHA-256 都在该公开提交里，本项目没有另附这些上游源码包，按 GPLv3 §6(d) 指向 Homebrew 配方与上游。Python 依赖来自 PyPI 官方 wheel（版本见 `packaging/macos/requirements-*.txt`）。DMG 内带 `licenses/`、`LICENSE`、`PROJECT_LICENSE.md`、`THIRD_PARTY_NOTICES.md`。[组件目录](COMPONENTS.md)只登记了 Windows 安装包；Mac 包里每个动态库的逐项登记还没有做。
+- 待核：与 0.7.0 相同（`pytest` 被沿依赖链收入主程序、`pywin32` 子项目范围、CTC 模型的基础模型与训练数据条款）。
+
 ## 2026-10-13：0.7.0 现状（本节优先）
 
 0.7.0 按与 0.6.5 相同的结论公开分发（[GPL3_ROUTE.md 的 2026-10-11 节](GPL3_ROUTE.md)）：

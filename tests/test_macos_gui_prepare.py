@@ -179,7 +179,9 @@ def test_macos_unsupported_model_detail_constructs_without_startup_keyerror(monk
     app=QApplication.instance() or QApplication([])
     monkeypatch.setattr(workshop,'sys',SimpleNamespace(platform='darwin'))
     page=workshop.ModelWorkshopPage(tmp_path,{'models':{'primary_asr_backend':'sensevoice','qwen_asr_backend':'off'}})
-    unavailable=next(m for m in workshop.MODELS if m.download_key and m.download_key!='sensevoice')
+    # MOSS / FireRed run on Apple Silicon since 2026-10-14; pick a model that has no Mac route.
+    unavailable=next(m for m in workshop.MODELS if m.download_key and m.download_key!='sensevoice'
+                     and m.download_key not in workshop.MAC_GPU_DOWNLOAD_KEYS and not m.platforms)
     page._view_model(unavailable.key)
     assert page._model_state(unavailable)=='platform_unavailable'
     assert page.detail_badge.text()
@@ -197,5 +199,7 @@ def test_mac_replace_without_qt_binding_avoids_command_hide(monkeypatch):
     original=QKeySequence.keyBindings
     monkeypatch.setattr(QKeySequence,'keyBindings',lambda key:[] if key==QKeySequence.Replace else original(key))
     defaults=studio_shortcuts.studio_default_shortcuts()
-    assert defaults['find_replace']=='Ctrl+Alt+F'
+    # 2026-10-13: Option-Command-F was already "保存当前帧"; Shift-Command-F is free.
+    assert defaults['find_replace']=='Ctrl+Shift+F'
+    assert defaults['find_replace']!=defaults['save_current_frame']
     assert defaults['save']==original(QKeySequence.Save)[0].toString(QKeySequence.PortableText)

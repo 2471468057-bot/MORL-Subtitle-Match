@@ -127,7 +127,10 @@ def check_geometry(page):
 def test_wide_group_spacing_alignment_and_unreduced_text(app):
     page = toolbar(app)
     result = check_geometry(page)
-    assert len({group["rect"][1] for group in result["groups"]}) <= 2  # centers differ by at most a pixel
+    # Centers differ by at most a pixel. The transport pill is taller than the
+    # other groups (room around the play button, 2026-10-14), so tops differ.
+    centers = [group["rect"][1] + group["rect"][3] / 2 for group in result["groups"]]
+    assert max(centers) - min(centers) <= 1
     controls = result["groups"][3]["controls"]
     assert [control["text"] for control in controls] == ["波形", "缩略图", "跟随", "吸附"]
     assert all(control["font"]["pixels"] == 13 for control in controls)

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import qtawesome as qta
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from twobyteasr.i18n import current_language, translate
+from twobyteasr.i18n import current_language, translate, ui_literal
 from twobyteasr.ui_navigation import NAVIGATION_QSS, style_workspace_page_title
 from twobyteasr.ui_theme import (
     AMBER,
@@ -871,7 +871,7 @@ class HistoryCard(QFrame):
             metrics.addWidget(HistoryMetric(translate("素材时长", language), _duration_label(record.media_seconds)))
         cue_count = int(getattr(record, "cue_count", 0) or 0)
         if cue_count:
-            metrics.addWidget(HistoryMetric("字幕", f"{cue_count} 条"))
+            metrics.addWidget(HistoryMetric(translate("字幕", language), f"{cue_count} " + ui_literal("条", language)))
         metrics.addStretch(1)
         layout.addLayout(metrics)
 
@@ -895,21 +895,21 @@ class HistoryCard(QFrame):
         )
         metadata_items = [
             (ai, False),
-            (f"{record.glossary_count} " + ("term libraries" if language == "en" else "个词库"), False),
+            (f"{record.glossary_count} " + ("term libraries" if language == "en" else ui_literal("个词库", language)), False),
         ]
         if record.review_count:
             metadata_items.append((
-                f"{record.review_count} " + ("review items" if language == "en" else "項目" if language == "ja" else "项待检查"),
+                f"{record.review_count} " + ("review items" if language == "en" else "項目" if language == "ja" else ui_literal("项待检查", language)),
                 False,
             ))
         if record.anomaly_count:
             metadata_items.append((
-                f"{record.anomaly_count} " + ("issues" if language == "en" else "个问题"),
+                f"{record.anomaly_count} " + ("issues" if language == "en" else ui_literal("个问题", language)),
                 True,
             ))
         for text, warning in metadata_items:
             chip = QLabel(text)
-            is_review = text.endswith(("项待检查", "review items", "項目"))
+            is_review = text.endswith(("项待检查", ui_literal("项待检查", language), "review items", "項目"))
             chip.setObjectName(
                 "historyMetaChipWarn" if warning else
                 ("historyMetaChipReview" if is_review else "historyMetaChip")
@@ -925,13 +925,93 @@ class HistoryCard(QFrame):
 
 
 class _ProportionalStageTable(QTableWidget):
-    _ratios = (0.46, 0.14, 0.13, 0.27)
+    """Stage rows sized from their real content (2026-10-14).
+
+    Row heights used to be a fixed 28 px set before the dialog's style sheet
+    and interface zoom applied, while the status/resource pills need ~31 px at
+    110% zoom, so their text was cut; long resources were cut without "…".
+    Rows, columns, elided pill text and the table height are refitted on every
+    resize, style, font or zoom change.
+    """
+
+    _ratios = (0.38, 0.12, 0.13, 0.37)
+    _fitting = False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        width = max(0, self.viewport().width())
-        for column, ratio in enumerate(self._ratios):
-            self.setColumnWidth(column, max(60, int(width * ratio)))
+        self._fit()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.StyleChange, QEvent.Type.FontChange, QEvent.Type.Show,
+                            QEvent.Type.Polish):
+            QTimer.singleShot(0, self, self._fit)
+        return result
+
+    def _fit(self):
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            width = max(0, self.viewport().width())
+            for column, ratio in enumerate(self._ratios):
+                self.setColumnWidth(column, max(60, int(width * ratio)))
+            line = self.fontMetrics().height()
+            for row in range(self.rowCount()):
+                height = line + 16
+                for column in (1, 3):
+                    host = self.cellWidget(row, column)
+                    if host is None:
+                        continue
+                    pill = host.findChild(QLabel)
+                    if pill is not None and column == 3:
+                        margins = host.layout().contentsMargins()
+                        _elide_pill(pill, self.columnWidth(column) - margins.left() - margins.right() - 4)
+                    height = max(height, host.sizeHint().height() + 6)
+                if self.rowHeight(row) != height:
+                    self.setRowHeight(row, height)
+            total = (self.horizontalHeader().sizeHint().height()
+                     + sum(self.rowHeight(row) for row in range(self.rowCount()))
+                     + self.frameWidth() * 2)
+            total = max(58, total)
+            if self.minimumHeight() != total or self.maximumHeight() != total:
+                self.setFixedHeight(total)
+        finally:
+            self._fitting = False
+
+
+def _stage_table_sheet() -> str:
+    """The table's own sheet. The details dialog carries the full application
+    sheet, which outranks the history page's rules for its children; there the
+    generic ``QAbstractItemView { border }`` drew a second rounded box around
+    the header (2026-10-14)."""
+    from .theme_manager import theme_key
+    from .ui_theme import theme_definition
+    t = theme_definition(theme_key())
+    return (
+        f"QTableWidget#historyStages {{ background: {t.surface}; color: {t.text}; border: 1px solid {t.border};"
+        f" border-radius: 12px; padding: 0 4px; selection-background-color: {t.selected}; selection-color: {t.text}; }}"
+        f"QTableWidget#historyStages::item {{ border: 0; border-bottom: 1px solid {t.hairline}; padding-left: 6px; }}"
+        f"QTableWidget#historyStages::item:selected {{ background: {t.selected}; color: {t.text}; }}"
+        f"QHeaderView {{ background: transparent; border: 0; }}"
+        f"QHeaderView::section {{ background: transparent; color: {t.text_muted}; border: 0;"
+        f" border-bottom: 1px solid {t.border}; padding: 8px 10px; font-size: 12px; font-weight: 600; }}"
+    )
+
+
+def _elide_pill(pill: QLabel, available: int) -> None:
+    """Show as much of a pill's text as fits, ending in "…"; full text stays in the tooltip."""
+    full = pill.property("fullText")
+    if not full:
+        full = pill.text()
+        pill.setProperty("fullText", full)
+    metrics = pill.fontMetrics()
+    chrome = pill.sizeHint().width() - metrics.horizontalAdvance(pill.text())
+    shown = metrics.elidedText(full, Qt.TextElideMode.ElideRight, max(24, available - chrome))
+    if shown != pill.text():
+        pill.setText(shown)
+    if shown != full:
+        pill.setToolTip(full)
 
 
 _RAW_HIGHLIGHT_MAX_LINES = 20000
@@ -983,15 +1063,48 @@ def _history_pill(text: str, object_name: str = "historySummaryPill") -> QLabel:
     return label
 
 
+class _ElidingPill(QLabel):
+    """A pill that keeps its "…" visible in whatever width it ends up with.
+
+    The table elides against the column width, but an interface zoom can
+    enlarge the font afterwards; at 135% the label got 15 px less than its
+    text needed and the ellipsis was cut to "." (2026-10-14).
+    """
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            QTimer.singleShot(0, self, self._fit_text)
+
+    def _fit_text(self):
+        full = self.property("fullText") or self.text()
+        hint = self.sizeHint().width()
+        if not full or self.width() >= hint:
+            return
+        metrics = self.fontMetrics()
+        chrome = hint - metrics.horizontalAdvance(self.text())
+        shown = metrics.elidedText(full, Qt.TextElideMode.ElideRight, max(24, self.width() - chrome))
+        if shown != self.text():
+            self.setProperty("fullText", full)
+            self.setText(shown)
+
+
 def _history_table_pill(text: str, object_name: str, tooltip: str = "") -> QWidget:
     host = QWidget()
     box = QHBoxLayout(host)
     box.setContentsMargins(6, 3, 6, 3)
-    label = _history_pill(text, object_name)
+    box.setSpacing(0)
+    label = _ElidingPill()
+    bind_text(label, text)
+    label.setObjectName(object_name)
+    label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     if tooltip:
         label.setToolTip(tooltip)
-    box.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
-    box.addStretch(1)
+    box.addWidget(label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     return host
 
 
@@ -1097,6 +1210,13 @@ class RecognitionHistoryDetail(QWidget):
         self.stage_table.verticalHeader().hide()
         self.stage_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.stage_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.stage_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # Row separators only; column grid lines made the summary read as a spreadsheet.
+        self.stage_table.setShowGrid(False)
+        self.stage_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        from .ui_zoom import set_sheet
+        set_sheet(self.stage_table, _stage_table_sheet())
         status_labels = {
             "completed": ("完成", "historyStageStatusGood"),
             "fallback": ("降级", "historyStageStatusWarn"),
@@ -1117,13 +1237,10 @@ class RecognitionHistoryDetail(QWidget):
             self.stage_table.setCellWidget(
                 row, 3, _history_table_pill(resource_text, "historyResourcePill", resource_text)
             )
-            self.stage_table.setRowHeight(row, 28)
-        table_height = (
-            self.stage_table.horizontalHeader().height()
-            + sum(self.stage_table.rowHeight(row) for row in range(len(stages)))
-            + self.stage_table.frameWidth() * 2
-        )
-        self.stage_table.setFixedHeight(max(58, table_height))
+            self.stage_table.setRowHeight(row, 34)
+        # Rows, elided resources and the table height follow the applied style
+        # and zoom (``_ProportionalStageTable._fit``).
+        self.stage_table._fit()
         layout.addWidget(self.stage_table)
 
         settings = _dict(record.payload.get("settings"))
@@ -1651,9 +1768,9 @@ class RecognitionHistoryPage(QWidget):
                 summary += f"\n{len(errors)} unreadable files"
         else:
             summary = (
-                f"{len(self.records)} 条任务记录\n"
-                f"{sum(record.has_anomaly for record in self.records)} 条含警告或异常"
-            ) + (f"\n{len(errors)} 个文件无法读取" if errors else "")
+                f"{len(self.records)} " + ui_literal("条任务记录", language) + "\n"
+                f"{sum(record.has_anomaly for record in self.records)} " + ui_literal("条含警告或异常", language)
+            ) + (f"\n{len(errors)} " + ui_literal("个文件无法读取", language) if errors else "")
         if loading:
             summary += "\n" + tr("正在读取 {count} 份报告…", count=loading)
         if self._notice:

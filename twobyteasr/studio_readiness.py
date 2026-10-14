@@ -99,6 +99,11 @@ class StudioReadiness(QObject):
     player_loaded = Signal(int, object, str)
     finished = Signal()
     TASKS = ('读取工程', '建立时间轴', '准备播放器', '准备音频', '准备字幕', '首屏绘制')
+    # The audio engine rebuilds a failed endpoint at the current position by
+    # itself. While opening, a failure only fails the gate if it is not
+    # recovered within this time (macOS reopen, 2026-10-14: the endpoint
+    # dropped once and was back about 1 s later, but Studio reported 准备音频).
+    AUDIO_RECOVERY_GRACE_S = 8.0
 
     def __init__(self, page):
         super().__init__(page)
@@ -205,6 +210,21 @@ class StudioReadiness(QObject):
         text = translate(str(stage), language) if language != "zh" else str(stage)
         self.label.setText(f"{text} · {elapsed:.1f}s")
         self.steps_view.set_state(self.completed, str(stage))
+        self._fit_card()
+
+    def _fit_card(self) -> None:
+        """Grow the card to its wrapped text. It is sized once for a one-line
+        status; a multi-line failure text then squeezed the layout so the
+        message was drawn over the last step (2026-10-14)."""
+        layout = self.card.layout()
+        width = self.card.width() or self.card.minimumWidth()
+        height = (layout.totalHeightForWidth(width) if layout.hasHeightForWidth()
+                  else layout.totalSizeHint().height())
+        if height > 0 and self.card.minimumHeight() != height:
+            self.card.setMinimumHeight(height)
+
+    def _failed_stage(self) -> str:
+        return self.steps_view.current or next((task for task in self.TASKS if task not in self.completed), '')
 
     def begin(self, path, *, skip_dirty_guard=False,expected_result_ref=None):
         page = self.page
@@ -234,6 +254,7 @@ class StudioReadiness(QObject):
         self.profile = {'kind': 'warm' if getattr(self, '_ever_ready', False) else 'cold',
                         'stages_ms': {}, 'gui_gaps_ms': []}
         self.completed = set()
+        self._audio_failed_since = None
         self.painted = False
         self.steps = None
         self.next_stage = ''
@@ -350,7 +371,7 @@ class StudioReadiness(QObject):
         self.profile['gui_gaps_ms'].append(round((now-self.last_tick)*1000, 3))
         self.last_tick = now
         if now-self.started > 30:
-            self.fail(self.label.text(), '准备超时；请检查素材和播放器状态。')
+            self.fail(self._failed_stage(), '准备超时；请检查素材和播放器状态。')
             return
         try:
             if self.steps is not None:
@@ -380,8 +401,14 @@ class StudioReadiness(QObject):
             page = self.page
             audio_state = page.audio_engine.telemetry_snapshot()
             if audio_state.get('state') == 'ENDPOINT_FAILED':
-                self.fail('准备音频', str(audio_state.get('decoder_error') or '音频进程已退出'))
-                return
+                now = time.monotonic()
+                if getattr(self, '_audio_failed_since', None) is None:
+                    self._audio_failed_since = now
+                if now - self._audio_failed_since >= self.AUDIO_RECOVERY_GRACE_S:
+                    self.fail('准备音频', str(audio_state.get('decoder_error') or '音频进程已退出'))
+                    return
+            else:
+                self._audio_failed_since = None
             from .media_availability import media_available
             has_media = bool(page.project.media.path and
                              media_available(page.project, page.project.media.path))
@@ -424,7 +451,7 @@ class StudioReadiness(QObject):
             from .stutter_cleanup import warm_text_analysis
             QTimer.singleShot(1500, warm_text_analysis)
         except Exception as exc:
-            self.fail(self.label.text(), str(exc))
+            self.fail(self._failed_stage(), str(exc))
 
     def fail(self, stage, error):
         self.page.timeline.setUpdatesEnabled(True)
@@ -436,6 +463,7 @@ class StudioReadiness(QObject):
         self.steps = None
         self.profile['error'] = {'stage': stage, 'message': error}
         bind_text(self.label, '{stage}失败\n{error}\n工程文件仍保留，可重试载入：\n{value2}', stage=stage, error=error, value2=self.path)
+        self._fit_card()
         failed = next((task for task in self.TASKS if task not in self.completed), '')
         self.steps_view.set_state(self.completed, '', failed)
         self.retry.show()

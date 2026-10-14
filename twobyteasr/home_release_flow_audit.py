@@ -59,20 +59,48 @@ def start(window, out):
         def modal_guard():
             modal = QApplication.activeModalWidget()
             if isinstance(modal, QMessageBox):
+                from .i18n import tr
+                if modal.windowTitle() in {'本次识别会上传音频', tr('本次识别会上传音频')}:
+                    # The pre-run upload confirmation (shown when the run is
+                    # not under TWOBYTEASR_TEST_ROOT): record what it says and
+                    # start, as a user who read it would (2026-10-14).
+                    result.setdefault('run_disclosures', []).append(modal.informativeText())
+                    start = next((b for b in modal.buttons()
+                                  if modal.buttonRole(b) == QMessageBox.ButtonRole.AcceptRole), None)
+                    if start is not None:
+                        start.click(); return
                 errors.append(modal.text()+' '+modal.informativeText()); modal.reject()
         try:
             guard.timeout.connect(modal_guard); guard.start(200)
             # Use the ordinary return action: it refreshes newly prepared models.
             window._return_to_settings()
-            # Select a supported local-only combination through existing controls.
-            for name, value in [('primary_asr_backend', 'sensevoice'),
-                                ('firered_asr_backend', 'off'), ('qwen_asr_backend', 'off')]:
+            # Select a supported combination through existing controls. The
+            # default is local SenseVoice; a cloud config (2026-10-13) selects
+            # the recognizer through the same provider controls a user uses.
+            asr = dict(primary_asr_backend='sensevoice', firered_asr_backend='off', qwen_asr_backend='off')
+            asr.update(config.get('asr') or {})
+            api = config.get('api') or {}
+            if config.get('loopback_mosi_reference'):
+                from .mosi_loopback import start as start_loopback
+                reference = json.loads(Path(config['loopback_mosi_reference']).read_text('utf8'))
+                server, loopback = start_loopback(reference)
+                result['loopback'] = loopback
+                api = dict(provider='mosi_moss_pro', model='moss-transcribe-diarize-pro',
+                           url=f'http://127.0.0.1:{server.server_port}/v1', key='sk-loopback-test', **api)
+            if api:
+                index = window.qwen_asr_api_provider.findData(api['provider'])
+                check('available cloud provider '+api['provider'], index >= 0)
+                window.qwen_asr_api_provider.setCurrentIndex(index)
+                window.qwen_asr_api_model.setText(api['model']); window.qwen_asr_api_url.setText(api['url'])
+                window.qwen_asr_api_key.setText(api.get('key', ''))
+            for name, value in asr.items():
                 combo = getattr(window, name); index = combo.findData(value)
                 check('available '+name, index >= 0); combo.setCurrentIndex(index)
             window.ai_polish.setChecked(False)
             window.ai_grouping.setChecked(False); window.unified_glm.setChecked(False)
             window.legacy.RUNTIME_SETTINGS['glossary']['enabled_glossary_ids'] = []
-            window.legacy.RUNTIME_SETTINGS['models']['speaker_source'] = 'single'
+            # One-voice fixtures use a single speaker; a MOSS run keeps MOSS's own speakers (2026-10-14).
+            window.legacy.RUNTIME_SETTINGS['models']['speaker_source'] = config.get('speaker_source', 'single')
             check('save local ASR configuration', window._save_asr_configuration(show_feedback=False))
             check('save local-only AI configuration', window._save_ai_configuration(show_feedback=False))
             source = str(Path(config['media']).resolve())
@@ -92,7 +120,9 @@ def start(window, out):
             wait(lambda: bool(received), int(config.get('timeout', 600)), 'real supported-model recognition completes')
             wait(lambda: not worker.isRunning(), 30, 'actual worker exits')
             result['recognition'] = asdict(received[0]); save()
-            check('offline task is normal success', bool(received[0].successes) and received[0].successes[0].status == 'success')
+            accepted = tuple(config.get('accept_status') or ('success',))
+            result['task_status'] = received[0].successes[0].status if received[0].successes else ''
+            check('task completes with an accepted status', bool(received[0].successes) and result['task_status'] in accepted)
             events_path = Path(worker.options.event_log_path) if getattr(worker.options, 'event_log_path', '') else None
             check('actual recognition delivers project', bool(received[0].successes and received[0].successes[0].project_path))
             target = Path(received[0].successes[0].project_path)
@@ -105,6 +135,19 @@ def start(window, out):
             result['owned_project'] = preserve_owned_project(target, out.parent if config.get('recognition_only') else out,
                                                              'restart' if config.get('recognition_only') else 'recognized')
             check('actual ASR text is nonempty', bool(project.cues and any(c.text.strip() for c in project.cues)))
+            # Which evidence the result really carries: speakers and cues with measured word times.
+            from .cue_word_alignment import cue_words
+            measured = 0
+            for cue in project.cues:
+                try:
+                    measured += bool(cue_words(project, cue)[0])
+                except Exception:
+                    pass
+            result['speakers'] = sorted({str(cue.speaker_id) for cue in project.cues})
+            result['cues_with_measured_words'] = measured
+            result['cue_count'] = len(project.cues)
+            if config.get('require_measured_words'):
+                check('local word timeline measured word times', measured > 0)
             if config.get('recognition_only'):
                 result['restart_short_task']=True
                 result['saved_project']=str(target)
@@ -130,6 +173,14 @@ def start(window, out):
             def signature():
                 return [(c.text,c.start_ms,c.end_ms,c.speaker_id,c.style_id,c.appearance_override)
                         for c in projected_cues(page.project)]
+            # New recognition projects keep V1 locked against accidental cuts;
+            # unlock it the way a user does (track lock action) before cutting.
+            from .studio_clip_edit import video_track_locked
+            unlocked = []
+            for track in list(page.project.video_tracks):
+                if video_track_locked(page.project, track):
+                    page._video_track_action(track.id, 'locked'); pump(.2); unlocked.append(track.id)
+            result['unlocked_video_tracks'] = unlocked
             before = signature()
             before_raw = copy.deepcopy(page.project.to_dict())
             (out/'cut-before.json').write_text(json.dumps(before_raw,ensure_ascii=False,indent=2),'utf8')

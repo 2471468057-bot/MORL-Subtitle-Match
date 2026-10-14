@@ -199,9 +199,37 @@ def _runtime_measured_start(cue):
     return None
 
 
+SWITCH = "use_ja_ctc_aligner"
+
+
+def enabled(settings=None) -> bool:
+    """The user's choice; installed means used unless they turned it off (2026-10-14)."""
+    if settings is None:
+        from .settings import load_runtime_settings
+        settings = load_runtime_settings()[0]
+    return (settings.get("switches") or {}).get(SWITCH, True) is not False
+
+
+def set_enabled(value: bool, runtime_settings=None) -> None:
+    """Persist the 模型工坊 「使用 / 取消使用」 choice and mirror it in memory."""
+    from .settings import load_runtime_settings, save_runtime_settings
+    settings, path, warnings = load_runtime_settings()
+    if any("could not be read" in str(item) for item in warnings):
+        # Saving now would replace the unreadable file with defaults.
+        raise RuntimeError(f"无法读取设置文件 {path}，未修改")
+    settings.setdefault("switches", {})[SWITCH] = bool(value)
+    save_runtime_settings(settings)
+    if isinstance(runtime_settings, dict):
+        runtime_settings.setdefault("switches", {})[SWITCH] = bool(value)
+
+
 def apply_to_runtime_cues(cues, audio, legacy) -> list[dict]:
     """Recognition (after final alignment and pause snapping): refine line starts."""
     from types import SimpleNamespace
+    runtime = getattr(legacy, "RUNTIME_SETTINGS", None)
+    if isinstance(runtime, dict) and not enabled(runtime):
+        legacy.record_run_event("ctc_start_refine", policy=POLICY, skipped="disabled_by_user")
+        return []
     if not model_dir():
         legacy.record_run_event("ctc_start_refine", policy=POLICY, skipped="model_not_installed")
         return []

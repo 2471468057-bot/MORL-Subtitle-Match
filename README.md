@@ -68,7 +68,13 @@
 
 ## 下载与快速开始
 
-**当前正式版 0.6.5，本轮只提供 Windows x64。** 下载最新版请到 [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest)。第一次安装只需下载 [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe)（约 962 MB，SHA-256 见 Release 中的 `SHA256SUMS.txt`）；第一次本地识别还要在模型工坊下载所选的运行环境和模型。0.6.0 及更早版本直接覆盖安装，不要先卸载；0.6.5 起用程序内“检查更新”，只下载变化的部分，沿用相容的模型与环境。安装包没有 Windows 代码签名，可能出现“未知发布者”提示。
+**当前正式版 0.7.1：Windows x64，以及 macOS Apple Silicon（实验性）。** 下载最新版请到 [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest)，各文件的 SHA-256 见 Release 中的 `SHA256SUMS.txt`。
+
+- **Windows：** 只需下载 [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe)（约 1 GB）。0.6.5、0.7.0 用程序内“检查更新”，只下载变化的部分，沿用相容的模型与环境；0.6.0 及更早版本直接覆盖安装，不要先卸载。安装包没有 Windows 代码签名，可能出现“未知发布者”提示。
+- **macOS（实验性，仅 Apple Silicon、macOS 15 及以上）：** [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg)（约 0.5 GB）。没有 Developer ID 签名与 Apple 公证，第一次打开要在 Finder 里按住 Control 点按 App →“打开”；不需要关闭系统安全设置。不支持 Intel Mac。只在 GitHub 虚拟 Mac 上验证过，详见[说明](docs/deployment/macos-experimental.zh-CN.md)。
+- **没有 NVIDIA 显卡：** 可以只用云端识别（自备服务商账号与 API Key），不需要下载本地模型。
+
+第一次本地识别还要在模型工坊下载所选的运行环境和模型。
 
 1. **安装并启动。** 运行 Setup 安装包后启动。
 2. **准备识别方案。** 在模型工坊准备本地模型，或配置自己的在线服务。
@@ -80,7 +86,7 @@
 ### 必要条件
 
 - **系统：** Windows 10 22H2（19045）及以上的 x64 系统；macOS 15 及以上的 Apple Silicon 设备（实验版，未作 Developer ID 签名与公证，见[说明](docs/deployment/macos-experimental.zh-CN.md)）。
-- **本地识别：** 模型权重在模型工坊按需下载。SenseVoice 支持 CPU；MOSS、FireRedASR2-AED、Qwen3-ASR 等使用 NVIDIA CUDA。
+- **本地识别：** 模型权重在模型工坊按需下载。SenseVoice 支持 CPU；Windows 上 MOSS、FireRedASR2-AED、Qwen3-ASR 等使用 NVIDIA CUDA；Apple 芯片 Mac 上 MOSS 与 FireRedASR2-AED 使用 Apple GPU（较慢，实验性）。
 - **在线服务：** 使用自己的账号或 API 密钥，按服务提供方的规则计费。
 - **输出：** SRT、ASS、TXT、JSON、说话人分轨，以及 MP4、MKV、MOV 视频。
 
@@ -93,14 +99,14 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-`main` 是 0.6.5 起的程序源码；与安装包逐字节对应的构建来源是 tag `v0.6.5`，完整构建输入在 Release 的 `2ByteASR-Source-0.6.5.zip`。自有代码为 GPL-3.0-only，另有针对 Remotion/GSAP 的附加许可，见 [PROJECT_LICENSE.md](PROJECT_LICENSE.md)。
+`main` 是 0.6.5 起的程序源码；与 0.7.1 安装包逐字节对应的构建来源是 tag `v0.7.1`，完整构建输入在 Release 的 `2ByteASR-Source-0.7.1.zip`。自有代码为 GPL-3.0-only，另有针对 Remotion/GSAP 的附加许可，见 [PROJECT_LICENSE.md](PROJECT_LICENSE.md)。
 
 ## 模型目录
 
 - **主力转写：** MOSS-Transcribe-Diarize（多人与说话人区分）、SenseVoice Small（可用 CPU）、FireRedASR2-AED、Qwen3-ASR 1.7B、Paraformer Large、Whisper large-v3-turbo、Fun-ASR Nano、FireRedASR2-LLM、GLM-ASR-Nano、Canary-Qwen-2.5B（英语）
 - **字词时间轴：** FireRedASR2-AED、Qwen3-ForcedAligner 0.6B、Paraformer Large、Whisper large-v3-turbo
 - **文字复核：** Qwen3-ASR 1.7B、SenseVoice Small、Whisper large-v3-turbo、FireRedASR2-LLM、Fun-ASR Nano
-- **在线接口（自备账号）：** Qwen Audio 3.1 长音频转写、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 兼容接口
+- **在线接口（自备账号）：** MOSS Pro 云端（MOSI，含说话人）、阿里云百炼 / Qwen Cloud 录音文件识别（Qwen3-ASR 字词时间、Qwen-Audio 3.1 含说话人）、Spark-ASR 2.0、Groq Whisper、OpenAI Transcribe、MAI 2.1（OpenRouter）、OpenAI 兼容接口
 
 模型权重不随程序附带，在模型工坊按需下载，并遵守各自的许可。
 

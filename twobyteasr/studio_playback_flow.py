@@ -866,7 +866,9 @@ class StudioPlaybackFlowMixin:
     def _sync_play_button(self, paused: bool) -> None:
         if paused and not getattr(self, "_rate_transition", False):
             self._clear_shuttle_rate()
-        self.play_button.setIcon(_icon("fa5s.play" if paused else "fa5s.pause"))
+        # Registered (not just set) so a theme switch keeps the current glyph.
+        from .themed_icons import install_themed_icon
+        install_themed_icon(self.play_button, "fa5s.play" if paused else "fa5s.pause", "on_accent")
 
     def _playback_buffers_ready(self) -> bool:
         if not self.audio_engine.ready_for_playback():

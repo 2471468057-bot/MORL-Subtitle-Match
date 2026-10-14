@@ -258,10 +258,14 @@ def _pick_model_root(
     if env:
         return Path(env).expanduser().resolve(), "environment", discovered
     persisted = _read_persisted_model_root(data_root)
-    if persisted is not None and persisted.is_dir():
-        return persisted.resolve(), "persisted", discovered
-
     default = (data_root / "Models").resolve()
+    if persisted is not None and persisted.is_dir():
+        # The old automatic default, still empty, is chosen again below so the
+        # first download follows the program folder (2026-10-14). A root that
+        # holds any file, or any other registered folder, is kept as it is.
+        if not (persisted.resolve() == default and _holds_no_files(persisted)):
+            return persisted.resolve(), "persisted", discovered
+
     scored: list[tuple[int, Path]] = []
     for candidate in discovered:
         if not candidate.is_dir():
@@ -273,7 +277,49 @@ def _pick_model_root(
         best = populated[0][1]
         source = "legacy_install" if best == (install_root / "models").resolve() else "legacy_discovered"
         return best, source, discovered
+    program = _program_model_root(install_root)
+    if program is not None:
+        return program, "default_program", discovered
     return default, "default_user_data", discovered
+
+
+def _holds_no_files(folder: Path) -> bool:
+    try:
+        for _directory, _dirs, files in os.walk(folder):
+            if files:
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def _program_model_root(install_root: Path) -> Path | None:
+    """New Windows installs keep models beside the program (2026-10-14).
+
+    Users pick the program folder in Setup (often another drive) or unpack
+    Lite/Portable where they like; models then live on that drive and move
+    with the folder instead of filling C:. Setup and the in-app updater never
+    delete files added under the program folder later (see
+    ``installer/2ByteASR-frozen.iss``). ``%LOCALAPPDATA%`` stays the default
+    on macOS (the app bundle is no place for weights), in isolated test
+    roots, for a dev build in ``<checkout>/dist`` (replaced on every daily
+    swap) and when the program folder is not writable.
+    """
+    if os.name != "nt" or os.environ.get("TWOBYTEASR_TEST_ROOT"):
+        return None
+    root = Path(install_root)
+    if root.parent.name.lower() == "dist" and (root.parent.parent / ".git").exists():
+        return None
+    candidate = root / "models"
+    try:
+        import tempfile
+        # Actual write access, rather than guessing from the path or ACLs.
+        # The folder itself is created by bootstrap once it is chosen.
+        with tempfile.TemporaryFile(dir=candidate if candidate.is_dir() else root):
+            pass
+        return candidate.resolve()
+    except OSError:
+        return None
 
 
 def _project_root(data_root: Path) -> Path:

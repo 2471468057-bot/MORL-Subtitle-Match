@@ -160,3 +160,76 @@ def test_bootstrap_does_not_copy_models(tmp_path, monkeypatch):
     assert not copied.exists()
     assert paths.model_root == (repo / "models").resolve()
     assert (paths.model_root / "MOSS-Transcribe-Diarize" / "a.bin").read_bytes() == b"payload-bytes"
+
+
+# 2026-10-14: a new Windows install keeps models beside the program folder.
+def _fresh_install(tmp_path, monkeypatch, name="D-drive/兔白字幕"):
+    local = tmp_path / "local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.delenv(MODEL_ROOT_ENV, raising=False)
+    reset_runtime_paths()
+    program = tmp_path / name
+    program.mkdir(parents=True)
+    (program / "dependencies.lock.json").write_text(
+        json.dumps(_lock({"moss": {"path": "models/MOSS-Transcribe-Diarize", "required_files": ["a.bin"]}})),
+        encoding="utf-8",
+    )
+    return local, program
+
+
+@pytest.mark.skipif(os.name != "nt", reason="program-folder default is Windows only")
+def test_new_install_downloads_models_beside_the_program(tmp_path, monkeypatch):
+    local, program = _fresh_install(tmp_path, monkeypatch)
+    paths = bootstrap_runtime_paths(install_root=program, persist=True)
+    assert paths.model_root == (program / "models").resolve()
+    assert paths.model_root_source == "default_program"
+    assert not (local / "2ByteASR" / "Models").exists() or not any((local / "2ByteASR" / "Models").iterdir())
+    # The choice is registered and kept on the next start.
+    reset_runtime_paths()
+    assert build_runtime_paths(install_root=program).model_root == (program / "models").resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="program-folder default is Windows only")
+def test_empty_old_default_is_moved_to_program_folder_but_used_one_is_kept(tmp_path, monkeypatch):
+    local, program = _fresh_install(tmp_path, monkeypatch)
+    old_default = local / "2ByteASR" / "Models"
+    old_default.mkdir(parents=True)
+    registry = local / "2ByteASR" / "runtime_paths.json"
+    registry.write_text(json.dumps({"model_root": str(old_default), "model_root_source": "persisted"}), "utf-8")
+    assert build_runtime_paths(install_root=program).model_root == (program / "models").resolve()
+
+    # Anything already downloaded there (even a partial file) keeps it registered.
+    reset_runtime_paths()
+    (old_default / "MOSS-Transcribe-Diarize").mkdir()
+    (old_default / "MOSS-Transcribe-Diarize" / "a.bin.part").write_bytes(b"x")
+    assert build_runtime_paths(install_root=program).model_root == old_default.resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="program-folder default is Windows only")
+def test_user_chosen_and_dev_dist_roots_are_not_redirected(tmp_path, monkeypatch):
+    local, program = _fresh_install(tmp_path, monkeypatch)
+    chosen = tmp_path / "E-drive" / "models"
+    chosen.mkdir(parents=True)
+    build_runtime_paths(install_root=program, model_root=chosen, persist=True)
+    reset_runtime_paths()
+    assert build_runtime_paths(install_root=program).model_root == chosen.resolve()
+
+    # A packaged build inside a source checkout's dist/ is replaced on every
+    # daily swap; it keeps the user-data default.
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    dev_dist = checkout / "dist" / "2ByteASR"
+    dev_dist.mkdir(parents=True)
+    (local / "2ByteASR" / "runtime_paths.json").unlink()
+    monkeypatch.setenv(MODEL_ROOT_ENV, "")  # persisting exported the chosen root
+    reset_runtime_paths()
+    paths = build_runtime_paths(install_root=dev_dist)
+    assert paths.model_root == (local / "2ByteASR" / "Models").resolve()
+    assert paths.model_root_source == "default_user_data"
+
+
+def test_isolated_test_root_never_defaults_to_the_program_folder(tmp_path, monkeypatch):
+    local, program = _fresh_install(tmp_path, monkeypatch)
+    monkeypatch.setenv("TWOBYTEASR_TEST_ROOT", str(tmp_path / "test-root"))
+    paths = build_runtime_paths(install_root=program)
+    assert paths.model_root != (program / "models").resolve()

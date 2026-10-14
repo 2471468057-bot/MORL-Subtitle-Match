@@ -2506,15 +2506,21 @@ class _ReviewThread(QThread):
     failed = Signal(str)
     progress = Signal(int, int)
 
-    def __init__(self, project, cue_ids, snapshot, settings, use_ai, parent):
+    def __init__(self, project, cue_ids, snapshot, settings, use_ai, parent, stand_in=None):
         super().__init__(parent)
         from .service import CancellationToken
         self.token = CancellationToken()
         self.inputs = (project, cue_ids, snapshot, settings)
         self.use_ai = use_ai
+        self.stand_in = stand_in
 
     def run(self):
         try:
+            if self.stand_in is not None:  # the tutorial's offline stand-in for the AI request
+                result = self.stand_in(*self.inputs, cancel_token=self.token)
+                self.token.raise_if_cancelled()
+                self.ready.emit(result)
+                return
             from .studio_glossary_service import preview_glossary_correction
             result = preview_glossary_correction(*self.inputs, cancel_token=self.token, use_ai=self.use_ai,
                                                  progress=lambda done, total: self.progress.emit(done, total))
@@ -2843,6 +2849,9 @@ def group_pair(row, group):
 class GlossaryProofreadPage(QWidget):
     back_requested = Signal()
     applied = Signal(str)
+    # Set by the first-run tutorial while it runs: "AI 校对" then uses this offline
+    # stand-in (same arguments as preview_glossary_correction) instead of a request.
+    ai_stand_in = None
 
     def __init__(self, window):
         super().__init__()
@@ -3214,21 +3223,44 @@ class GlossaryProofreadPage(QWidget):
         self.replace_bar.hide()
         right_layout.addWidget(self.replace_bar)
         from PySide6.QtGui import QKeySequence, QShortcut
-        find = QShortcut(QKeySequence("Ctrl+F"), self)
-        find.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        find.activated.connect(self._focus_find)
-        replace = QShortcut(QKeySequence("Ctrl+H"), self)
-        replace.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        replace.activated.connect(self._open_replace)
-        for keys, handler in (("Ctrl+Z", self._undo), ("Ctrl+Y", self._redo), ("Ctrl+Shift+Z", self._redo)):
+        # Keys come from the shared shortcut registry (customizable, 2026-10-13).
+        page_shortcuts = {}
+        for action_id, keys, handler in (("proofread.find", "Ctrl+F", self._focus_find),
+                                         ("proofread.replace", "Ctrl+H", self._open_replace),
+                                         ("proofread.undo", "Ctrl+Z", self._undo),
+                                         ("proofread.redo", "Ctrl+Y", self._redo),
+                                         ("proofread.redo_alt", "Ctrl+Shift+Z", self._redo)):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(handler)
+            page_shortcuts[action_id] = shortcut
+        from .shortcut_registry import keep_keys
+        keep_keys(page_shortcuts)
         self.hint_label = QLabel()
         self.hint_label.setObjectName("proofreadHint")
         self.hint_label.setWordWrap(True)
         self.hint_label.hide()
         right_layout.addWidget(self.hint_label)
+        # 2026-10-13: what this page checks right now, and the next step when
+        # the project brought no glossary (never a blank page to puzzle over).
+        self.scope_banner = QFrame()
+        self.scope_banner.setObjectName("proofreadScope")
+        scope_row = QHBoxLayout(self.scope_banner)
+        scope_row.setContentsMargins(10, 6, 6, 6)
+        self.scope_text = QLabel()
+        self.scope_text.setObjectName("proofreadScopeText")
+        self.scope_text.setWordWrap(True)
+        scope_row.addWidget(self.scope_text, 1)
+        self.scope_use_home = QPushButton(tr("用首页启用的词库检查"))
+        self.scope_use_home.setObjectName("proofreadScopeUseHome")
+        self.scope_use_home.clicked.connect(self._use_home_libraries)
+        scope_row.addWidget(self.scope_use_home)
+        self.scope_dismiss = QPushButton(tr("知道了"))
+        self.scope_dismiss.setObjectName("proofreadGhost")
+        self.scope_dismiss.clicked.connect(self._dismiss_scope_banner)
+        scope_row.addWidget(self.scope_dismiss)
+        self.scope_banner.hide()
+        right_layout.addWidget(self.scope_banner)
         self.conflicts = ConflictPanel()
         self.conflicts.changed.connect(self._conflict_chosen)
         right_layout.addWidget(self.conflicts)
@@ -3423,6 +3455,7 @@ QMenu#proofreadMenu::separator {{ height: 1px; background: {t.border}; margin: 4
         inherited, origin = inherited_library_ids(live) if live is not None else ((), "")
         self._inherit_origin = origin
         self._fill_libraries(live, keep=inherited)
+        self._show_scope_banner(inherited, origin)
         self.term_input.clear()
         self.add_status.hide()
         self._build_rows(live, start_checks=False)
@@ -4700,6 +4733,49 @@ QMenu#proofreadMenu::separator {{ height: 1px; background: {t.border}; margin: 4
         self._read_snapshot()
         self._run(False)
 
+    # ---- first use: scope and next step (2026-10-13) -------------------------
+    def _home_library_ids(self):
+        import subtitle_core as legacy
+        settings = getattr(legacy, "RUNTIME_SETTINGS", {}) or {}
+        ids = [str(x) for x in ((settings.get("glossary") or {}).get("enabled_glossary_ids") or ()) if str(x)]
+        return tuple(identity for identity in dict.fromkeys(ids) if identity in getattr(self, "_catalog", {}))
+
+    def _show_scope_banner(self, inherited, origin):
+        from PySide6.QtCore import QSettings
+        seen = QSettings("2ByteASR", "2ByteASR").value("onboarding/proofread_scope_seen", False) in (True, "true")
+        names = "、".join(self._catalog.get(identity, identity) for identity in inherited)
+        home = self._home_library_ids() if not inherited else ()
+        self.scope_use_home.setVisible(bool(home))
+        if inherited:
+            where = tr("本次识别") if origin == "recognition" else tr("本工程")
+            text = tr("正在用{where}的词库检查：{names}", where=where, names=names)
+            if not seen:
+                text += "　·　" + tr("词库匹配免费；AI 校对可能收费，要你点才会运行")
+        elif home:
+            text = tr("这个工程没有词库。要用首页的词库（{names}）检查吗？免费",
+                      names="、".join(self._catalog.get(identity, identity) for identity in home))
+        else:
+            text = tr("这个工程没有词库，可以直接阅读和修改；要检查写法，在左侧勾选词库")
+        self.scope_text.setText(text)
+        self.scope_banner.setVisible(True)
+
+    def _use_home_libraries(self):
+        home = self._home_library_ids()
+        if not home:
+            return
+        live, _studio = self._live_project()
+        self._inherit_origin = "home"
+        self._fill_libraries(live, keep=home)
+        self._libraries_changed()
+        self.scope_use_home.hide()
+        self.scope_text.setText(tr("正在用首页的词库检查：{names}",
+                                   names="、".join(self._catalog.get(identity, identity) for identity in home)))
+
+    def _dismiss_scope_banner(self):
+        from PySide6.QtCore import QSettings
+        QSettings("2ByteASR", "2ByteASR").setValue("onboarding/proofread_scope_seen", True)
+        self.scope_banner.hide()
+
     def _fill_terms(self, *_args):
         self.term_list.clear()
         if self._snapshot is None:
@@ -4912,7 +4988,8 @@ QMenu#proofreadMenu::separator {{ height: 1px; background: {t.border}; margin: 4
         settings = copy.deepcopy(getattr(legacy, "RUNTIME_SETTINGS", {}) or {})
         self._review_choices = self._active_choices()
         review_snapshot = prefer_spellings(self._snapshot, self._review_choices)
-        worker = _ReviewThread(_review_copy(live), wanted, review_snapshot, settings, bool(use_ai), self)
+        worker = _ReviewThread(_review_copy(live), wanted, review_snapshot, settings, bool(use_ai), self,
+                               stand_in=self.ai_stand_in if use_ai else None)
         self._worker, self._worker_ai, self._worker_scope_all = worker, bool(use_ai), scope is None
         self._set_busy(True)
         self._set_status(tr("正在请求 AI 校对…") if use_ai else tr("正在按词库匹配（本地）…"))

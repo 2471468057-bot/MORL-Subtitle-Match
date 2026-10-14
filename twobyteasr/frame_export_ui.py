@@ -80,6 +80,9 @@ def install_frame_button(page,layout):
     from PySide6.QtCore import Qt
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.setPopupMode(QToolButton.MenuButtonPopup);button.clicked.connect(controller.save)
+    # Qt centres the icon on the whole button, menu segment included; the
+    # style sheet pads the right side by that segment (2026-10-14).
+    button.setProperty('splitMenu', True)
     menu=QMenu(button)
     subtitles=menu.addAction('包含软件字幕');subtitles.setCheckable(True)
     subtitles.setChecked(str(controller.settings.value('frame_export/subtitles','true')).lower() not in {'false','0'})

@@ -139,6 +139,12 @@ QFrame#studioToolbar QPushButton[buttonRole="toggle"]:checked {{
 QFrame#studioToolbar QPushButton[buttonRole="secondary"]:focus, QFrame#studioToolbar QPushButton[buttonRole="ghost"]:focus,
 QFrame#studioToolbar QPushButton[buttonRole="toggle"]:focus {{ border-color: {theme.focus}; }}
 QFrame#studioToolbar QPushButton[buttonRole="primary"] {{ min-height: 32px; max-height: 32px; padding: 0 14px; font-size: {t.label_size}px; }}
+QFrame#studioToolbar QPushButton[emphasis="accent"] {{ color: {theme.accent_text}; font-weight: 600; }}
+QFrame#studioToolbar QPushButton[emphasis="accent"]:hover {{ background: {theme.accent_tint}; color: {theme.accent_text}; }}
+QFrame#studioToolbar QPushButton[hasMenu="true"] {{ padding-right: 24px; }}
+QFrame#studioToolbar QPushButton[hasMenu="true"]::menu-indicator {{
+    subcontrol-origin: padding; subcontrol-position: right center; right: 8px; width: 8px; height: 8px; }}
+QFrame#studioToolbar QToolButton[hideMenuIndicator="true"]::menu-indicator {{ image: none; width: 0; height: 0; }}
 QFrame#studioToolbar QLabel#studioFilename {{ color: {theme.text}; font-family: {UI_FONT_STACK}; font-size: 15px; font-weight: 600; }}
 QFrame#studioToolbar QLabel#studioSaveState {{ color: {theme.text_muted}; font-size: {t.caption_size}px; font-weight: 500; }}
 QWidget#studioTimelineCommandBar QPushButton#studioButton {{
@@ -169,8 +175,11 @@ QPushButton#reviewEntryButton:focus {{ border-color: {theme.focus}; }}
 QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] {{
     background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 12px; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"] {{
-    background: {theme.accent}; color: {theme.text_on_accent}; border: 0; border-radius: 17px;
-    min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; }}
+    background: {theme.accent}; color: {theme.text_on_accent}; border: 0; border-radius: 16px; padding: 0;
+    min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }}
+QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] QLineEdit#timelineTimecodeInput,
+QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] QComboBox {{
+    min-height: 30px; max-height: 30px; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:hover {{ background: {theme.accent_hover}; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:pressed {{ background: {theme.accent_pressed}; }}
 QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip, QWidget#projectRangeBar QCheckBox#timelineToggleChip {{
@@ -193,6 +202,7 @@ QWidget#studioTimelineCommandBar QToolButton#rangeAction {{ background: transpar
 QWidget#studioTimelineCommandBar QToolButton#rangeAction:hover {{ background: {theme.selected}; border-color: {theme.border_strong}; color: {theme.text}; }}
 QWidget#studioTimelineCommandBar QToolButton#rangeAction::menu-button {{ border: 0; border-left: 1px solid {theme.border}; width: 16px; }}
 QWidget#studioTimelineCommandBar QToolButton#rangeAction[menuOnly="true"] {{ padding-right: 18px; }}
+QWidget#studioTimelineCommandBar QToolButton#rangeAction[splitMenu="true"] {{ padding: 0 16px 0 0; }}
 QWidget#studioTimelineCommandBar QToolButton#rangeAction::menu-indicator {{
     subcontrol-origin: padding; subcontrol-position: right center; right: 5px; }}
 QFrame#rangeSegment {{ background: {theme.input_surface}; border: 1px solid {theme.border}; border-radius: 8px; }}

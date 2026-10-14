@@ -68,7 +68,13 @@ Subtitle Studio on the left, the home screen on the right. More screenshots are 
 
 ## Download and quick start
 
-**The current release is 0.6.5, for Windows x64 only.** Get the newest version from the [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest). A first install needs only [`2ByteASR-Setup-0.6.5.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.6.5/2ByteASR-Setup-0.6.5.exe) (about 962 MB; SHA-256 in the release's `SHA256SUMS.txt`). The first local recognition still downloads the runtime environment and models you choose in the Model workshop. Install 0.6.5 over 0.6.0 or earlier without uninstalling first; from 0.6.5 on, "Check for updates" downloads only the changed parts and keeps compatible models and environments. The installer is not Windows code-signed, so Windows may show an "unknown publisher" prompt.
+**The current release is 0.7.1: Windows x64, plus macOS on Apple Silicon (experimental).** Get the newest version from the [Latest Release](https://github.com/NOTBAD314/2ByteASR/releases/latest); SHA-256 digests are in the release's `SHA256SUMS.txt`.
+
+- **Windows:** download only [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe) (about 1 GB). From 0.6.5 or 0.7.0, use "Check for updates" in the app; it downloads only the changed parts and keeps compatible models and environments. Install over 0.6.0 or earlier without uninstalling first. The installer is not Windows code-signed, so Windows may show an "unknown publisher" prompt.
+- **macOS (experimental; Apple Silicon, macOS 15 or later):** [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg) (about 0.5 GB). It is not signed with a Developer ID or notarized by Apple: the first time, Control-click the app in Finder and choose "Open"; there is no need to turn off system security. Intel Macs are not supported. It has been tested only on GitHub's virtual Macs; see the [notes](docs/deployment/macos-experimental.zh-CN.md) (in Chinese).
+- **No NVIDIA GPU:** cloud recognition works on its own (with your own provider account and API key); no local models are needed.
+
+The first local recognition still downloads the runtime environment and models you choose in the Model workshop.
 
 1. **Install and launch.** Run the Setup installer, then launch the app.
 2. **Prepare recognition.** Set up local models in the Model workshop, or configure your own online service.
@@ -80,7 +86,7 @@ The default theme is **Deep Grape**; Appearance settings also offer Warm Cream, 
 ### Requirements
 
 - **System:** Windows 10 22H2 (19045) or later, x64; macOS 15 or later on Apple Silicon (experimental, without Developer ID signing or notarization; see the [notes](docs/deployment/macos-experimental.zh-CN.md), in Chinese).
-- **Local recognition:** Download model weights as needed in the Model workshop. SenseVoice supports CPU processing; MOSS, FireRedASR2-AED, Qwen3-ASR and similar models use NVIDIA CUDA.
+- **Local recognition:** Download model weights as needed in the Model workshop. SenseVoice supports CPU processing; on Windows, MOSS, FireRedASR2-AED, Qwen3-ASR and similar models use NVIDIA CUDA; on Apple silicon Macs, MOSS and FireRedASR2-AED use the Apple GPU (slower, experimental).
 - **Online services:** Use your own account or API key. Billing follows your provider's terms.
 - **Output:** SRT, ASS, TXT, JSON, separate speaker tracks, and MP4, MKV, or MOV video.
 
@@ -93,14 +99,14 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-`main` holds the application source from 0.6.5 on. The tag `v0.6.5` is the build source that matches the installer byte for byte; the complete build inputs are in the release's `2ByteASR-Source-0.6.5.zip`. Project-owned code is GPL-3.0-only with an additional permission for Remotion/GSAP; see [PROJECT_LICENSE.md](PROJECT_LICENSE.md).
+`main` holds the application source from 0.6.5 on. The tag `v0.7.1` is the build source that matches the 0.7.1 installer byte for byte; the complete build inputs are in the release's `2ByteASR-Source-0.7.1.zip`. Project-owned code is GPL-3.0-only with an additional permission for Remotion/GSAP; see [PROJECT_LICENSE.md](PROJECT_LICENSE.md).
 
 ## Model catalog
 
 - **Primary transcription:** MOSS-Transcribe-Diarize (multi-speaker with diarization), SenseVoice Small (CPU capable), FireRedASR2-AED, Qwen3-ASR 1.7B, Paraformer Large, Whisper large-v3-turbo, Fun-ASR Nano, FireRedASR2-LLM, GLM-ASR-Nano, Canary-Qwen-2.5B (English)
 - **Subtitle timeline:** FireRedASR2-AED, Qwen3-ForcedAligner 0.6B, Paraformer Large, Whisper large-v3-turbo
 - **Text review:** Qwen3-ASR 1.7B, SenseVoice Small, Whisper large-v3-turbo, FireRedASR2-LLM, Fun-ASR Nano
-- **Online endpoints (your own account):** Qwen Audio 3.1 long-audio, Spark-ASR 2.0, Groq Whisper, OpenAI Transcribe, MAI 2.1 (OpenRouter), OpenAI-compatible endpoints
+- **Online endpoints (your own account):** MOSS Pro cloud (MOSI, with speakers), Alibaba Cloud Bailian / Qwen Cloud file transcription (Qwen3-ASR word times, Qwen-Audio 3.1 with speakers), Spark-ASR 2.0, Groq Whisper, OpenAI Transcribe, MAI 2.1 (OpenRouter), OpenAI-compatible endpoints
 
 Model weights are not bundled; download them in the Model workshop. Each model follows its own license.
 

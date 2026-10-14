@@ -33,3 +33,17 @@ def test_lightweight_profile_recommends_low_memory_for_large_batch(tmp_path):
         path.write_bytes(b"0")
         paths.append(path)
     assert lightweight_media_profile(paths)["recommended_plan"] == "low_memory"
+
+
+def test_language_presets_use_moss_aligner_and_qwen_review_for_their_language():
+    # 2026-10-14: 日语推荐 = MOSS + Qwen3 aligner (CTC starts) + Qwen3-ASR 1.7B;
+    # 英语推荐 = the same with Qwen3-ForcedAligner 0.6B word times.
+    japanese, english = recognition_plan("japanese"), recognition_plan("english")
+    assert (japanese.primary, japanese.timeline, japanese.review, japanese.language) == ("moss", "qwen_aligner", "local", "ja")
+    assert (english.primary, english.timeline, english.review, english.language) == ("moss", "qwen_aligner", "local", "en")
+    assert matching_plan("moss", "qwen_aligner", "local", "ja") == "japanese"
+    assert matching_plan("moss", "qwen_aligner", "local", "en") == "english"
+    # Chinese or unknown language with the same backends is not called a language preset.
+    assert matching_plan("moss", "qwen_aligner", "local", "zh") == "custom"
+    assert matching_plan("moss", "qwen_aligner", "local") == "custom"
+    assert matching_plan("moss", "local", "local", "ja") == "quality"

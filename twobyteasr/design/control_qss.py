@@ -136,6 +136,12 @@ QListWidget::item:selected, QTreeWidget::item:selected {{
     background: {hover};
     color: {text};
 }}
+/* A header is an item view too; without this it inherited the view border
+   above and drew a second rounded box inside every table (2026-10-14). */
+QHeaderView {{
+    background: transparent;
+    border: 0;
+}}
 QHeaderView::section {{
     background: {bg1};
     color: {muted};

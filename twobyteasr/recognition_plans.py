@@ -22,11 +22,26 @@ class RecognitionPlan:
     timeline: str
     review: str
     estimated_vram_gb: float
+    # The spoken language the plan is for ("" = any). Japanese and English use
+    # the same backends; the language tells them apart (2026-10-14).
+    language: str = ""
 
 
 RECOGNITION_PLANS: tuple[RecognitionPlan, ...] = (
     RecognitionPlan(
         "quality", "质量优先（推荐）", "主稿 + 字级时间轴 + 独立复核，适合多人和长视频", "moss", "local", "local", 10.8
+    ),
+    # 2026-10-14 (user request): language presets. For Japanese and English the
+    # Chinese timeline model is never used; words are timed by
+    # Qwen3-ForcedAligner-0.6B and, for Japanese, line starts are checked by the
+    # Japanese CTC aligner. Review is the local Qwen3-ASR 1.7B.
+    RecognitionPlan(
+        "japanese", "日语推荐", "MOSS 主稿 + Qwen3 对齐字词时间、日语 CTC 校正句首 + Qwen3-ASR 1.7B 复核",
+        "moss", "qwen_aligner", "local", 10.8, "ja",
+    ),
+    RecognitionPlan(
+        "english", "英语推荐", "MOSS 主稿 + Qwen3-ForcedAligner 0.6B 单词时间 + Qwen3-ASR 1.7B 复核",
+        "moss", "qwen_aligner", "local", 10.8, "en",
     ),
     RecognitionPlan(
         "speed", "速度优先", "轻量主稿，尽快得到可编辑字幕", "sensevoice", "off", "off", 1.2
@@ -56,10 +71,12 @@ def recognition_plan(key: str) -> RecognitionPlan:
     return _BY_KEY.get(str(key), _BY_KEY["custom"])
 
 
-def matching_plan(primary: str, timeline: str, review: str) -> str:
+def matching_plan(primary: str, timeline: str, review: str, language: str = "") -> str:
+    """The plan with these backends; a language plan only for its language."""
     values = (str(primary), str(timeline), str(review))
     for plan in RECOGNITION_PLANS:
-        if plan.key != "custom" and values == (plan.primary, plan.timeline, plan.review):
+        if (plan.key != "custom" and values == (plan.primary, plan.timeline, plan.review)
+                and plan.language in ("", str(language or ""))):
             return plan.key
     return "custom"
 

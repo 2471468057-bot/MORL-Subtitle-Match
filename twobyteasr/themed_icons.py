@@ -83,11 +83,17 @@ def icon_role_color(role: str, theme: ThemeDefinition | None = None) -> str:
     }.get(str(role), active.text)
 
 
+# A play triangle's visual centre sits right of its box centre; nudge it so it
+# reads centred inside round play buttons (2026-10-14).
+_OPTICAL_OPTIONS = {"fa5s.play": {"offset": (0.08, 0.0)}}
+
+
 def themed_icon(name: str, role: str = "primary", theme: ThemeDefinition | None = None) -> QIcon:
     _prime_platform_font_fallback()
     active = _active_theme(theme)
     color = icon_role_color(role, active)
-    return qta.icon(name, color=color, color_active=color, color_disabled=active.disabled)
+    return qta.icon(name, color=color, color_active=color, color_disabled=active.disabled,
+                    **_OPTICAL_OPTIONS.get(str(name), {}))
 
 
 def cached_icon_pixmap(

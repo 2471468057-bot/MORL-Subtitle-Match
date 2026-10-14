@@ -260,6 +260,18 @@ class StudioWorkspaceBuilder:
         bind_text(find_replace, '查找并替换字幕文字 (Ctrl+F / Ctrl+H)', property='toolTip')
         find_replace.clicked.connect(page._open_find_replace)
         bar.addWidget(find_replace)
+        # 2026-10-14: the user's own line-broken script, timed by the project's
+        # word timestamps only (no model, no AI); see studio_script_match.
+        script_match = QPushButton("匹配文稿")
+        page.studio_script_match_button = script_match
+        script_match.setObjectName("studioButton")
+        bind_text(script_match, '贴上已断好句的完整文稿，只用字级时间对齐（不调用模型或 AI）', property='toolTip')
+
+        def open_script_match():
+            from .studio_script_match import open_script_match_dialog
+            open_script_match_dialog(page)
+        script_match.clicked.connect(open_script_match)
+        bar.addWidget(script_match)
         bar.addWidget(page._toolbar_divider())
         # 2026-09-02（用户指示）：说话人管理改为与其它工具一致的
         # 文本按钮 + 同色图标，不再是无文字的白色纯图标。
@@ -282,6 +294,16 @@ class StudioWorkspaceBuilder:
         build_bilingual_menu(page, bilingual_menu)
         page.bilingual_toggle_button.setMenu(bilingual_menu)
         bar.addWidget(page.bilingual_toggle_button)
+        # 2026-10-13: punctuation style (添加标点 / 不加标点 / 保留原文) for preview
+        # and every export; the manuscript is never rewritten by the choice.
+        page.punctuation_button = QPushButton("标点")
+        page.punctuation_button.setObjectName("studioButton")
+        page.punctuation_button.setIcon(_icon("fa5s.paragraph", GREEN))
+        punctuation_menu = create_studio_menu(page)
+        from .studio_punctuation import build_menu as build_punctuation_menu
+        build_punctuation_menu(page, punctuation_menu)
+        page.punctuation_button.setMenu(punctuation_menu)
+        bar.addWidget(page.punctuation_button)
         clip_assistant = QPushButton("剪辑助手")
         page.studio_clip_assistant_button = clip_assistant
         clip_assistant.setObjectName("studioButton")
@@ -301,11 +323,12 @@ class StudioWorkspaceBuilder:
         bind_text(shortcut_entry, '配置 Studio 快捷键', property='toolTip')
         shortcut_entry.clicked.connect(page._show_shortcut_settings)
         bar.addWidget(shortcut_entry)
-        find_replace_shortcut = QShortcut(QKeySequence("Ctrl+H"), page)
+        # Keys come from the shortcut registry (_install_shortcuts re-keys them).
+        find_replace_shortcut = QShortcut(QKeySequence(page._shortcut_values.get("find_replace", "Ctrl+H")), page)
         find_replace_shortcut.activated.connect(page._open_find_replace)
         page._find_replace_shortcut = find_replace_shortcut
         # Ctrl+F is the usual "find"; it opens the same find/replace tools.
-        find_shortcut = QShortcut(QKeySequence("Ctrl+F"), page)
+        find_shortcut = QShortcut(QKeySequence(page._shortcut_values.get("find", "Ctrl+F")), page)
         find_shortcut.activated.connect(page._open_find_replace)
         page._find_shortcut = find_shortcut
         bar.addWidget(page._toolbar_divider())
@@ -317,15 +340,14 @@ class StudioWorkspaceBuilder:
         bar.addWidget(export)
         render = QPushButton("压制成片")
         page.studio_render_button = render
-        render.setObjectName("studioPrimary")
-        install_themed_icon(render, "fa5s.film", "on_accent")
+        render.setObjectName("studioButton")
         render.clicked.connect(page._open_render_dialog)
         bar.addWidget(render)
         # Less frequent commands share one menu; their existing buttons retain
         # signal/shortcut ownership and are used by the menu actions.
         page._studio_toolbar_overflow_widgets = (open_button,
             page.bilingual_toggle_button, page.review_mode_button, clip_assistant)
-        page._studio_compact_commands = (page.speaker_manager_button, shortcut_entry, find_replace)
+        page._studio_compact_commands = (page.speaker_manager_button, shortcut_entry, find_replace, script_match)
         overflow=page._tool_button('fa5s.ellipsis-h', '更多工作区操作', lambda: None)
         overflow_menu=create_studio_menu(overflow)
         def update_workspace_menu():
@@ -347,6 +369,7 @@ class StudioWorkspaceBuilder:
                 action.triggered.connect(lambda _checked=False, button=source: button.click())
         overflow_menu.aboutToShow.connect(update_workspace_menu)
         overflow.setMenu(overflow_menu);overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        overflow.setProperty('hideMenuIndicator', True)  # "•••" already says "more"
         bar.addWidget(overflow)
         from .design.presentation import button_role
         for button, role, icon_name in (
@@ -356,10 +379,20 @@ class StudioWorkspaceBuilder:
             (page.bilingual_toggle_button,'secondary','fa5s.language'),
             (page.review_mode_button,'secondary','fa5s.glasses'),
             (find_replace,'secondary','fa5s.exchange-alt'),
+            (script_match,'secondary','fa5s.align-left'),
             (clip_assistant,'secondary','fa5s.film'),
             (shortcut_entry,'secondary','fa5s.keyboard'),
-            (export,'secondary','fa5s.file-export'),(render,'primary','fa5s.film')):
+            (page.punctuation_button,'secondary','fa5s.paragraph'),
+            (export,'secondary','fa5s.file-export'),(render,'secondary','fa5s.file-video')):
             button_role(button,role,icon=icon_name)
+        # 2026-10-14 (user screenshot): 「标点」 kept the old outlined combo look
+        # with a green icon and 「压制成片」 was the only filled block with a
+        # film-strip icon. Both now share the toolbar's ghost buttons; render
+        # keeps its emphasis through accent text and icon only.
+        for button in (page.punctuation_button, page.bilingual_toggle_button):
+            button.setProperty('hasMenu', True)
+        render.setProperty('emphasis', 'accent')
+        install_themed_icon(render, 'fa5s.file-video', 'accent')
         # The application header is intentionally removed in Studio focus
         # mode. Keep the expected desktop controls in the Studio toolbar.
         controls = QFrame()
@@ -385,6 +418,8 @@ class StudioWorkspaceBuilder:
             undo_button, redo_button, page.cue_list_toggle_button, page.context_expand_button,
             page.speaker_manager_button, find_replace, shortcut_entry, export, render,
             import_media,
+            # A per-project display choice; nothing to set in the library (2026-10-14).
+            page.punctuation_button, script_match,
         ]
         page._hub_toolbar_hidden.extend([page.relink_button])
         page._hub_toolbar_hidden.extend(toolbar.findChildren(QFrame, "toolbarDivider"))
@@ -938,6 +973,10 @@ class StudioWorkspaceBuilder:
         timeline_toolbar.addWidget(transport_start)
         page.play_button = page._tool_button("fa5s.play", "播放或暂停 (Space)", page._toggle_playback)
         page.play_button.setProperty("transportRole", "play")
+        # Glyph in the on-accent colour at about half the circle, so it reads as
+        # centred with room around it (2026-10-14: 24 px in a 34 px circle).
+        install_themed_icon(page.play_button, "fa5s.play", "on_accent")
+        page.play_button.setIconSize(QSize(16, 16))
         timeline_toolbar.addWidget(page.play_button)
         timeline_toolbar.addWidget(page._tool_button("fa5s.step-forward", "下一帧 (Right)", lambda: page._frame_step(False)))
         page.position_label = QLabel("00:00:00.000")
