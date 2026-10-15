@@ -147,6 +147,9 @@ class LayerItem(QGraphicsObject):
             painter.drawText(self.rect.adjusted(8, 8, -8, -8), Qt.AlignCenter | Qt.TextWordWrap, '素材不可用\n选择图层后重新定位')
 
     def itemChange(self, change, value):
+        if (change == QGraphicsItem.ItemPositionChange and not self.view.syncing and
+                self.view.drag_constraint is not None):
+            value = self.view.drag_constraint.position(self, value)
         if change == QGraphicsItem.ItemPositionHasChanged and not self.view.syncing:
             layer = self.view.session.document.layer(self.layer.id)
             if layer and not layer.locked:
@@ -173,6 +176,7 @@ class CoverView(QGraphicsView):
         self.renderer = CoverRenderer()
         self.items_by_id = {}
         self.syncing = False
+        self.drag_constraint = None
         self.before_drag = None
         self.resize_drag = None
         self.pan_point = None
@@ -294,6 +298,8 @@ class CoverView(QGraphicsView):
                     painter.setBrush(QColor('#79b69b') if self.hover_handle == index else QColor('#ffffff'))
                     painter.drawRect(QRectF(point.x()-handle_size/2, point.y()-handle_size/2, handle_size, handle_size))
                 painter.setBrush(Qt.NoBrush)
+        if self.drag_constraint is not None:
+            self.drag_constraint.paint(painter)
         painter.restore()
 
     @staticmethod
@@ -328,6 +334,8 @@ class CoverView(QGraphicsView):
             event.accept()
             return
         if event.button() == Qt.LeftButton:
+            if self.drag_constraint is not None:
+                self.drag_constraint.clear()
             self.before_drag = self.session.document.snapshot()
             if len(self.session.selected) == 1:
                 key = next(iter(self.session.selected))
@@ -343,6 +351,8 @@ class CoverView(QGraphicsView):
                         event.accept()
                         return
         super().mousePressEvent(event)
+        if event.button() == Qt.LeftButton and self.drag_constraint is not None:
+            self.drag_constraint.begin()
 
     def mouseMoveEvent(self, event):
         if self.pan_point is not None:
@@ -393,6 +403,8 @@ class CoverView(QGraphicsView):
             event.accept()
             return
         self.hover_handle = self.hit_handle(event.position().toPoint())
+        if self.drag_constraint is not None:
+            self.drag_constraint.modifiers = event.modifiers()
         super().mouseMoveEvent(event)
         if self.hover_handle is not None:
             self.setCursor(self.handle_cursor(self.hover_handle))
@@ -401,6 +413,8 @@ class CoverView(QGraphicsView):
         self.viewport().update()
 
     def mouseReleaseEvent(self, event):
+        if self.drag_constraint is not None:
+            self.drag_constraint.clear()
         if self.pan_point is not None:
             self.pan_point = None
             self.unsetCursor()
@@ -419,6 +433,8 @@ class CoverView(QGraphicsView):
         self.viewport().update()
 
     def focusOutEvent(self, event):
+        if self.drag_constraint is not None:
+            self.drag_constraint.clear()
         self.space_down = False
         if self.resize_drag:
             self.resize_drag = None
