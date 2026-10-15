@@ -60,6 +60,7 @@ class ResultPreview(QPushButton):
     def __init__(self):
         super().__init__()
         self.image = QPixmap()
+        self._scaled = (None, QPixmap())
         self.setObjectName('exportResultPreview')
         bind_text(self, '播放成片预览', property='accessibleName')
         bind_text(self, '播放成片', property='toolTip')
@@ -87,7 +88,8 @@ class ResultPreview(QPushButton):
             size = self.image.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
             rect = QRectF((self.width()-size.width())/2, (self.height()-size.height())/2, size.width(), size.height())
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.drawPixmap(rect, self.image, QRectF(self.image.rect()))
+            poster = self._device_pixmap(size)
+            painter.drawPixmap(rect, poster, QRectF(poster.rect()))
         else:
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, '成片已就绪')
         # Play mark: a dark disc with a light triangle, stronger on hover.
@@ -104,6 +106,23 @@ class ResultPreview(QPushButton):
         painter.setBrush(QColor(255, 255, 255, 235))
         painter.drawPolygon(triangle)
         painter.end()
+
+    def _device_pixmap(self, size):
+        """The poster resampled once to the screen's own pixels (2026-10-15).
+
+        Drawing the full-resolution frame with SmoothPixmapTransform is a
+        bilinear downscale on every paint; a cached area-averaged copy at
+        devicePixelRatio stays sharp on 125–175 % screens."""
+        ratio = max(1.0, float(self.devicePixelRatioF()))
+        key = (self.image.cacheKey(), size.width(), size.height(), ratio)
+        if self._scaled[0] != key:
+            target = QSize(max(1, round(size.width() * ratio)), max(1, round(size.height() * ratio)))
+            scaled = (QPixmap(self.image) if self.image.size() == target else
+                      self.image.scaled(target, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                        Qt.TransformationMode.SmoothTransformation))
+            scaled.setDevicePixelRatio(ratio)
+            self._scaled = (key, scaled)
+        return self._scaled[1]
 
     def enterEvent(self, event):
         super().enterEvent(event)

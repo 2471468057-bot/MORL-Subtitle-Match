@@ -102,8 +102,21 @@ def parse_script(text: str) -> list[str]:
 _CJK = re.compile(r'[㐀-鿿豈-﫿]')
 
 
-def _key(char: str) -> str:
-    if _CJK.match(char):
+def _fold(text: str) -> str:
+    """Width and kana folding (2026-10-15, scripts in other languages): ＡＢ
+    = AB, ｶﾞ = ガ, and katakana compares as hiragana (カ = か), so a script
+    and a recognizer that chose a different kana or width still meet. Whole
+    strings: a half-width voiced mark is its own character until composed."""
+    import unicodedata
+    text = unicodedata.normalize('NFKC', str(text))
+    return ''.join(chr(ord(char) - 0x60) if 0x30A1 <= ord(char) <= 0x30F6 else char for char in text)
+
+
+def _key(char: str, language: str = '') -> str:
+    if _CJK.match(char) and language != 'ja':
+        # Chinese: a heard homophone (至东 for 至冬) still anchors the line.
+        # Japanese kanji keep their own identity: Chinese readings would make
+        # unrelated kanji equal.
         try:
             from .text_similarity import phonetic_text
             key = phonetic_text(char) or char
@@ -114,13 +127,14 @@ def _key(char: str) -> str:
     return char.casefold()
 
 
-def match_script(lines: list[str], tokens: list[Token], *, speech_regions_ms=None) -> ScriptMatch:
+def match_script(lines: list[str], tokens: list[Token], *, speech_regions_ms=None, language: str = '') -> ScriptMatch:
     """Place every script line on the token clock; see the module docstring.
 
     ``speech_regions_ms`` (``[(start, end), ...]`` from an energy VAD) trims
     heard lines whose first or last token absorbed a pause: FireRed's
     character boundaries are contiguous, so the silence before a line belongs
     to its first character (2026-10-14 check: 今 lasted 748 ms).
+    ``language`` is the spoken language ('zh', 'ja', 'en'; '' = Chinese rules).
     """
     if not lines:
         raise ScriptMatchError('文稿是空的')
@@ -128,16 +142,17 @@ def match_script(lines: list[str], tokens: list[Token], *, speech_regions_ms=Non
                     key=lambda t: (t.start_ms, t.end_ms))
     if not stream:
         raise ScriptMatchError('没有可用的字级时间戳')
+    language = str(language or '')
     heard_keys, heard_owner = [], []
     for index, token in enumerate(stream):
-        for char in normalized_content(token.text):
-            heard_keys.append(_key(char))
+        for char in _fold(normalized_content(token.text)):
+            heard_keys.append(_key(char, language))
             heard_owner.append(index)
     script_keys, script_line = [], []
-    content = [normalized_content(line) for line in lines]
+    content = [_fold(normalized_content(line)) for line in lines]
     for index, text in enumerate(content):
         for char in text:
-            script_keys.append(_key(char))
+            script_keys.append(_key(char, language))
             script_line.append(index)
     linked: list[int | None] = [None] * len(script_keys)   # script char -> heard char
     matcher = difflib.SequenceMatcher(None, heard_keys, script_keys, autojunk=False)

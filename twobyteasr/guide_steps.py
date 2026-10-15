@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePol
 
 from .i18n import bind_text, tr
 
-ICONS = ('account', 'globe', 'key', 'paste', 'check', 'download', 'folder', 'chat')
+ICONS = ('account', 'globe', 'key', 'paste', 'check', 'download', 'folder', 'chat', 'coin')
 
 
 @dataclass(frozen=True)
@@ -83,6 +83,13 @@ class StepIcon(QWidget):
             painter.drawRoundedRect(QRectF(14, 15, 24, 17), 6, 6)
             painter.drawLine(QPointF(20, 32), QPointF(18, 38))
             painter.drawLine(QPointF(18, 38), QPointF(25, 32))
+        elif kind == 'coin':  # top up (2026-10-15): a coin with a yuan sign
+            painter.drawEllipse(c, 12, 12)
+            painter.drawLine(QPointF(21, 19), QPointF(26, 25))
+            painter.drawLine(QPointF(31, 19), QPointF(26, 25))
+            painter.drawLine(QPointF(26, 25), QPointF(26, 34))
+            painter.drawLine(QPointF(21.5, 27), QPointF(30.5, 27))
+            painter.drawLine(QPointF(21.5, 31), QPointF(30.5, 31))
         else:  # check
             painter.drawLine(QPointF(18, 26), QPointF(24, 32))
             painter.drawLine(QPointF(24, 32), QPointF(35, 19))
@@ -166,6 +173,24 @@ class StepCards(QFrame):
             icon.update()
             card.style().unpolish(card)
             card.style().polish(card)
+
+
+TOPUP_WORDS = ('充值', '账单', 'Credits', '积分')
+
+
+def topup_step(guide) -> GuideStep | None:
+    """“先充值” (2026-10-15, user: many people do not know a key needs credit;
+    10 yuan is enough to start). Only for services whose guide links a top-up,
+    billing or price page."""
+    links = list(getattr(guide, 'links', ()) or ())
+    link = next((item for item in links if any(word in item.label for word in TOPUP_WORDS)), None)
+    if link is None and getattr(guide, 'key', '') == 'mosi_moss_pro':
+        link = next((item for item in links if item.label == '价格'), None)
+        if link is not None:  # ¥2 per hour of audio (catalog, checked 2026-10-14)
+            return GuideStep('充值 10 元（约 5 小时音频）', 'coin', '打开网页', link.url)
+    if link is None:
+        return None
+    return GuideStep('充值 10 元就够先用', 'coin', '打开网页', link.url)
 
 
 def api_key_steps(console_url: str, key_url: str, *, focus_key=None, run_check=None,

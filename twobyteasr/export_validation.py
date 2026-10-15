@@ -180,8 +180,12 @@ def validate_output(ffmpeg, path, *, duration=None, fps=None, cancelled=None, pr
                 try:total_frames=int(video.get('nb_frames'))
                 except (TypeError,ValueError):total_frames=round(float(duration or data['format'].get('duration') or 1)*rate)
                 frame=max(0,min(round(rate),total_frames-1))
-                command += ['-map','0:v:0','-vf',f'select=gte(n\\,{frame}),scale=640:-2,blackframe=amount=0:threshold=24,metadata=mode=select:key=lavfi.blackframe.pblack:value=95:function=less',
-                    '-frames:v','1','-c:v','mjpeg','-pix_fmt','yuvj420p','-q:v','3','-update','1',str(preview_path)]
+                # 2026-10-15 (user: the result poster looked blurry): the poster
+                # is shown up to ~2000 device px wide, so keep the frame at the
+                # export's own resolution (capped at 3840) and near-lossless JPEG;
+                # it used to be scaled to 640 px wide and stretched back up.
+                command += ['-map','0:v:0','-vf',f'select=gte(n\\,{frame}),scale=w=min(iw\\,3840):h=-2:flags=lanczos,blackframe=amount=0:threshold=24,metadata=mode=select:key=lavfi.blackframe.pblack:value=95:function=less',
+                    '-frames:v','1','-c:v','mjpeg','-pix_fmt','yuvj420p','-q:v','2','-update','1',str(preview_path)]
             child=popen_hidden_subprocess(command,purpose='complete staged export decode',
                 stdout=subprocess.DEVNULL,stderr=stderr)
             try:

@@ -499,6 +499,111 @@ const SCENES = {
     const ok = add(`<div class="abs" style="left:309px; top:67px; width:28px; height:28px; border-radius:50%; background:var(--green); color:#fff; display:grid; place-items:center; font-weight:900">✓</div>`);
     show(ok, 2450, 3200, 'scale(.4)');
   },
+  // ---- 2026-10-15: “no key needed” and “what an API key is” pictures --------------------
+  local_free() {
+    // This computer makes the subtitles itself: free (¥0), nothing uploaded.
+    TOTAL = 3600; stage();
+    add(`<div class="box" style="left:22px; top:18px; width:170px; height:112px"></div>`);
+    add(`<div class="abs" style="left:92px; top:130px; width:30px; height:12px; background:var(--el2)"></div>`);
+    add(`<div class="abs" style="left:70px; top:142px; width:74px; height:6px; border-radius:3px; background:var(--el2)"></div>`);
+    const w = wave(38, 34, 22, 'var(--pink)');
+    track(w, [[0, {opacity: .25}], [200, {opacity: .25}], [500, {opacity: 1}], [1700, {opacity: 1}], [2000, {opacity: .35}]]);
+    typeIn(38, 76, '大家好，今天开新档', 700, 70, '');
+    typeIn(38, 100, '先去打第一个 Boss', 1350, 70, '');
+    const free = add(`<div class="pill" style="left:216px; top:26px; width:76px; height:46px; font-size:22px; background:color-mix(in srgb, var(--green) 18%, transparent)"><span class="ok">¥0</span></div>`);
+    show(free, 1900, null, 'scale(.6)');
+    const cloud = add(`<svg class="abs" style="left:306px; top:22px" width="66" height="54" viewBox="0 0 66 54">
+      <path d="M18 42h30a11 11 0 0 0 0-22 15 15 0 0 0-29-3A12 12 0 0 0 18 42z" fill="none" stroke="var(--muted)" stroke-width="3" stroke-linejoin="round"/>
+      <line x1="10" y1="48" x2="56" y2="8" stroke="var(--red)" stroke-width="4" stroke-linecap="round"/></svg>`);
+    show(cloud, 2250, null, 'scale(.6)');
+    const done = add(`<div class="pill" style="left:216px; top:94px; width:156px; height:40px; gap:8px; font-size:15px; background:color-mix(in srgb, var(--green) 18%, transparent)"><span class="ok">✓</span><span class="ok">SRT</span></div>`);
+    show(done, 2650, null, 'translateY(8px)');
+  },
+  key_what() {
+    // A service hands you a key (sk-…); the app uses it to call that service's AI.
+    TOTAL = 3800; stage();
+    add(`<div class="box" style="left:22px; top:28px; width:124px; height:112px"></div>`);
+    add(`<div class="t accent" style="left:66px; top:44px; font-size:34px">✦</div>`);
+    [84, 64, 74].forEach((width, i) => add(`<div class="bar" style="left:42px; top:${96 + i * 12}px; width:${width}px; height:6px"></div>`));
+    const app = add(`<div class="box" style="left:254px; top:28px; width:124px; height:112px; border:2px solid transparent"></div>`);
+    track(app, [[0, {borderColor: 'transparent'}], [2000, {borderColor: 'transparent'}], [2200, {borderColor: 'var(--pink)'}]]);
+    const lines = add(`<div class="abs" style="left:274px; top:56px; width:84px; height:60px"></div>`);
+    [84, 62, 74].forEach((width, i) => add(`<div class="bar" style="left:0; top:${i * 18}px; width:${width}px; height:8px"></div>`, lines));
+    track(lines, [[0, {opacity: .4}], [2200, {opacity: .4}], [2500, {opacity: 1}]]);
+    const spark = add(`<div class="t accent" style="left:350px; top:34px; font-size:20px">✦</div>`);
+    show(spark, 2300, null, 'scale(.4)');
+    const ok = add(`<div class="badge" style="left:344px; top:108px; background:var(--green)">✓</div>`);
+    show(ok, 2700, null, 'scale(.4)');
+    const card = add(`<div class="pill" style="left:70px; top:64px; height:36px; padding:0 12px; gap:6px; z-index:5; background:var(--yellow); color:#2b2630; font-size:13px; box-shadow:var(--shadow)"><span>🔑</span><span>sk-a8f3…</span></div>`);
+    track(card, [[0, {opacity: 0, transform: 'translate(0, 10px) scale(.8)'}], [350, {opacity: 0, transform: 'translate(0, 10px) scale(.8)'}],
+                 [650, {opacity: 1, transform: 'translate(0, 0) scale(1)'}], [1100, {opacity: 1, transform: 'translate(0, 0) scale(1)'}],
+                 [1900, {opacity: 1, transform: 'translate(178px, 0) scale(1)'}], [2150, {opacity: 0, transform: 'translate(190px, 0) scale(.7)'}]]);
+  },
+  key_topup() {
+    // Most services need credit before a key works: top up 10 yuan, pay for what you use.
+    TOTAL = 3800; stage();
+    add(`<div class="box" style="left:60px; top:20px; width:280px; height:76px"></div>`);
+    add(`<svg class="abs" style="left:80px; top:36px" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="19" fill="color-mix(in srgb, var(--yellow) 30%, transparent)" stroke="var(--yellow)" stroke-width="3"/>
+      <path d="M15 12l7 9 7-9M22 21v13M15.5 24h13M15.5 29h13" fill="none" stroke="var(--yellow)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+    swapText(142, 47, '¥0.00', '¥10.00', 1450, ['muted', 'ok'], 24);
+    for (const [label, x] of [['¥10', 70], ['¥50', 160], ['¥100', 250]]) {
+      const chip = add(`<div class="pill" style="left:${x}px; top:114px; width:80px; height:34px; border:2px solid transparent; font-size:15px">${label}</div>`);
+      if (label === '¥10') track(chip, [[0, {borderColor: 'transparent'}], [1050, {borderColor: 'transparent'}], [1150, {borderColor: 'var(--pink)'}]]);
+      else track(chip, [[0, {opacity: 1}], [1150, {opacity: 1}], [1400, {opacity: .45}]]);
+    }
+    for (const [t, dx] of [[2400, 0], [3000, 30]]) {
+      const use = add(`<div class="t muted" style="left:${262 + dx}px; top:44px; font-size:12px">−0.02</div>`);
+      track(use, [[0, {opacity: 0, transform: 'none'}], [t, {opacity: 0, transform: 'none'}], [t + 120, {opacity: 1, transform: 'none'}],
+                  [t + 700, {opacity: 0, transform: 'translateY(-16px)'}]]);
+    }
+    cursor([[0, 220, 150], [500, 220, 150], [900, 104, 124], [1600, 104, 124], [2200, 352, 132]], [1100]);
+  },
+  key_get() {
+    // On the service's site: create a key, copy it; in the app: paste, check, green = ready.
+    TOTAL = 4400; stage();
+    add(`<div class="box" style="left:16px; top:14px; width:214px; height:142px"></div>`);
+    ['var(--red)', 'var(--yellow)', 'var(--green)'].forEach((color, i) =>
+      add(`<div class="abs" style="left:${30 + i * 13}px; top:26px; width:8px; height:8px; border-radius:50%; background:${color}"></div>`));
+    add(`<div class="bar" style="left:76px; top:25px; width:136px; height:10px"></div>`);
+    const create = add(`<div class="pill" style="left:30px; top:48px; height:32px; padding:0 12px; font-size:13px; background:var(--pink); color:#fff">+ API Key</div>`);
+    track(create, [[0, {transform: 'none'}], [700, {transform: 'none'}], [790, {transform: 'scale(.93)'}], [900, {transform: 'none'}]]);
+    const row = add(`<div class="box" style="left:30px; top:94px; width:186px; height:36px; box-shadow:none; background:var(--el2)"></div>`);
+    show(row, 950, null, 'translateY(6px)');
+    const keyText = add(`<div class="t" style="left:42px; top:106px; font-size:13px">sk-7f2c••••</div>`);
+    show(keyText, 1000, null, 'translateY(6px)');
+    const copy = swapText(186, 104, '⧉', '✓', 1650, ['muted', 'ok'], 16);
+    show(copy, 1000, null, 'translateY(6px)');
+    const arrow = add(`<div class="t accent" style="left:236px; top:70px; font-size:22px">→</div>`);
+    show(arrow, 1900, null, 'translateX(-8px)');
+    const field = add(`<div class="box" style="left:262px; top:52px; width:122px; height:38px; box-shadow:none; background:var(--el2); border:2px solid transparent"></div>`);
+    track(field, [[0, {borderColor: 'transparent'}], [2250, {borderColor: 'transparent'}], [2350, {borderColor: 'var(--pink)'}], [3100, {borderColor: 'var(--pink)'}], [3250, {borderColor: 'transparent'}]]);
+    typeIn(276, 64, 'sk-••••••', 2450, 45, '');
+    const check = add(`<div class="pill" style="left:262px; top:104px; width:122px; height:34px; font-size:14px"></div>`);
+    track(check, [[0, {backgroundColor: 'var(--el2)'}], [3250, {backgroundColor: 'var(--el2)'}], [3400, {backgroundColor: 'var(--green)'}]]);
+    swapText(306, 114, '✓?', '✓ OK', 3400, ['', ''], 14);
+    cursor([[0, 130, 160], [350, 130, 160], [650, 70, 60], [1100, 70, 60], [1500, 190, 108], [1900, 190, 108],
+            [2200, 320, 66], [2600, 320, 66], [3050, 320, 116], [3500, 320, 116], [4000, 240, 146]], [720, 1620, 2300, 3260]);
+  },
+  plan_ok() {
+    // Three model cards, all already on the recommended choice: leave them and start.
+    TOTAL = 3400; stage();
+    const icons = [
+      `<svg width="34" height="34" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
+      `<svg width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
+      `<svg width="34" height="34" viewBox="0 0 24 24"><path d="M3 12l4 4 8-8M11 16l1 1 9-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    ];
+    icons.forEach((svg, i) => {
+      const x = 24 + i * 124;
+      add(`<div class="box" style="left:${x}px; top:20px; width:104px; height:90px"></div>`);
+      add(`<div class="abs" style="left:${x + 35}px; top:32px; color:var(--muted)">${svg}</div>`);
+      add(`<div class="pill" style="left:${x + 28}px; top:78px; width:48px; height:20px; font-size:12px; background:color-mix(in srgb, var(--pink) 20%, transparent); color:var(--pink)">★</div>`);
+      const ok = add(`<div class="badge" style="left:${x + 86}px; top:12px; background:var(--green)">✓</div>`);
+      show(ok, 600 + i * 450, null, 'scale(.4)');
+    });
+    const go = add(`<div class="pill" style="left:150px; top:124px; width:100px; height:32px; font-size:15px; background:var(--pink); color:#fff">▶</div>`);
+    show(go, 2000, null, 'scale(.8)');
+    cursor([[0, 80, 150], [600, 80, 130], [1050, 200, 130], [1500, 324, 130], [2300, 206, 142], [3100, 206, 142]], [2500]);
+  },
 };
 function timingScene(model, text) {
   TOTAL = 3600; stage();

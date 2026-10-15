@@ -50,7 +50,7 @@ def _offline_dns() -> None:
 def start(window, output: Path):
     from PySide6.QtCore import QRectF, QTimer, Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox
+    from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
     from .blank_project_audit import _capture
     from .build_identity import load_build_identity
     _offline_dns()
@@ -148,42 +148,71 @@ def start(window, output: Path):
               quick.get('cards') == ['local', 'cloud', 'light'] and onboarding.load_state().get('setup_offered') is True,
               quick)
         check('after "稍后再说" no other dialog is open', not visible_dialogs(), visible_dialogs())
-        # The tutorial follows once: demo video, language, the three cards, AI key, glossary,
-        # a pretend result, proofreading step by step, export, the workbench (edit, review,
-        # speakers, batch replace, timeline, punctuation, export). Interactive steps are done
-        # with "帮我做", which drives the same page methods a click or key would.
+        # The tutorial follows once (2026-10-15: two parts). 基础: demo video, language, the
+        # model cards, “no key needed” (its explainer is opened once), glossary, a pretend
+        # result, export; its last step goes on to 进阶: proofreading step by step, the
+        # workbench (edit, review, speakers, batch replace, timeline, punctuation, export).
+        # Interactive steps are done with "帮我做", which drives the same page methods a
+        # click or key would.
         from .home_tour import GuidedTour
-        yield lambda: window.findChild(GuidedTour) is not None and window.findChild(GuidedTour).isVisible()
-        tour = window.findChild(GuidedTour)
+        from .api_key_explainer import ApiKeyExplainerDialog
+
+        def live_tour():
+            return next((t for t in window.findChildren(GuidedTour) if getattr(t, 'mode', '') != 'closed'), None)
+
+        yield lambda: live_tour() is not None and live_tour().isVisible()
+        tour = live_tour()
+        parts = []
         seen = []
         ai_suggested = False
         bubble_beside = []
         review_cards = []
-        for _ in range(60):
-            yield lambda: window.findChild(GuidedTour) is None or tour.bubble.isVisible()
-            if window.findChild(GuidedTour) is None:
+        explainer = {}
+
+        def look_at_explainer(dialog):
+            explainer['anims'] = [a.name for a in dialog.anims]
+            explainer['playing'] = sum(1 for a in dialog.anims if a._movie is not None or a._still is not None)
+            explainer['size'] = [dialog.width(), dialog.height()]
+            explainer['texts'] = [label.text() for label in dialog.findChildren(QLabel) if label.text()]
+            grab(dialog, 'T-api-key-explainer')
+            QTest.mouseClick(dialog.local_button, Qt.MouseButton.LeftButton)
+
+        for _ in range(80):
+            yield lambda: live_tour() is None or live_tour().bubble.isVisible()
+            tour = live_tour()
+            if tour is None:
                 break
+            if not parts or parts[-1]['tour'] is not tour:
+                parts.append(dict(tour=tour, part=getattr(tour, 'part', ''), total=len(tour.steps)))
             yield 0.7  # the outline glides to the next part
             page = window.pages.currentWidget()
             part = tour._target(tour.index)
-            seen.append(dict(index=tour.index, page=page.objectName() if page is not None else '',
-                             text=tour.text.text()[:80], hole=[round(v) for v in tour.hole.getRect()],
-                             part=[round(v) for v in tour._rect_of(part).getRect()] if part is not None else None,
+            step = tour.steps[tour.index]
+            plain = re.sub(r'\*\*', '', str(step.text() if callable(step.text) else step.text))
+            seen.append(dict(part=parts[-1]['part'], index=tour.index, page=page.objectName() if page is not None else '',
+                             text=tour.text.text()[:80], plain=plain, hole=[round(v) for v in tour.hole.getRect()],
+                             part_rect=[round(v) for v in tour._rect_of(part).getRect()] if part is not None else None,
                              fits=tour.bubble.height() >= tour.bubble.sizeHint().height(),
-                             anim=tour.anim.name if tour.anim.isVisible() else '', expect_anim=bool(tour.steps[tour.index].anim),
-                             interactive=tour.steps[tour.index].interactive))
+                             anim=tour.anim.name if tour.anim.isVisible() else '', expect_anim=bool(step.anim),
+                             interactive=step.interactive))
             studio_page = window.built_page('studio') if hasattr(window, 'built_page') else None
-            if tour.steps[tour.index].anim == 'review' and getattr(studio_page, '_review_mode', False):
+            if step.anim == 'review' and getattr(studio_page, '_review_mode', False):
                 review_cards.append(len(getattr(studio_page, '_review_candidates', None) or ()))
             proof = window.__dict__.get('glossary_proofread_page')
             ai_suggested = ai_suggested or any(issue.get('kind') == 'ai' for row in (getattr(proof, '_by_id', None) or {}).values()
                                                for issue in row.get('issues') or ())
             if part is not None and tour.pointer is not None:
                 bubble_beside.append(not QRectF(tour.bubble.geometry()).intersects(tour.hole))
-            capture(f'T{tour.index + 1:02d}-tutorial')
-            # Do what the step offers: an advancing action (demo video, pretend result), "帮我做" on an
-            # interactive step (the step then moves on by itself once it sees the result), else 下一步.
-            step = tour.steps[tour.index]
+            capture(f"T{'A' if parts[-1]['part'] == 'advanced' else 'B'}{tour.index + 1:02d}-tutorial")
+            explain = next((i for i, a in enumerate(step.actions) if a.label == 'API Key 是什么？'), None)
+            if explain is not None and not explainer:
+                on_modal(ApiKeyExplainerDialog, look_at_explainer, 'api-key-explainer', timeout=10)
+                QTest.mouseClick(tour.action_buttons[explain], Qt.MouseButton.LeftButton)
+                yield lambda: bool(explainer) and not visible_dialogs()
+                yield 0.5
+            # Do what the step offers: an advancing action (demo video, pretend result, go on to
+            # 进阶), "帮我做" on an interactive step (the step then moves on by itself once it sees
+            # the result), else 下一步.
             moving = next((i for i, a in enumerate(step.actions) if a.advance), None)
             if moving is not None:
                 button = tour.action_buttons[moving]
@@ -192,18 +221,34 @@ def start(window, output: Path):
             else:
                 button = tour.next
             before = tour.index
+            last = tour.index == len(tour.steps) - 1
             QTest.mouseClick(button, Qt.MouseButton.LeftButton)
             if step.interactive:
-                yield lambda: window.findChild(GuidedTour) is None or tour.index != before
-        yield lambda: window.findChild(GuidedTour) is None
+                yield lambda: live_tour() is not tour or tour.index != before
+            if last and moving is not None:
+                yield lambda: live_tour() is not None and live_tour() is not tour
+        yield lambda: live_tour() is None
         yield 1.0
         state = onboarding.load_state()
-        total = len(tour.steps)
-        check(f'first launch: the tutorial walks all {total} steps with demo data, then closes',
-              total >= 30 and [s['index'] for s in seen] == list(range(total)) and state.get('tour_done') is True, seen)
+        totals = {item['part']: item['total'] for item in parts}
+        by_part = {name: [s['index'] for s in seen if s['part'] == name] for name in totals}
+        check(f'first launch: the tutorial walks 基础 ({totals.get("basic")} steps) then 进阶 '
+              f'({totals.get("advanced")} steps) with demo data, then closes',
+              [item['part'] for item in parts] == ['basic', 'advanced'] and totals.get('basic', 99) <= 12
+              and all(by_part[name] == list(range(totals[name])) for name in totals)
+              and state.get('tour_done') is True, dict(totals=totals, seen=by_part))
+        check('tutorial 基础: every step is one short line (at most 30 characters)',
+              all(len(s['plain']) <= 30 for s in seen if s['part'] == 'basic'),
+              [(s['index'], len(s['plain']), s['plain']) for s in seen if s['part'] == 'basic' and len(s['plain']) > 30])
+        check('tutorial 基础: the AI step says no key is needed and opens the picture explainer '
+              '(four animations: free on this computer, the key, top up 10 yuan, paste it in)',
+              any('不填 API Key 也能出字幕' in s['plain'] for s in seen)
+              and explainer.get('anims') == ['local_free', 'key_what', 'key_topup', 'key_get']
+              and explainer.get('playing') == 4 and any('充值 10 元' in text for text in explainer.get('texts', ())),
+              explainer)
         check('tutorial: every step that shows a tool or gesture plays its animation',
               sum(1 for s in seen if s['expect_anim']) >= 20 and all(s['anim'] for s in seen if s['expect_anim']),
-              [(s['index'], s['anim']) for s in seen if s['expect_anim']])
+              [(s['part'], s['index'], s['anim']) for s in seen if s['expect_anim']])
         check('tutorial: bubbles sit beside their target with a pointer, not on top of it',
               len(bubble_beside) >= 20 and all(bubble_beside), bubble_beside)
         check('tutorial: review mode opens on the line where the three recognizers disagree (keys 1/2/3)',
@@ -219,8 +264,8 @@ def start(window, output: Path):
         check('tutorial: every bubble is tall enough for its text and buttons (nothing hidden)',
               all(s['fits'] for s in seen), [s['index'] for s in seen if not s['fits']])
         check('tutorial: every outline sits on its part when the step is read (pages that settle late too)',
-              all(s['part'] is None or all(abs(a - b) <= 3 for a, b in zip(s['hole'], s['part'])) for s in seen),
-              [(s['index'], s['hole'], s['part']) for s in seen if s['part'] is not None])
+              all(s['part_rect'] is None or all(abs(a - b) <= 3 for a, b in zip(s['hole'], s['part_rect'])) for s in seen),
+              [(s['part'], s['index'], s['hole'], s['part_rect']) for s in seen if s['part_rect'] is not None])
         recent_names = []
         try:
             from .studio_project import studio_settings_path
@@ -588,7 +633,8 @@ def start(window, output: Path):
 
     # ------------------------------------------------------------ restart
     def restart():
-        from . import onboarding, shortcut_registry as registry
+        from . import onboarding
+        from . import shortcut_registry as registry
         window.showMaximized()
         yield 1.5
         from .home_tour import HomeTour
@@ -625,7 +671,8 @@ def start(window, output: Path):
 
     # ------------------------------------------------------------ upgraded
     def upgraded():
-        from . import onboarding, shortcut_registry as registry
+        from . import onboarding
+        from . import shortcut_registry as registry
         yield ready
         yield 1.5
         page = studio()

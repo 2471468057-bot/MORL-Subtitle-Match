@@ -7,6 +7,13 @@ on those times, and the result opens in Studio. MOSS, Qwen3-ASR review, AI
 proofreading and AI line breaking never run, and nothing is uploaded. The
 heard characters are kept as the project's word evidence, so Studio's word
 timing and razor cuts work on the new captions as usual.
+
+2026-10-15 (user: match scripts in other languages, not only Chinese):
+FireRed only hears Chinese (and English inside Chinese speech). A Japanese or
+English script is timed by the local Qwen3-ASR 1.7B (it writes down what it
+hears, in that language) plus Qwen3-ForcedAligner 0.6B (word / character
+times of that text); the user's lines are then placed on those times exactly
+as for Chinese. The language is picked in the dialog or read from the script.
 """
 from __future__ import annotations
 
@@ -21,27 +28,112 @@ from .script_match import ScriptMatch, ScriptMatchError, Token, match_script, pa
 
 TIMESTAMP_MODEL = 'FireRedASR2-AED'
 MODEL_KEY = 'firered_aed'
+QWEN_ASR_MODEL = 'Qwen3-ASR 1.7B'
+QWEN_ALIGNER_MODEL = 'Qwen3-ForcedAligner 0.6B'
+# Recognition languages other than Chinese go the Qwen route.
+QWEN_MODEL_KEYS = (('qwen_asr', QWEN_ASR_MODEL), ('qwen_aligner', QWEN_ALIGNER_MODEL))
 
 
-def timestamp_model_ready() -> tuple[bool, str]:
-    """Is the character-timestamp model installed with its runtime?"""
+def uses_qwen(language: str) -> bool:
+    return str(language or 'zh') not in ('', 'zh')
+
+
+def script_language(lines, chosen: str = '') -> str:
+    """The chosen language, else the one the script is written in (zh when unsure)."""
+    if chosen:
+        return chosen
+    from .language_rules import detect_language
+    try:
+        return detect_language(list(lines))[0] or 'zh'
+    except Exception:
+        return 'zh'
+
+
+def timestamp_model_ready(language: str = 'zh') -> tuple[bool, str]:
+    """Are the timestamp models for this language installed with their runtime?"""
     try:
         from .model_registry import installed_model_keys
         from .runtime_paths import get_runtime_paths
-        if MODEL_KEY not in installed_model_keys(get_runtime_paths().install_root):
-            return False, tr('需要先在模型工坊安装 {model}（提供字级时间）', model=TIMESTAMP_MODEL)
+        installed = installed_model_keys(get_runtime_paths().install_root)
+        if uses_qwen(language):
+            missing = [name for key, name in QWEN_MODEL_KEYS if key not in installed]
+            if missing:
+                return False, tr('需要先在模型工坊安装 {model}（日语、英语文稿用它听写并生成字词时间）',
+                                 model='、'.join(missing))
+            model = QWEN_ASR_MODEL
+        else:
+            if MODEL_KEY not in installed:
+                return False, tr('需要先在模型工坊安装 {model}（提供字级时间）', model=TIMESTAMP_MODEL)
+            model = TIMESTAMP_MODEL
         from .asr import _main_worker_python
         runtime = _main_worker_python()
         if not runtime or not Path(runtime).is_file():
-            return False, tr('模型运行环境还没准备好，请在模型工坊准备 {model}', model=TIMESTAMP_MODEL)
+            return False, tr('模型运行环境还没准备好，请在模型工坊准备 {model}', model=model)
     except Exception as exc:  # any probe failure reads as "not ready", with the reason
         return False, str(exc)
     return True, ''
 
 
-def heard_tokens(media_path: str, progress=None) -> tuple[list[Token], dict[str, dict], list[tuple[int, int]]]:
-    """FireRed's heard characters on the media clock, the evidence rows they came
-    from, and the speech regions of a plain energy VAD (no model)."""
+def _speech_regions(audio):
+    """Energy-VAD regions (seconds) and the same in milliseconds."""
+    try:
+        import moss_firered_pipeline
+        regions = moss_firered_pipeline.detect_lightweight_vad(audio, SimpleNamespace(AUDIO_SAMPLE_RATE=16000))
+    except Exception:  # no usable regions: lines keep the model's own edges
+        return [], []
+    return regions, [(round(r['start'] * 1000), round(r['end'] * 1000)) for r in regions]
+
+
+def _qwen_heard_tokens(audio, regions, language: str, progress=None):
+    """Qwen3-ASR's text per speech window, timed by Qwen3-ForcedAligner."""
+    from .asr import (_transcribe_qwen_worker, build_qwen_asr_chunks, resolve_qwen_asr_local_source,
+                                   transcribe_qwen_aligner_reference)
+    from .language_rules import language_scope, qwen_language_name
+    model_path = resolve_qwen_asr_local_source()
+    if not model_path:
+        raise ScriptMatchError(tr('需要先在模型工坊安装 {model}（日语、英语文稿用它听写并生成字词时间）',
+                                  model=QWEN_ASR_MODEL))
+    chunks = build_qwen_asr_chunks(audio, [{'start': r['start'], 'end': r['end']} for r in regions], 16000)
+    if not chunks:
+        raise ScriptMatchError(tr('素材里没有可用的音频'))
+    if progress:
+        progress(tr('{model} 正在听写（只用来对时间，不改你的文稿）…', model=QWEN_ASR_MODEL))
+    with language_scope(language):
+        heard = _transcribe_qwen_worker(audio, chunks, model_path, context='', evidence_root='')
+        if progress:
+            progress(tr('{model} 正在生成字词时间…', model=QWEN_ALIGNER_MODEL))
+        aligned = transcribe_qwen_aligner_reference(
+            audio, [dict(start=row['start'], end=row['end'], text=row['text'], speaker='S00') for row in heard],
+            language=qwen_language_name(language), raise_errors=True)
+    tokens: list[Token] = []
+    rows: dict[str, dict] = {}
+    refs: dict[str, str] = {}
+    for piece in aligned:
+        start, end = round(float(piece['start']) * 1000), round(float(piece['end']) * 1000)
+        text = str(piece.get('text') or '')
+        if end <= start or not text.strip():
+            continue
+        key = str(piece.get('alignment_key') or piece.get('alignment_job') or '')
+        ref = refs.setdefault(key, f'qwen-aligned:{len(refs) + 1}')
+        measured = piece.get('start_basis') == 'model' and piece.get('end_basis') == 'model'
+        tokens.append(Token(start, end, text, ref, 'S00', not measured))
+        row = rows.setdefault(ref, {'text': '', 'words': [], 'final_timing_owner': QWEN_ALIGNER_MODEL,
+                                    'source': 'script_match', 'text_source': QWEN_ASR_MODEL})
+        if measured:
+            row['words'].append({'text': text, 'start_ms': start, 'end_ms': end})
+        row['text'] += text if not row['text'] or language != 'en' else ' ' + text
+    for row in rows.values():
+        if row['words']:
+            row['start_ms'], row['end_ms'] = row['words'][0]['start_ms'], row['words'][-1]['end_ms']
+    rows = {ref: row for ref, row in rows.items() if row['words']}
+    return tokens, rows
+
+
+def heard_tokens(media_path: str, progress=None, language: str = 'zh'
+                 ) -> tuple[list[Token], dict[str, dict], list[tuple[int, int]]]:
+    """The heard characters / words on the media clock, the evidence rows they
+    came from, and the speech regions of a plain energy VAD (no model).
+    Chinese: FireRed; Japanese / English: Qwen3-ASR + Qwen3-ForcedAligner."""
     from .asr import _transcribe_firered_worker
     from .cache import decode_audio_to_array
     from .runtime_paths import resolve_model_dir
@@ -51,14 +143,12 @@ def heard_tokens(media_path: str, progress=None) -> tuple[list[Token], dict[str,
     seconds = len(audio) / 16000.0
     if seconds <= 0.05:
         raise ScriptMatchError(tr('素材里没有可用的音频'))
+    regions, speech = _speech_regions(audio)
+    if uses_qwen(language):
+        tokens, rows = _qwen_heard_tokens(audio, regions, language, progress)
+        return tokens, rows, speech
     if progress:
         progress(tr('{model} 正在生成字级时间（只听字和时间，不改你的文稿）…', model=TIMESTAMP_MODEL))
-    try:
-        import moss_firered_pipeline
-        regions = moss_firered_pipeline.detect_lightweight_vad(audio, SimpleNamespace(AUDIO_SAMPLE_RATE=16000))
-        speech = [(round(r['start'] * 1000), round(r['end'] * 1000)) for r in regions]
-    except Exception:  # no usable regions: lines keep FireRed's own edges
-        speech = []
     normalized = _transcribe_firered_worker(audio, seconds, str(resolve_model_dir('FireRedASR2-AED')))
     tokens: list[Token] = []
     rows: dict[str, dict] = {}
@@ -78,17 +168,19 @@ def heard_tokens(media_path: str, progress=None) -> tuple[list[Token], dict[str,
     return tokens, rows, speech
 
 
-def build_project(media_path: str, match: ScriptMatch, rows: dict[str, dict]):
+def build_project(media_path: str, match: ScriptMatch, rows: dict[str, dict], language: str = 'zh'):
     from .recognition_result import recognition_project_path
     from .studio_project import project_from_runtime_cues, save_project
+    language = str(language or 'zh')
     cues = [SimpleNamespace(cue_id=f'script-{line.index + 1}', start=line.start_ms / 1000, end=line.end_ms / 1000,
                             text=line.text, speaker='S00') for line in match.lines]
     review = [f'script-{line.index + 1}' for line in match.lines if line.needs_review]
+    source = f'{QWEN_ASR_MODEL} + {QWEN_ALIGNER_MODEL}' if uses_qwen(language) else TIMESTAMP_MODEL
     project = project_from_runtime_cues(media_path, cues, asr_evidence=rows, generation_metadata={
-        'script_match': {'version': 1, 'timestamp_source': TIMESTAMP_MODEL, 'lines': len(match.lines),
+        'script_match': {'version': 1, 'timestamp_source': source, 'lines': len(match.lines),
                          'coverage': round(match.coverage, 4), 'review_cue_ids': review,
                          'note': '用户文稿按字级时间对齐；未调用其他识别模型或 AI。'},
-        'language': {'code': 'zh', 'requested': 'zh', 'evidence': {'source': 'script_match'}},
+        'language': {'code': language, 'requested': language, 'evidence': {'source': 'script_match'}},
     })
     by_id = {line_id: line for line_id, line in zip((c.cue_id for c in cues), match.lines)}
     for cue in project.cues:
@@ -107,28 +199,29 @@ class ScriptMatchJob(QThread):
     succeeded = Signal(str, object)
     failed = Signal(str)
 
-    def __init__(self, media_path: str, lines: list[str], parent=None):
+    def __init__(self, media_path: str, lines: list[str], parent=None, *, language: str = 'zh'):
         super().__init__(parent)
         self.media_path, self.lines = str(media_path), list(lines)
+        self.language = str(language or 'zh')
 
     def run(self):
         try:
-            tokens, rows, speech = heard_tokens(self.media_path, self.progressed.emit)
+            tokens, rows, speech = heard_tokens(self.media_path, self.progressed.emit, self.language)
             self.progressed.emit(tr('按字级时间对齐文稿…'))
-            match = match_script(self.lines, tokens, speech_regions_ms=speech)
-            path = build_project(self.media_path, match, rows)
+            match = match_script(self.lines, tokens, speech_regions_ms=speech, language=self.language)
+            path = build_project(self.media_path, match, rows, self.language)
             self.succeeded.emit(str(path), match)
         except Exception as exc:
             self.failed.emit(str(exc) or type(exc).__name__)
 
 
 def open_home_script_match(window) -> None:
-    from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-                                   QPushButton, QVBoxLayout)
+    from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit,
+                                   QProgressBar, QPushButton, QVBoxLayout)
     from .design.presentation import button_role
     from .studio_script_match import read_script_file
     media = [str(path) for path in getattr(window, 'media_paths', ()) if str(path).strip()]
-    state = {'media': media[0] if media else '', 'job': None}
+    state = {'media': media[0] if media else '', 'job': None, 'ready': {}}
 
     class _Dialog(QDialog):
         def reject(self):  # ×, Esc and 取消 wait while the timestamp job runs
@@ -153,12 +246,20 @@ def open_home_script_match(window) -> None:
     media_row.addWidget(media_label, 1)
     media_row.addWidget(choose)
     layout.addLayout(media_row)
+    language_row = QHBoxLayout()
+    language_row.addWidget(QLabel(tr('文稿语言')))
+    language_box = QComboBox()
+    language_box.setObjectName('homeScriptMatchLanguage')
+    for code, caption in (('', tr('自动判断')), ('zh', tr('中文')), ('ja', tr('日语')), ('en', tr('英语'))):
+        language_box.addItem(caption, code)
+    language_row.addWidget(language_box)
+    language_row.addStretch(1)
+    layout.addLayout(language_row)
     script = QPlainTextEdit()
     script.setObjectName('homeScriptMatchInput')
     script.setPlaceholderText(tr('每行一条字幕，例如：\n大家好，欢迎回来\n今天我们继续打洛克王国'))
     layout.addWidget(script, 1)
-    runs = QLabel(tr('只运行：{model} 字级时间（本机显卡）。不会运行 MOSS、Qwen3-ASR 复核、AI 校对与 AI 断句，也不上传。'
-                     '适用于中文（含中英混合）。', model=TIMESTAMP_MODEL))
+    runs = QLabel()
     runs.setObjectName('homeScriptMatchRuns')
     runs.setWordWrap(True)
     layout.addWidget(runs)
@@ -184,12 +285,26 @@ def open_home_script_match(window) -> None:
     actions.addWidget(start)
     layout.addLayout(actions)
 
+    def current_language():
+        return script_language(parse_script(script.toPlainText()), str(language_box.currentData() or ''))
+
     def refresh():
         name = Path(state['media']).name if state['media'] else ''
         media_label.setText(tr('素材：{name}', name=name) if name else tr('素材：还没选择'))
         if len(media) > 1 and state['media'] == media[0]:
             media_label.setText(media_label.text() + tr('（本批共 {count} 个，只匹配第一个）', count=len(media)))
-        ready, reason = timestamp_model_ready()
+        language = current_language()
+        if uses_qwen(language):
+            runs.setText(tr('只运行：{asr} 听写 + {aligner} 字词时间（本机）。不会运行 MOSS、AI 校对与 AI 断句，也不上传。'
+                            '适用于{language}。', asr=QWEN_ASR_MODEL, aligner=QWEN_ALIGNER_MODEL,
+                            language=tr('日语') if language == 'ja' else tr('英语')))
+        else:
+            runs.setText(tr('只运行：{model} 字级时间（本机显卡）。不会运行 MOSS、Qwen3-ASR 复核、AI 校对与 AI 断句，也不上传。'
+                            '适用于中文（含中英混合）。', model=TIMESTAMP_MODEL))
+        route = 'qwen' if uses_qwen(language) else 'zh'
+        if route not in state['ready']:  # the model scan reads the disk: once per route
+            state['ready'][route] = timestamp_model_ready(language)
+        ready, reason = state['ready'][route]
         workshop.setVisible(not ready)
         if state['job'] is None:
             status.setText('' if ready else reason)
@@ -223,7 +338,7 @@ def open_home_script_match(window) -> None:
         bar.hide()
         state['job'] = None
         status.setText(tr('匹配没有完成：{error}', error=message))
-        for widget in (script, load, choose, cancel):
+        for widget in (script, load, choose, cancel, language_box):
             widget.setEnabled(True)
         refresh()
 
@@ -232,12 +347,12 @@ def open_home_script_match(window) -> None:
         if not lines:
             status.setText(tr('文稿是空的：每行一条字幕'))
             return
-        job = ScriptMatchJob(state['media'], lines, dialog)
+        job = ScriptMatchJob(state['media'], lines, dialog, language=current_language())
         state['job'] = job
         job.progressed.connect(status.setText)
         job.succeeded.connect(finished)
         job.failed.connect(failed)
-        for widget in (script, load, choose, start, cancel):
+        for widget in (script, load, choose, start, cancel, language_box):
             widget.setEnabled(False)
         bar.show()
         job.start()
@@ -247,11 +362,14 @@ def open_home_script_match(window) -> None:
     workshop.clicked.connect(lambda: (dialog.reject(), window._open_model_workshop()))
     cancel.clicked.connect(dialog.reject)
     start.clicked.connect(begin)
+    language_box.currentIndexChanged.connect(lambda _index: refresh())
+    script.textChanged.connect(refresh)
     refresh()
     window._home_script_match_dialog = dialog
     dialog._begin = begin  # automated checks drive the real handlers
     dialog._script = script
     dialog._state = state
+    dialog._language = language_box
     try:
         dialog.exec()
     finally:
@@ -261,4 +379,5 @@ def open_home_script_match(window) -> None:
             job.wait()
 
 
-__all__ = ['ScriptMatchJob', 'build_project', 'heard_tokens', 'open_home_script_match', 'timestamp_model_ready']
+__all__ = ['ScriptMatchJob', 'build_project', 'heard_tokens', 'open_home_script_match', 'script_language',
+           'timestamp_model_ready', 'uses_qwen']

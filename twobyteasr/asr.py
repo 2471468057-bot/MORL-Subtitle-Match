@@ -560,6 +560,44 @@ class AlignerUnavailableError(RuntimeError):
     """The forced aligner is not installed; never replaced by a proportional estimate."""
 
 
+_COMMIT_LIMIT_MARKERS = ("os error 1455", "winerror 1455", "paging file is too small", "页面文件太小")
+
+
+def _size_mb(match):
+    return float(match.group(1)) * (1024 if match.group(2).lower() == "gib" else 1) if match else None
+
+
+def windows_commit_limit_error(text):
+    """Windows ran out of commit (RAM plus page file) while loading: ERROR_COMMITMENT_LIMIT, 1455 (2026-10-15).
+
+    At the commit limit GPU allocations fail too and read "CUDA out of memory"
+    (or a library's ``*_ALLOC_FAILED``, e.g. cuBLAS creating its handle) while
+    most of the VRAM is free. A worker's failed event that carries its
+    own free-VRAM reading (``free_vram_mb``) is judged by it: free memory well
+    above the failed request means the limit was commit, not VRAM.
+    """
+    lowered = str(text or "").lower()
+    if any(marker in lowered for marker in _COMMIT_LIMIT_MARKERS):
+        return True
+    for line in str(text or "").splitlines():
+        tag, _, body = line.partition(" ")
+        if (not tag.startswith("[2BYTEASR_") or '"free_vram_mb"' not in body
+                or not any(marker in body.lower() for marker in ("out of memory", "alloc_failed"))):
+            continue
+        try:
+            event = json.loads(body)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        detail = str(event.get("detail") or "")
+        free = _size_mb(re.search(r"of which ([\d.]+) (GiB|MiB) is free", detail)) or float(event.get("free_vram_mb") or 0)
+        wanted = _size_mb(re.search(r"Tried to allocate ([\d.]+) (GiB|MiB)", detail))
+        if free >= (wanted + 1024 if wanted is not None else 2048):
+            return True
+    return False
+
+
 ALIGNER_WINDOW_PAD_MS = 300
 ALIGNER_PROTOCOL = "qwen-aligner-units-v1"
 
@@ -654,12 +692,14 @@ def summarize_aligner_payload(payload):
             "load_ms": payload.get("load_ms"), "inference_ms": payload.get("inference_ms")}
 
 
-def transcribe_qwen_aligner_reference(audio_source, transcript_segments, *, language=None):
+def transcribe_qwen_aligner_reference(audio_source, transcript_segments, *, language=None, raise_errors=False):
     """Forced-align the primary transcript per segment with Qwen3-ForcedAligner.
 
     Runs in the main managed runtime (``qwen_aligner_worker.py``). Each segment
     is aligned inside its own padded window, so overlapping speakers are never
-    forced into one monotonic sequence. Returns flat timeline tokens.
+    forced into one monotonic sequence. Returns flat timeline tokens. A task
+    keeps the primary model's coarse timeline when the aligner fails;
+    ``raise_errors`` (the readiness check) raises the worker's own error instead.
     """
     from twobyteasr.language_rules import qwen_language_name, active_task_language
     language = language or qwen_language_name(active_task_language()) or "Chinese"
@@ -689,12 +729,22 @@ def transcribe_qwen_aligner_reference(audio_source, transcript_segments, *, lang
     except CancelledError:
         raise
     except AlignerUnavailableError as exc:
+        if raise_errors:
+            raise
         print(f"   [警告] {exc}")
         add_review_item(0.0, "缺少对齐模型", str(exc), priority=3, severity="warning")
         return []
     except Exception as exc:
+        if raise_errors:
+            raise
         print(f"   [警告] Qwen3 ForcedAligner 失败，保留主力模型粗时间轴：{exc}")
-        add_review_item(0.0, "时间轴模型失败", str(exc)[:160], priority=2)
+        if windows_commit_limit_error(exc):
+            advice = ("电脑可用内存不足（Windows 虚拟内存/页面文件太小），Qwen3 对齐模型没有加载，本次保留主力模型粗时间轴。"
+                      "关闭其他占内存的程序，或把页面文件设为“系统管理的大小”后重新识别。")
+            print(f"   [提示] {advice}")
+            add_review_item(0.0, "时间轴模型失败", advice, priority=2)
+        else:
+            add_review_item(0.0, "时间轴模型失败", str(exc)[:160], priority=2)
         return []
     tokens = aligner_tokens(payload)
     record_run_event("forced_alignment", stage="segments", language=language, **summarize_aligner_payload(payload))

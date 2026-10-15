@@ -45,6 +45,15 @@ ENGLISH_POLISH_RULE = (
     "代词 I 一律大写，句首字母大写；只在句末或明显停顿处修正标点，不新增引号。"
     "edits 的 start/end 按原文字符位置计算（空格也计数），from 必须逐字等于原文该段。"
     "下面的通用规则若与本段冲突，以本段为准；其中的中文数字与中文语气词规则不适用于英文。")
+# 2026-10-15 (user: 他/她 is the fix they make most): the three pronouns are
+# one syllable, so ASR evidence can never support or refute the gender; only
+# the context can. correction_safety accepts a pure pronoun swap on that basis.
+PRONOUN_GENDER_RULE = (
+    "【人称】例外于“保留代词”：第三人称他/她/它（含他们/她们/它们、他的/她的）同音tā，ASR只能猜，原文写法不是证据。"
+    "结合上下文与被指代对象判断：词库或常识中的人物/角色/选手性别、本句或邻句的称谓（姐姐、妹妹、女主、老婆、小姐姐、"
+    "女王、哥哥、兄弟、老公等）、同一对象前后已出现的写法；动物、物品、技能、怪物用它（按拟人称呼的除外）。"
+    "指代对象与性别明确且与原文不同时，只改代词本身，type=pronoun_gender，evidence写出指代对象与依据；"
+    "不明确或可能指说话者本人以外的多人时保留原文。其他、吉他、他人等不是人称，不改。")
 from .asr_provider_snapshot import POLISH_PROMPT_VERSION
 
 
@@ -107,7 +116,8 @@ POLISH_SCHEMA = {
                         'basis': {'type': 'string'},
                         'start': {'type': 'integer'}, 'end': {'type': 'integer'},
                         'candidate_id': {'type': 'string'},
-                        'type': {'type': 'string', 'enum': ['alias_normalization', 'phonetic_correction', 'id_spelling', 'asr_correction']},
+                        'type': {'type': 'string', 'enum': ['alias_normalization', 'phonetic_correction', 'id_spelling',
+                                                            'asr_correction', 'pronoun_gender']},
                         'evidence': {'type': 'string'},
                     }, 'required': ['from', 'to'],
                 }},
@@ -776,7 +786,7 @@ def call_correction_api(
 当前场景见content_scene：domain/source/language/content_type/glossary_versions/normalization_policy统一决定领域；unknown或mixed不猜游戏。speaker_cue_ids标说话者，不是被提到的选手，不能改speaker、ID、时间或跨说话人重写。suspects/context_terms/matches按对应fields字段顺序；candidate_ids若是字符串，查candidate_sets；context_terms仅语义候选，公共词库来源见term_defaults。
 先结合邻句理解疑似词是选手、战队、角色、技能、物品、位置还是动作。合法中文也可能是谐音；电竞口语不书面不等于错误。实体类别/语义流畅/近音任一项单独均不证明修改。再比较ASR和候选：来源码查asr_sources，asr每项为[来源码列表,原文]；asr_equal_primary列出逐字等于主稿的来源。primary_source取cue内或cue_defaults；缺来源不计票，派生文本不算独立来源。matches的cue_ids限定作用范围；overlap表示重叠说话人须冻结跨人替换。
 优先适用且无歧义的confirmed别名→规范名称，这是用户名称统一，不要求另一ASR直接写出英文ID，不受字符变长限制；普通动画/电影等话题不能机械套选手昵称。规范词逐字使用canonical，包括大小写和数字，不按记忆换成其他拼写。reference/ambiguous/context-only只提供候选，近音或英文错拼修改仍需局部来源与语境证据；非音近昵称必须有明确别名关联。完整Latin ID允许有据有限拼写修正，两字母普通英文/单字音译不能仅凭词表改名。approved_global_term_mappings保持。
-只改目标词或必要错断词跨度，保留语气、重复、代词、原意及数字事件顺序；不把‘一个’改为‘1个’，不合并重复数字。编辑给from/to、原文start/end（左闭右开）、candidate_id（适用时）、type=alias_normalization|phonetic_correction|id_spelling|asr_correction及简短evidence；basis用真实输入来源+context，别名用glossary+context。不声称听过未提供音频。疑似词suspects每项必须在suspect_results给suspect_id、disposition=replace|keep|review|missing_candidate和短evidence；空edits不代表已经审查。两个候选合理、证据冲突或缺项时保留并待确认；新疑似词用new_suspects(id,start,end,surface,evidence)，不编造candidate_id。固定规则：{editorial_rule}"""
+只改目标词或必要错断词跨度，保留语气、重复、代词、原意及数字事件顺序；不把‘一个’改为‘1个’，不合并重复数字。编辑给from/to、原文start/end（左闭右开）、candidate_id（适用时）、type=alias_normalization|phonetic_correction|id_spelling|asr_correction|pronoun_gender及简短evidence；basis用真实输入来源+context，别名用glossary+context。不声称听过未提供音频。疑似词suspects每项必须在suspect_results给suspect_id、disposition=replace|keep|review|missing_candidate和短evidence；空edits不代表已经审查。两个候选合理、证据冲突或缺项时保留并待确认；新疑似词用new_suspects(id,start,end,surface,evidence)，不编造candidate_id。固定规则：{editorial_rule}"""
     from twobyteasr.language_rules import is_english, is_japanese
     if is_japanese():
         # Japanese subtitles: same edit contract, but never translate, never
@@ -787,7 +797,7 @@ def call_correction_api(
         prompt = ENGLISH_POLISH_RULE + '\n' + prompt
     else:
         from .number_fidelity import NUMBER_POLICY_PROMPT
-        prompt += '\n' + NUMBER_POLICY_PROMPT
+        prompt += '\n' + NUMBER_POLICY_PROMPT + '\n' + PRONOUN_GENDER_RULE
     prepared = _prepared_correction_request(segment_batch, glossary, context_before, context_after,
         media_title, project_context, stable_term_candidates, approved_global_mappings, verified_terms,
         glossary_evidence, prompt)

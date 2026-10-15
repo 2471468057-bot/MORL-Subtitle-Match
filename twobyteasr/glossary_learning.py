@@ -112,6 +112,10 @@ def extract_term_replacements(before: str, after: str) -> list[tuple[str, str]]:
                     right_context = 0
                 source = before[left_start - left_context:left_end + right_context]
                 target = after[right_start - left_context:right_end + right_context]
+            from .pronouns import is_pronoun_swap
+            if is_pronoun_swap(source, target):
+                # 他 → 她 is a context decision, never a term (2026-10-15).
+                continue
             if _looks_like_term(source, target):
                 replacements.append((_clean_term(source), _clean_term(target)))
     # General rewriting is not terminology evidence even when it contains a short replacement.
@@ -289,11 +293,19 @@ class GlossaryLearningStore:
         disappear unless they were already accepted or ignored — an accepted
         confirmation record survives even when its last evidence is undone.
         """
+        return len(self.revert_evidence_tokens(tokens, cue_after_text=cue_after_text))
+
+    def revert_evidence_tokens(self, tokens: list[str], *, cue_after_text: str | None = None) -> list[str]:
+        """``revert_evidence`` that names the tokens it removed (2026-10-15:
+        undoing an automatically saved glossary fix removes its rows too).
+
+        An entry accepted automatically (``auto_saved``) is no user decision:
+        it disappears with its last evidence like a collecting candidate."""
         wanted = {str(token) for token in tokens if str(token).strip()}
         if not wanted:
-            return 0
+            return []
         payload = self.load()
-        changed = 0
+        reverted: list[str] = []
         survivors: list[dict[str, Any]] = []
         for entry in payload["candidates"]:
             evidences = entry.get("evidences") if isinstance(entry.get("evidences"), dict) else {}
@@ -311,21 +323,33 @@ class GlossaryLearningStore:
                 continue
             for token in matched:
                 evidences.pop(token, None)
-                changed += 1
+                reverted.append(token)
             entry["evidences"] = evidences
             self._recount(entry)
             if evidences:
                 survivors.append(entry)
                 continue
-            if entry.get("status") in {"accepted", "ignored"}:
+            if entry.get("status") in {"accepted", "ignored"} and not entry.get("auto_saved"):
                 # Keep the explicit user decision; the evidence ledger is empty
                 # but the confirmation/ignore record itself must survive.
                 survivors.append(entry)
             # otherwise: no evidence and no user decision -> drop the phantom
-        if changed:
+        if reverted:
             payload["candidates"] = survivors
             self._save(payload)
-        return changed
+        return reverted
+
+    def mark_auto_saved(self, source: str, target: str, glossary_id: str) -> bool:
+        """The pair was written to ``glossary_id`` without a confirmation step."""
+        identity = self._identity(_clean_term(source), _clean_term(target))
+        payload = self.load()
+        entry = next((item for item in payload["candidates"] if item.get("id") == identity), None)
+        if entry is None or entry.get("status") == "ignored":
+            return False
+        entry.update(status="accepted", accepted=True, ignored=False, auto_saved=True,
+                     accepted_at=_utc_now(), accepted_glossary=str(glossary_id), mapping_added=True)
+        self._save(payload)
+        return True
 
     def pending(self) -> list[dict[str, Any]]:
         return sorted(

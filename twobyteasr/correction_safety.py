@@ -881,6 +881,23 @@ def apply_correction_edits(
             continue
         start, end = span
         candidate_preview = clean_subtitle_text(text[:start] + target + text[end:])
+        from .pronouns import pronoun_swap_in_context
+        if pronoun_swap_in_context(text, start, end, target):
+            # 2026-10-15: 他/她/它 are one syllable; no ASR can support or refute
+            # the gender, so the single-character and two-source rules below
+            # would block every such fix. The model's context reading decides.
+            text = candidate_preview
+            applied.append({
+                "from": source, "to": target,
+                **({'start': edit['start'], 'end': edit['end']} if 'start' in edit and 'end' in edit else {}),
+                'type': 'pronoun_gender',
+                'evidence': str(edit.get('evidence') or edit.get('basis') or ''),
+                'actual_independent_exact_support': count_independent_asr_supports(content_only(target), vote_sources),
+                "basis": clean_subtitle_text(edit.get("basis", "")) or "未说明",
+                "reason": "人称按上下文的指代对象改写（他/她/它同音，ASR 无法区分）；未核验原音",
+                "rule_id": "pronoun_gender_context",
+            })
+            continue
         from .content_scene import alias_context_conflict
         alias_entry = next((row for row in contextual_term_candidates
             if row.get('canonical') == target and source in row.get('aliases', ())), None)

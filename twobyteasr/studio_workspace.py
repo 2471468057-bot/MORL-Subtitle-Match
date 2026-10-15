@@ -657,7 +657,7 @@ class StudioWorkspaceBuilder:
         page.review_dock_scroll.setFixedHeight(REVIEW_DOCK_ROW_HEIGHT)
         page.review_dock_scroll.setWidget(page.review_dock_candidates)
         strip_layout.addWidget(page.review_dock_scroll)
-        page.review_legend = QLabel("[1–4] 采用并下一条   [↑↓] 切换   [Space] 重听   [E] 编辑   [R] 退出审核   [Enter] 当前正确")
+        page.review_legend = QLabel("[1–4] 采用并下一条   [↑↓] 切换   [Space] 重听   [E] 编辑   [P] 他/她   [R] 退出审核   [Enter] 当前正确")
         page.review_legend.setObjectName("reviewLegend")
         page.review_legend.setTextFormat(Qt.TextFormat.RichText)
         strip_layout.addWidget(page.review_legend)

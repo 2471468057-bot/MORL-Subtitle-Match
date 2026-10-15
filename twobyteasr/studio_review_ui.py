@@ -187,16 +187,23 @@ class StudioReviewMixin:
             speaker_only = bool(aggregate.speaker_only and aggregate.models_agree_text)
             card_mode = (not speaker_only and len(candidates) > 1
                          and not (aggregate.boundary_only and not aggregate.requires_review))
+            # 2026-10-15: click-to-fix marks live on card 1 only (user: with
+            # three results, mark just the first).
+            suggestions = () if speaker_only else self._review_suggestions_for(cue, candidates if card_mode else ())
+            self._review_suggestions = suggestions
             # The row has a fixed height (studio_workspace.REVIEW_DOCK_ROW_HEIGHT):
             # up to four cards share it when there is room, the rest scrolls.
             width = max(self.review_summary_strip.width(), self.review_dock_candidates.width())
-            columns = max(1, min(4, len(candidates[:4]), width // 260)) if card_mode else 1
+            columns = (max(1, min(4, len(candidates[:4]), width // 260)) if card_mode
+                       else max(1, min(2, width // 260)) if suggestions else 1)
             signature = (cue.id, cue.text, cue.speaker_id, speaker_only, card_mode, columns,
                          bool(aggregate.requires_review),
                          tuple((c.text, tuple(c.sources or ()), bool(c.context_only)) for c in candidates[:5]),
                          tuple(sorted(str(row.get("speaker_id") or row.get("speaker") or "")
                                       for row in aggregate.hypotheses)) if speaker_only else (),
-                         format_model_evidence_coverage(aggregate.hypotheses)['display'] if not card_mode else "")
+                         format_model_evidence_coverage(aggregate.hypotheses)['display'] if not card_mode else "",
+                         tuple((row.start, row.end, row.original, tuple(option.text for option in row.options))
+                               for row in suggestions))
             if signature == getattr(self, "_review_cards_signature", None) and self.review_dock_candidate_layout.count():
                 # Same caption, same width bucket: keep the cards (resize events
                 # and repeated hydration of one caption used to rebuild them).
@@ -245,8 +252,12 @@ class StudioReviewMixin:
                         is_current=is_cur,
                         current_text=cue.text,
                         parent=self,
+                        suggestions=suggestions if index == 0 else (),
                     )
                     card.clicked.connect(lambda row=index: self._adopt_review_candidate(row))
+                    if index == 0 and suggestions:
+                        card.suggestion_activated.connect(self._apply_review_suggestion)
+                        card.suggestion_menu_requested.connect(self._show_review_suggestion_menu)
                     if candidate.context_only:
                         card.setEnabled(False)
                         card.setToolTip('原始段落上下文；缺少本条精确字词边界，请结合原音编辑，不能整段替换。')
@@ -268,7 +279,19 @@ class StudioReviewMixin:
                 banner.setText(banner.text() + '\n' + coverage['display'])
                 banner.setWordWrap(True)
                 banner.setObjectName("checkWarning" if aggregate.requires_review else "checkPass")
-                self.review_dock_candidate_layout.addWidget(banner, 0, 0, 1, columns)
+                if suggestions:
+                    # Nothing to choose between, but the caption still has
+                    # glossary fixes or 他/她 to flip: card 1 next to the banner.
+                    from .studio_qc import QCCandidate
+                    card = ReviewCandidateCard(0, QCCandidate(cue.text, ("Current",)), is_current=True,
+                                               current_text=cue.text, parent=self, suggestions=suggestions)
+                    card.clicked.connect(lambda: self._adopt_review_candidate(0))
+                    card.suggestion_activated.connect(self._apply_review_suggestion)
+                    card.suggestion_menu_requested.connect(self._show_review_suggestion_menu)
+                    self.review_dock_candidate_layout.addWidget(card, 0, 0)
+                    self.review_dock_candidate_layout.addWidget(banner, 0 if columns > 1 else 1, 1 if columns > 1 else 0)
+                else:
+                    self.review_dock_candidate_layout.addWidget(banner, 0, 0, 1, columns)
 
     def _set_review_mode(self, enabled: bool) -> None:
         entering = bool(enabled) and not self._review_mode
@@ -774,6 +797,95 @@ class StudioReviewMixin:
         if self._adopt_model_text(candidate.text, " · ".join(candidate.sources)):
             bind_text(self.save_state, '✓ 已采用候选 {value0} · 下一条', value0=int(index) + 1)
             self._advance_review_after_resolution(previous_row)
+
+    # click-to-fix marks on card 1 (2026-10-15) ------------------------------
+    def _review_suggestions_for(self, cue: StudioCue, candidates) -> tuple:
+        """Marks for the current caption: other recognizers' local differences,
+        confirmed glossary aliases and (Chinese projects) 他/她/它."""
+        from .language_rules import EN, JA, project_language
+        from .review_suggestions import review_suggestions
+        try:
+            language = project_language(self.project)
+        except Exception:
+            language = ""
+        others = [(candidate.text, tuple(candidate.sources or ())) for candidate in tuple(candidates)[1:]
+                  if not candidate.context_only]
+        try:
+            return tuple(review_suggestions(cue.text, others, resolver=self._review_term_resolver(),
+                                            pronouns=language not in (JA, EN)))
+        except Exception:  # marks are a convenience; review itself must keep working
+            return ()
+
+    def _review_term_resolver(self):
+        """TermResolver over the project's glossaries, rebuilt when they change on disk."""
+        project = self.project
+        ids = tuple(str(item) for item in (getattr(project, "glossary_ids", None) or ()) if str(item).strip())
+        if not ids:
+            return None
+        import os
+        import subtitle_core as legacy
+        try:
+            stamp = os.stat(legacy.LEARNED_TERMS_PATH).st_mtime_ns
+        except OSError:
+            stamp = 0
+        cached = getattr(self, "_review_term_resolver_cache", None)
+        if cached is not None and cached[0] == (ids, stamp):
+            return cached[1]
+        from .terminology import TermResolver, snapshot_glossaries
+        try:
+            resolver = TermResolver(snapshot_glossaries(legacy, ids))
+        except Exception:
+            resolver = None
+        self._review_term_resolver_cache = ((ids, stamp), resolver)
+        return resolver
+
+    def _apply_review_suggestion(self, mark: int, option: int = 0) -> bool:
+        """One mark's option written into the caption as a user edit (undoable);
+        review stays on this caption so several marks can be fixed."""
+        suggestions = getattr(self, "_review_suggestions", ())
+        cue = self._cue_lookup.get(self.selected_cue_id) if self.project else None
+        if cue is None or not 0 <= int(mark) < len(suggestions):
+            return False
+        row = suggestions[int(mark)]
+        if not 0 <= int(option) < len(row.options):
+            return False
+        value = row.apply(cue.text, int(option))
+        if value == cue.text or not value.strip():
+            return False
+        if not self.cue_controller.set_text(cue.id, value, command_text=tr("审核改字")):
+            return False
+        bind_text(self.save_state, '已改为「{new}」· Ctrl+Z 撤销', new=row.options[int(option)].text or "∅")
+        self._refresh_review_summary_strip()
+        return True
+
+    def _show_review_suggestion_menu(self, mark: int, global_pos) -> None:
+        suggestions = getattr(self, "_review_suggestions", ())
+        if not 0 <= int(mark) < len(suggestions):
+            return
+        row = suggestions[int(mark)]
+        menu = create_studio_menu(self)
+        for index, option in enumerate(row.options):
+            sources = " · ".join(option.sources)
+            caption = f"「{row.original or '∅'}」→「{option.text or '∅'}」" + (f"  ({sources})" if sources else "")
+            action = menu.addAction(caption)
+            action.triggered.connect(lambda _checked=False, value=index: self._apply_review_suggestion(mark, value))
+        menu.exec(global_pos)
+
+    def _flip_review_pronouns(self) -> bool:
+        """Review key P: the caption's 他 → 她 (or 她 → 他, 它 → 他) as a whole."""
+        from .pronouns import flip_pronouns
+        cue = self._cue_lookup.get(self.selected_cue_id) if self.project else None
+        if cue is None:
+            return False
+        value = flip_pronouns(cue.text)
+        if value == cue.text:
+            bind_text(self.save_state, '这一条没有可切换的 他 / 她 / 它')
+            return False
+        if not self.cue_controller.set_text(cue.id, value, command_text=tr("切换人称")):
+            return False
+        bind_text(self.save_state, '人称已切换 · Ctrl+Z 撤销')
+        self._refresh_review_summary_strip()
+        return True
 
     def _advance_review_after_resolution(self, previous_row: int, *, play: bool = False) -> None:
         session = getattr(self, "_review_session", None)

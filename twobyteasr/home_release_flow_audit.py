@@ -96,13 +96,27 @@ def start(window, out):
             for name, value in asr.items():
                 combo = getattr(window, name); index = combo.findData(value)
                 check('available '+name, index >= 0); combo.setCurrentIndex(index)
-            window.ai_polish.setChecked(False)
-            window.ai_grouping.setChecked(False); window.unified_glm.setChecked(False)
+            # 2026-10-15 (``text_ai: "saved"``): keep the saved AI switches (on by default) with no
+            # key anywhere, like a user who never fills one in; the run must use the local rules.
+            keep_text_ai = config.get('text_ai') == 'saved'
+            if not keep_text_ai:
+                window.ai_polish.setChecked(False)
+                window.ai_grouping.setChecked(False); window.unified_glm.setChecked(False)
             window.legacy.RUNTIME_SETTINGS['glossary']['enabled_glossary_ids'] = []
             # One-voice fixtures use a single speaker; a MOSS run keeps MOSS's own speakers (2026-10-14).
             window.legacy.RUNTIME_SETTINGS['models']['speaker_source'] = config.get('speaker_source', 'single')
             check('save local ASR configuration', window._save_asr_configuration(show_feedback=False))
             check('save local-only AI configuration', window._save_ai_configuration(show_feedback=False))
+            if keep_text_ai:
+                tile = getattr(window, 'setting_tiles', {}).get('ai')
+                result['home_ai'] = dict(
+                    summary=(getattr(tile, 'summary_label', None) or getattr(tile, 'summary', None)).text() if tile is not None else '',
+                    chips={k: c.text() for k, c in getattr(window, '_ai_state_chips', {}).items() if c.isVisible()},
+                    key_help=window.ai_key_help_button.isVisible())
+                check('no key: AI proofreading and AI line breaks are still switched on (the defaults)',
+                      window.ai_polish.isChecked() and window.ai_grouping.isChecked())
+                check('no key: the home AI card says subtitles work without a key and offers the explainer',
+                      result['home_ai']['key_help'] and '不填也能用' in result['home_ai']['chips'].values())
             source = str(Path(config['media']).resolve())
             window.import_media([source], replace=True)
             wait(lambda: window.media_paths == [source] and window.start_button.isEnabled(), 40, 'normal Home media intake')
@@ -116,6 +130,17 @@ def start(window, out):
             check('normal Home Start launches actual worker', window.worker is not None)
             worker = window.worker
             result['task_options'] = asdict(worker.options)
+            if keep_text_ai:
+                task_switches = json.loads(worker.options.settings_snapshot_json).get('switches', {})
+                saved_switches = window.legacy.RUNTIME_SETTINGS.get('switches', {})
+                result['text_ai_local_roles'] = list(getattr(window, '_text_ai_local_roles', ()))
+                check('no key: the run starts without “AI 配置未保存”; both text-AI steps run on the local rules',
+                      result['text_ai_local_roles'] == ['polish', 'group']
+                      and task_switches.get('enable_ai_polish') is False and task_switches.get('use_ai_grouping') is False)
+                check('no key: the saved switches stay on (a key filled in later turns AI back on)',
+                      saved_switches.get('enable_ai_polish') is not False and saved_switches.get('use_ai_grouping') is not False)
+                console = ' '.join(getattr(window, '_console_lines', []) or [])
+                check('no key: the run log says this run uses the local rules', '没填 API Key' in console)
             worker.result_ready.connect(received.append); worker.unexpected_error.connect(errors.append)
             wait(lambda: bool(received), int(config.get('timeout', 600)), 'real supported-model recognition completes')
             wait(lambda: not worker.isRunning(), 30, 'actual worker exits')
@@ -125,11 +150,58 @@ def start(window, out):
             check('task completes with an accepted status', bool(received[0].successes) and result['task_status'] in accepted)
             events_path = Path(worker.options.event_log_path) if getattr(worker.options, 'event_log_path', '') else None
             check('actual recognition delivers project', bool(received[0].successes and received[0].successes[0].project_path))
+            if keep_text_ai:
+                success = received[0].successes[0]
+                report = json.loads(Path(success.report_json_path).read_text('utf-8')) if success.report_json_path else {}
+                switches = (report.get('settings') or {}).get('switches') or {}
+                stages = [str(row.get('label') or '') for row in report.get('stages') or ()]
+                result['report_switches'] = switches
+                result['report_stages'] = stages
+                check('no key: the report says AI proofreading and AI line breaks did not run; local line breaks did',
+                      switches.get('enable_ai_polish') is False and switches.get('use_ai_grouping') is False
+                      and any('本地规则' in label for label in stages) and not any('云端模型' in label for label in stages))
             target = Path(received[0].successes[0].project_path)
             for dialog in QApplication.topLevelWidgets():
                 if isinstance(dialog, QDialog) and dialog.isVisible(): dialog.close()
             guard.stop()
             project = load_project(target)
+            if keep_text_ai:
+                # 完成页「导出字幕」, as a user does: all four formats into a folder (the folder
+                # picker is the only thing answered for the user).
+                from types import SimpleNamespace
+                from PySide6.QtWidgets import QPushButton
+                from . import completion_export
+                folder = out / 'completion-export'
+                folder.mkdir(exist_ok=True)
+                picker = completion_export.QFileDialog
+                completion_export.QFileDialog = SimpleNamespace(getExistingDirectory=lambda *a, **k: str(folder))
+                seen_dialog = {}
+
+                def drive_export():
+                    dialog = next((w for w in QApplication.topLevelWidgets()
+                                   if isinstance(w, completion_export.CompletionExportDialog) and w.isVisible()), None)
+                    if dialog is None:
+                        QTimer.singleShot(150, drive_export)
+                        return
+                    for box in dialog.formats.values():
+                        box.setChecked(True)
+                    seen_dialog['speakers'] = dialog.speakers.count()
+                    dialog.grab().save(str(out / '02a-completion-export-dialog.png'))
+                    next(b for b in dialog.findChildren(QPushButton) if b.objectName() == 'primary').click()
+                try:
+                    window.grab().save(str(out / '02-completion-page.png'))
+                    QTimer.singleShot(300, drive_export)
+                    window.export_result_button.click()
+                finally:
+                    completion_export.QFileDialog = picker
+                # The completion page also lists the project and report it already had.
+                exported = [Path(p) for p in getattr(window, '_completion_output_paths', []) if Path(p).parent == folder]
+                result['completion_export'] = dict(files=[str(p) for p in exported], **seen_dialog)
+                srt = next((p for p in exported if p.suffix.lower() == '.srt'), None)
+                check('no key: 完成页「导出字幕」 writes SRT, ASS, TXT and JSON with the recognized text',
+                      {p.suffix.lower() for p in exported} == {'.srt', '.ass', '.txt', '.json'}
+                      and all(p.is_file() for p in exported) and srt is not None
+                      and any(c.text.strip() and c.text.strip()[:4] in srt.read_text('utf-8-sig') for c in project.cues))
             result['recognized_text'] = [cue.text for cue in project.cues]
             result['project_path'] = str(target)
             result['owned_project'] = preserve_owned_project(target, out.parent if config.get('recognition_only') else out,

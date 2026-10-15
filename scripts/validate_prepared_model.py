@@ -24,6 +24,50 @@ def moss_has_speech(output):
     return any(x.get('text') and x.get('speaker') for x in segments)
 
 
+_DEVICE_PROBE = r'''
+import json, os, sys, torch
+cuda = torch.cuda.is_available() and not os.environ.get('2BYTEASR_CPU_ONLY')
+mps = getattr(torch.backends, 'mps', None)
+apple_gpu = sys.platform == 'darwin' and not cuda and mps is not None and mps.is_available()
+print(json.dumps(dict(cuda=bool(cuda), apple_gpu=bool(apple_gpu),
+                      device=torch.cuda.get_device_name(0) if cuda else ('Apple GPU (MPS)' if apple_gpu else 'cpu'))))
+'''
+
+
+def probe_device():
+    """CUDA / Apple GPU / CPU of this interpreter, answered by a short child process (2026-10-15).
+
+    Importing CUDA PyTorch commits about 1.6 GB on Windows. Held here, it sat
+    on top of the worker's own load for the whole check and helped push PCs
+    with a small page file into os error 1455.
+    """
+    completed=subprocess.run([sys.executable,'-I','-c',_DEVICE_PROBE],capture_output=True,text=True,encoding='utf-8',
+                             errors='replace',timeout=300,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    lines=completed.stdout.strip().splitlines()
+    if completed.returncode or not lines:
+        raise RuntimeError('PyTorch 设备检测失败：'+(completed.stderr or completed.stdout).strip()[-800:])
+    return json.loads(lines[-1])
+
+
+def failure_category(text):
+    """``(category, message)`` of a failed readiness check for the installer."""
+    from twobyteasr.asr import windows_commit_limit_error
+    text=str(text)
+    if windows_commit_limit_error(text):
+        # The line naming the error (a worker event: its own text and VRAM reading); the whole output stays in the receipt.
+        line=next(line.strip() for line in text.splitlines() if windows_commit_limit_error(line))
+        try:event=json.loads(line.partition(' ')[2])
+        except ValueError:event=None
+        if not isinstance(event,dict):return 'system_memory',line
+        message=(str(event.get('detail') or '').strip().splitlines() or [line])[0]
+        if event.get('free_vram_mb') is not None:
+            message+=f"（显存当时还剩 {event['free_vram_mb']} / {event.get('total_vram_mb', '?')} MB）"
+        return 'system_memory',message
+    if 'hardware_unsupported' in text or 'out of memory' in text.lower():
+        return 'hardware_unsupported',text
+    return 'model_load_failed',text
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--root',type=Path,required=True)
@@ -41,8 +85,12 @@ def main():
         print('[2BYTEASR_PHASE] '+json.dumps(dict(phase='weights_ready',model=model)),flush=True)
         print('[仅权重] Windows 推理适配尚不可用，文件准备完成不代表模型可执行。',flush=True)
         return 0
+    # OpenBLAS commits about 24 MB per CPU thread when numpy loads; this process
+    # only converts the sample. The workers started below keep their own setting.
+    blas_threads=os.environ.get('OPENBLAS_NUM_THREADS');os.environ['OPENBLAS_NUM_THREADS']='1'
     import numpy as np
-    import torch
+    if blas_threads is None:os.environ.pop('OPENBLAS_NUM_THREADS')
+    else:os.environ['OPENBLAS_NUM_THREADS']=blas_threads
     from twobyteasr import asr
     sample=root/'assets/diagnostics/speech_en.wav'
     with wave.open(str(sample),'rb') as stream:
@@ -50,11 +98,9 @@ def main():
         audio=np.frombuffer(stream.readframes(stream.getnframes()),dtype='<i2').astype(np.float32)/32768
     duration=len(audio)/rate
     role={'moss':'moss','firered_llm':'firered_llm','glm_asr_nano':'glm_asr','canary_qwen':'canary'}.get(model,'main')
-    cuda=torch.cuda.is_available() and not os.environ.get('2BYTEASR_CPU_ONLY')
     # 2026-10-14: on an Apple Silicon Mac MOSS and FireRed AED run on the Apple GPU (MPS).
-    mps_backend=getattr(torch.backends,'mps',None)
-    apple_gpu=sys.platform=='darwin' and not cuda and mps_backend is not None and mps_backend.is_available()
-    device=torch.cuda.get_device_name(0) if cuda else ('Apple GPU (MPS)' if apple_gpu else 'cpu')
+    hardware=probe_device()
+    cuda=hardware['cuda'];device=hardware['device']
     code_hash=hashlib.sha256()
     for path in [Path(__file__),root/'twobyteasr/asr.py',sample,*sorted(root.glob('*_worker.py'))]:
         code_hash.update(path.read_bytes())
@@ -91,7 +137,7 @@ def main():
             import subtitle_core
             subtitle_core.FIRERED_ASR_BACKEND='qwen_aligner'
             output=asr.transcribe_qwen_aligner_reference(audio,[dict(start=0.,end=duration,
-                text='Hello this is a local speech recognition test the weather is sunny today')])
+                text='Hello this is a local speech recognition test the weather is sunny today')],raise_errors=True)
             if not output or not all(0<=x['start']<x['end']<=duration+.2 for x in output):
                 raise RuntimeError('对齐 worker 没有返回有效时间戳')
         elif model=='ja_ctc_aligner':
@@ -139,9 +185,9 @@ def main():
         result.update(model_loaded=True,inference_verified=True,output=output,status='PASS')
         print('[2BYTEASR_PHASE] '+json.dumps(dict(phase='ready',model=model)),flush=True)
     except Exception as exc:
-        category='hardware_unsupported' if 'hardware_unsupported' in str(exc) or 'out of memory' in str(exc).lower() else 'model_load_failed'
+        category,message=failure_category(exc)
         result.update(status='BLOCKED' if category=='hardware_unsupported' else 'FAIL',category=category,error=traceback.format_exc())
-        print('[2BYTEASR_INSTALL_ERROR] '+json.dumps(dict(phase='model_loading',category=category,message=str(exc)),ensure_ascii=False),flush=True)
+        print('[2BYTEASR_INSTALL_ERROR] '+json.dumps(dict(phase='model_loading',category=category,message=message),ensure_ascii=False),flush=True)
         traceback.print_exc()
     result['elapsed_s']=time.time()-result['started']
     pending=receipt.with_suffix('.pending');pending.write_text(json.dumps(result,ensure_ascii=False,indent=2),'utf8');os.replace(pending,receipt)

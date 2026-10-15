@@ -5,7 +5,8 @@ Units come from ``twobyteasr.forced_alignment`` with spans in the original
 text; the official model, processor and monotonic repair are used unchanged.
 Two passes run per job: tokenizer words (nagisa for Japanese) and characters
 inside words (the model's own per-unit slots). Raw slot values, repaired
-values and the repair kind are all returned.
+values and the repair kind are all returned. On Windows the weight file is
+read through a read-only mapping (``load_aligner``); the classes are the same.
 """
 from __future__ import annotations
 
@@ -97,6 +98,98 @@ def select_device(torch, requested: str = "auto"):
     return "cpu", torch.float32
 
 
+# 2026-10-15: safetensors maps the weight file copy-on-write, and Windows
+# charges such a view in full against the system commit limit (RAM plus page
+# file): 1.75 GB for this model, opened more than once while transformers
+# loads it. On a PC with a small page file the load failed with os error 1455
+# ("页面文件太小"). A read-only view charges nothing; measured on the dev PC the
+# load's peak commit fell from 8.0 GB to 5.0 GB, with identical results.
+READ_ONLY_WEIGHTS = os.name == "nt"
+FAILURE_FACTS: dict = {}
+_SAFETENSORS_DTYPES = {"BF16": "bfloat16", "F16": "float16", "F32": "float32", "F64": "float64", "I64": "int64",
+                       "I32": "int32", "I16": "int16", "I8": "int8", "U8": "uint8", "BOOL": "bool"}
+
+
+def read_only_state_dict(path: Path, torch):
+    """Tensors over a read-only mapping of one ``.safetensors`` file; returns ``(tensors, view)``.
+
+    The file has already been checked against its locked hash. Loading copies
+    every tensor to its device and dtype; nothing writes to these.
+    """
+    import mmap
+    import struct
+    import warnings
+    with open(path, "rb") as stream:
+        view = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+    header_size = struct.unpack("<Q", view[:8])[0]
+    header = json.loads(view[8:8 + header_size])
+    base = 8 + header_size
+    tensors = {}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # "The given buffer is not writable"
+        for name, spec in header.items():
+            if name == "__metadata__":
+                continue
+            dtype = getattr(torch, _SAFETENSORS_DTYPES[spec["dtype"]])
+            shape = [int(size) for size in spec["shape"]]
+            begin, end = (int(offset) for offset in spec["data_offsets"])
+            count = 1
+            for size in shape:
+                count *= size
+            if end - begin != count * torch.empty((), dtype=dtype).element_size() or base + end > len(view):
+                raise ValueError(f"safetensors entry {name} does not match its shape and dtype")
+            flat = (torch.frombuffer(view, dtype=dtype, count=count, offset=base + begin) if count
+                    else torch.empty(0, dtype=dtype))
+            tensors[name] = flat.reshape(shape)
+    return tensors, view
+
+
+def _load_aligner_read_only(aligner_class, model_dir: Path, device: str, dtype, torch):
+    """``Qwen3ForcedAligner.from_pretrained`` with the weights read from ``read_only_state_dict``."""
+    from qwen_asr.core.transformers_backend import Qwen3ASRConfig, Qwen3ASRForConditionalGeneration, Qwen3ASRProcessor
+    from qwen_asr.inference.qwen3_forced_aligner import Qwen3ForceAlignProcessor
+    from transformers import AutoConfig, AutoModel, AutoProcessor
+    weights = model_dir / "model.safetensors"
+    if not weights.is_file():
+        raise FileNotFoundError(f"single-file checkpoint not found: {weights}")
+    # The same registrations, config, model class and processor as the official loader.
+    AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
+    AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
+    AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+    config = AutoConfig.from_pretrained(str(model_dir), local_files_only=True)
+    tensors, view = read_only_state_dict(weights, torch)
+    model = Qwen3ASRForConditionalGeneration.from_pretrained(None, config=config, state_dict=tensors,
+                                                             device_map=device, dtype=dtype)
+    # A CPU tensor that kept the checkpoint dtype would still point into the view.
+    mapped = {tensor.untyped_storage().data_ptr() for tensor in tensors.values() if tensor.numel()}
+    for tensor in [*model.parameters(), *model.buffers()]:
+        if tensor.device.type == "cpu" and tensor.numel() and tensor.untyped_storage().data_ptr() in mapped:
+            tensor.data = tensor.data.clone()
+    del tensors
+    gc.collect()
+    try:
+        view.close()
+    except BufferError:
+        pass  # still referenced somewhere; released with it
+    processor = AutoProcessor.from_pretrained(str(model_dir), fix_mistral_regex=True)
+    return aligner_class(model=model, processor=processor, aligner_processor=Qwen3ForceAlignProcessor())
+
+
+def load_aligner(model_dir: Path, device: str, dtype, torch):
+    """Returns ``(aligner, weights_loader)``; any problem with the read-only route uses the official loader."""
+    from qwen_asr import Qwen3ForcedAligner
+    if READ_ONLY_WEIGHTS:
+        try:
+            return _load_aligner_read_only(Qwen3ForcedAligner, model_dir, device, dtype, torch), "read_only_map"
+        except Exception as exc:
+            _emit("read_only_load_failed", error_type=type(exc).__name__, detail=str(exc)[:300])
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    return Qwen3ForcedAligner.from_pretrained(str(model_dir), local_files_only=True,
+                                              device_map=device, dtype=dtype), "safetensors"
+
+
 def _tag_texts(manifest_path: Path, output: Path) -> None:
     """Model-free mode: nagisa words and part-of-speech tags for subtitle line breaking."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -117,6 +210,10 @@ def _tag_texts(manifest_path: Path, output: Path) -> None:
 
 
 def main() -> None:
+    # numpy and scipy each load OpenBLAS, which commits about 24 MB per CPU
+    # thread at import (1.5 GB of this worker's peak on a 32-thread CPU).
+    # Nothing here uses their BLAS; torch has its own (2026-10-15).
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output", required=True)
@@ -134,7 +231,6 @@ def main() -> None:
     sys.path.append(str(root))
     import numpy as np
     import torch
-    from qwen_asr import Qwen3ForcedAligner
     from twobyteasr.model_integrity import verify_model_files
     from twobyteasr import forced_alignment as fa
 
@@ -159,10 +255,9 @@ def main() -> None:
     load_started = time.perf_counter()
     _emit("loading", python=sys.executable, model_path=str(Path(args.model_dir).resolve()), pid=os.getpid(),
           jobs=len(jobs), device=device, dtype=str(dtype))
-    aligner = Qwen3ForcedAligner.from_pretrained(str(args.model_dir), local_files_only=True,
-                                                 device_map=device, dtype=dtype)
+    aligner, weights_loader = load_aligner(Path(args.model_dir), device, dtype, torch)
     load_ms = (time.perf_counter() - load_started) * 1000.0
-    _emit("loaded", elapsed_ms=round(load_ms, 3))
+    _emit("loaded", elapsed_ms=round(load_ms, 3), weights_loader=weights_loader)
     try:
         prepared = []
         results = {}
@@ -227,6 +322,9 @@ def main() -> None:
             "model_revision": fa.ALIGNER_REVISION, "code": fa.ALIGNER_CODE, "unit_policy": fa.UNIT_POLICY_VERSION,
             "load_ms": round(load_ms, 3), "inference_ms": round(inference_ms, 3)})
         _emit("completed", aligned=len(prepared), jobs=len(jobs), inference_ms=round(inference_ms, 3), device=device)
+    except Exception as exc:
+        FAILURE_FACTS.update(memory_facts(exc))  # measured before the model is released below
+        raise
     finally:
         del aligner
         gc.collect()
@@ -234,9 +332,49 @@ def main() -> None:
             torch.cuda.empty_cache()
 
 
+def memory_facts(exc: BaseException) -> dict:
+    """Free VRAM and Windows commit when an allocation failed (2026-10-15).
+
+    Once the commit limit is reached, GPU allocations fail as well and read
+    "CUDA out of memory" while most of the VRAM is free; these numbers tell
+    the two apart in the readiness check and in user logs.
+    """
+    lowered = str(exc).lower()
+    if not any(marker in lowered for marker in ("out of memory", "alloc_failed", "1455", "paging file", "页面文件")):
+        return {}
+    facts = {}
+    try:
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            facts.update(free_vram_mb=free >> 20, total_vram_mb=total >> 20)
+    except Exception:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PerformanceInformation(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), *[(name, ctypes.c_size_t) for name in (
+                    "CommitTotal", "CommitLimit", "CommitPeak", "PhysicalTotal", "PhysicalAvailable", "SystemCache",
+                    "KernelTotal", "KernelPaged", "KernelNonpaged", "PageSize")],
+                    ("HandleCount", wintypes.DWORD), ("ProcessCount", wintypes.DWORD), ("ThreadCount", wintypes.DWORD)]
+
+            info = PerformanceInformation(cb=ctypes.sizeof(PerformanceInformation))
+            # kernel32 is already loaded; at the limit there may be no room to load psapi.dll.
+            if ctypes.windll.kernel32.K32GetPerformanceInfo(ctypes.byref(info), info.cb):
+                page = info.PageSize
+                facts.update(commit_total_mb=info.CommitTotal * page >> 20, commit_limit_mb=info.CommitLimit * page >> 20,
+                             physical_total_mb=info.PhysicalTotal * page >> 20)
+        except Exception:
+            pass
+    return facts
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        _emit("failed", error_type=type(exc).__name__, detail=str(exc))
+        _emit("failed", error_type=type(exc).__name__, detail=str(exc), **(FAILURE_FACTS or memory_facts(exc)))
         raise SystemExit(1)

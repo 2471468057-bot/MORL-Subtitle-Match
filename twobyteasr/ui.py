@@ -2445,8 +2445,14 @@ def persist_ai_configuration(
     enable_ai_polish: bool = True,
     dry_run: bool = False,
     prefer_arabic_numbers: bool | None = None,
+    local_without_key: bool = False,
 ) -> dict:
-    """Validate and persist AI form values without requiring a subtitle run."""
+    """Validate and persist AI form values without requiring a subtitle run.
+
+    ``local_without_key`` (2026-10-15, a run start): an enabled step whose key
+    was never filled in is not an error; it is returned in ``local_roles`` and
+    that run uses the local rules for it. Other endpoint errors still raise.
+    """
     use_ai_grouping = bool(use_ai_grouping)
     enable_ai_polish = bool(enable_ai_polish)
     unified = bool(unified and use_ai_grouping and enable_ai_polish)
@@ -2475,14 +2481,18 @@ def persist_ai_configuration(
         else group_key or existing_group_key
     )
     missing_keys = []
-    endpoints = [("字幕校对模型", polish, effective_polish_key)] if enable_ai_polish else []
+    local_roles = []
+    endpoints = [("polish", "字幕校对模型", polish, effective_polish_key)] if enable_ai_polish else []
     if use_ai_grouping:
-        endpoints.append(("全文断句模型", group, effective_group_key))
-    for label, values, api_key in endpoints:
+        endpoints.append(("group", "全文断句模型", group, effective_group_key))
+    for role, label, values, api_key in endpoints:
         if values.get("transport", AITransport.OPENAI_COMPATIBLE.value) == AITransport.OPENAI_COMPATIBLE.value:
             from .llm_config import endpoint_requires_key
             if not api_key and endpoint_requires_key(values):
                 missing_keys.append(label)
+                if local_without_key:
+                    local_roles.append(role)
+                    continue
             validate_endpoint(
                 {
                     **values,
@@ -2532,7 +2542,8 @@ def persist_ai_configuration(
         models[f'{stage}_json_mode'] = bool(values.get('json_mode', True))
         models[f'{stage}_structured_output'] = bool(values.get('structured_output', True))
     if dry_run:
-        return {"models": models, "unified": unified, "missing_keys": tuple(missing_keys)}
+        return {"models": models, "unified": unified, "missing_keys": tuple(missing_keys),
+                "local_roles": tuple(local_roles)}
     if polish_key and models["polish_transport"] == AITransport.OPENAI_COMPATIBLE.value:
         save_api_key_for(polish["provider"], polish["base_url"], polish_key)
     if group_key and models["group_transport"] == AITransport.OPENAI_COMPATIBLE.value:
@@ -2566,7 +2577,7 @@ def persist_ai_configuration(
         )
     except Exception:
         pass
-    return {"models": models, "missing_keys": tuple(missing_keys)}
+    return {"models": models, "missing_keys": tuple(missing_keys), "local_roles": tuple(local_roles)}
 
 
 def persist_asr_configuration(
@@ -4485,10 +4496,12 @@ class MainWindow(QWidget):
         search_key = keys.tooltip_key("home.search")
         entries = (
             ("新手教学", self._start_home_tour),
+            ("新手教学 · 进阶（改错字与工作台）", lambda: self._start_home_tour("advanced")),
             ("显示新手引导", lambda: self._next_step_action("show_guide")),
             ("打开范例工程", self._open_sample_project),
             ("选择识别方式…", lambda: self._next_step_action("choose_plan")),
             ("申请与设置 API…", self._open_api_setup_guide),
+            ("API Key 是什么？", self._open_api_key_explainer),
             (None, None),
             (tr("搜索功能与设置…（{key}）", key=search_key), self._open_feature_search),
             ("快捷键…", lambda: self._open_application_settings(initial_section="快捷键")),
@@ -5482,9 +5495,14 @@ class MainWindow(QWidget):
         elif action == "tour":
             self._start_home_tour()
 
-    def _start_home_tour(self):
-        """Point at the real home page parts one by one (2026-10-14)."""
-        if self.pages.currentWidget() is not self.__dict__.get("settings_scroll"):
+    def _start_home_tour(self, part: str = "basic"):
+        """Point at the real page parts one by one (2026-10-14).
+
+        2026-10-15: two parts. ``basic`` starts on the home page and ends with an
+        exported subtitle file; its last step can go straight on to ``advanced``
+        (proofreading and the workbench), which also opens from 说明.
+        """
+        if part == "basic" and self.pages.currentWidget() is not self.__dict__.get("settings_scroll"):
             self._switch_page(0)
             self._home_tour_pending = True
             return
@@ -5493,8 +5511,11 @@ class MainWindow(QWidget):
 
         def done(completed):
             onboarding.save_state(dict(onboarding.load_state(), tour_done=True))
+            if self.__dict__.pop("_tutorial_continue", "") == "advanced" and completed:
+                QTimer.singleShot(0, lambda: self._start_home_tour("advanced"))
+                return
             self._tutorial_finish(completed)
-        start_home_tour(self, done)
+        start_home_tour(self, done, part)
 
     # ---- tutorial demo data (2026-10-14): the bundled example, nothing uploaded --------
     def _tutorial_prepare_demo(self):
@@ -6822,9 +6843,19 @@ class MainWindow(QWidget):
             chip.setObjectName("homeFactChip")
             row.addWidget(chip)
             self._ai_state_chips[key] = chip
+        # 2026-10-15: the picture explainer for people who never heard of a key.
+        self.ai_key_help_button = AnimatedButton("API Key 是什么？")
+        self.ai_key_help_button.setObjectName("linkButton")
+        self.ai_key_help_button.setIcon(_icon("fa5s.question-circle"))
+        self.ai_key_help_button.clicked.connect(lambda: self._open_api_key_explainer())
+        row.addWidget(self.ai_key_help_button)
         row.addStretch(1)
         layout.addWidget(self.home_fact_row)
         self._refresh_home_process_facts()
+
+    def _open_api_key_explainer(self) -> None:
+        from .api_key_explainer import open_api_key_explainer
+        open_api_key_explainer(self)
 
     def _refresh_home_process_facts(self, *_args) -> None:
         """Saved settings, key and connection are three facts, never one
@@ -6860,13 +6891,41 @@ class MainWindow(QWidget):
             identity = effective_ai_identity(saved, stage)
         except (OSError, RuntimeError, TypeError, ValueError, KeyError):
             identity = {}
+
+        def lacks_key(name):
+            from .llm_config import endpoint_requires_key
+            try:
+                found = identity if name == stage else effective_ai_identity(saved, name)
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+                return False
+            return (str(found.get("transport", "")) == AITransport.OPENAI_COMPATIBLE.value
+                    and not found.get("credential_configured")
+                    and endpoint_requires_key({"provider": found.get("provider"), "base_url": found.get("base_url")}))
+
+        # 2026-10-15: no key is a normal way to use the app — those steps run on
+        # the local rules — so it is shown as such, not as a warning.
+        enabled = [name for name, on in (("polish", polish_on), ("group", group_on)) if on]
+        without_key = [name for name in enabled if lacks_key(name)]
+        key_help = getattr(self, "ai_key_help_button", None)
+        if key_help is not None:
+            key_help.setVisible(bool(without_key))
+        if without_key and len(without_key) == len(enabled) and not getattr(self, "_ai_has_draft", False):
+            if tile is not None:
+                tile.set_summary(translate("没填 API Key · 用本地规则出字幕（免费）", language))
+            show("saved", "不填也能用", "on")
+            show("key", "", "off")
+            show("connection", "", "off")
+            return
         if tile is not None and identity:
             tile.set_summary(f"{translate(str(identity.get('label', '')), language)} · {identity.get('model') or translate('默认模型', language)}")
         if getattr(self, "_ai_has_draft", False):
             show("saved", "有未保存的修改", "warn")
         else:
             show("saved", "设置已保存", "on")
-        if str(identity.get("transport", "")) == AITransport.OPENAI_COMPATIBLE.value:
+        if without_key:
+            show("key", {("group",): "AI 断句没填 Key · 用本地规则", ("polish",): "AI 校对没填 Key · 不做校对"}.get(
+                tuple(without_key), "没填 Key · 用本地规则"), "off")
+        elif str(identity.get("transport", "")) == AITransport.OPENAI_COMPATIBLE.value:
             show("key", "密钥已配置" if identity.get("credential_configured") else "未配置密钥",
                  "on" if identity.get("credential_configured") else "warn")
         else:
@@ -6945,7 +7004,16 @@ class MainWindow(QWidget):
         subtitle.setObjectName("aiDialogSubtitle")
         titles.addWidget(title)
         titles.addWidget(subtitle)
+        # 2026-10-15: not filling anything in is fine; say so where people look.
+        no_key = QLabel("不填 Key 也能出字幕：没 Key 的步骤会用本地规则")
+        no_key.setObjectName("aiDialogSubtitle")
+        titles.addWidget(no_key)
         head.addLayout(titles, 1)
+        key_help = AnimatedButton("API Key 是什么？")
+        key_help.setObjectName("linkButton")
+        key_help.setIcon(_icon("fa5s.question-circle"))
+        key_help.clicked.connect(lambda: self._open_api_key_explainer())
+        head.addWidget(key_help, 0, Qt.AlignmentFlag.AlignTop)
         close = button_role(QPushButton(""), "ghost")
         close.setFixedSize(36, 36)
         install_themed_icon(close, "fa5s.times", "secondary")
@@ -7504,6 +7572,26 @@ class MainWindow(QWidget):
         from .theme_manager import SETTINGS_APP, SETTINGS_ORG
         return QSettings(SETTINGS_ORG, SETTINGS_APP)
 
+    def _run_settings_snapshot(self) -> dict:
+        """The settings this run uses (2026-10-15): the saved settings, with each
+        text-AI step that has no key turned off, so it runs on the local rules.
+        The saved switches stay as they are; filling in a key turns AI back on."""
+        settings = json.loads(json.dumps(self.legacy.RUNTIME_SETTINGS, ensure_ascii=False))
+        switches = settings.setdefault("switches", {})
+        for role in getattr(self, "_text_ai_local_roles", ()) or ():
+            switches[{"polish": "enable_ai_polish", "group": "use_ai_grouping"}[role]] = False
+        return settings
+
+    def _text_ai_local_note(self) -> str:
+        roles = set(getattr(self, "_text_ai_local_roles", ()) or ())
+        if roles == {"polish", "group"}:
+            return tr("没填 API Key：这次用本地规则断句、不做 AI 校对，字幕照常生成")
+        if roles == {"group"}:
+            return tr("AI 断句没填 API Key：这次用本地规则断句")
+        if roles == {"polish"}:
+            return tr("AI 校对没填 API Key：这次不做 AI 校对，字幕照常生成")
+        return ""
+
     def _confirm_run_disclosure(self) -> bool:
         """State what this run will use; ask once before audio goes to a cloud service (2026-10-13).
 
@@ -7514,7 +7602,7 @@ class MainWindow(QWidget):
         import hashlib
         from .recognition_choices import disclosure_text, run_disclosure
         try:
-            settings = json.loads(json.dumps(self.legacy.RUNTIME_SETTINGS, ensure_ascii=False))
+            settings = self._run_settings_snapshot()
             settings.setdefault("models", {}).update(self._asr_values())
             text = disclosure_text(settings)
             info = run_disclosure(settings)
@@ -9700,6 +9788,8 @@ class MainWindow(QWidget):
         options = self._subtitle_language_options()
         if save and hasattr(self, "recognition_plan_hint"):
             self._refresh_recognition_recommendation()  # 日语/英语推荐 follow the language
+        if save and hasattr(self, "recognition_plan"):
+            self._refresh_asr_summary()   # the timeline card names the model for this language
         translating = options["subtitle_output"] != "original"
         self.translation_script.setEnabled(translating)
         # The bilingual item names the pair: 日中双语 / 英中双语 (2026-10-14);
@@ -9723,7 +9813,15 @@ class MainWindow(QWidget):
             except Exception:
                 aligner_missing = False
         if options["recognition_language"] == "ja":
-            hints.append("日语：不送中文时间轴模型；字词时间由 Qwen3-ForcedAligner 对齐。")
+            try:
+                from .ctc_alignment import enabled as ctc_enabled, model_dir as ctc_model_dir
+                timeline = self.__dict__.get("firered_asr_backend")
+                ctc_runs = bool((timeline is None or str(timeline.currentData()) != "off")
+                                and ctc_enabled(self.legacy.RUNTIME_SETTINGS) and ctc_model_dir())
+            except Exception:  # noqa: BLE001
+                ctc_runs = False
+            hints.append("日语：不送中文时间轴模型；字词时间由 Qwen3-ForcedAligner 对齐，句首再由日语 CTC 对齐模型校正。"
+                         if ctc_runs else "日语：不送中文时间轴模型；字词时间由 Qwen3-ForcedAligner 对齐。")
         if options["recognition_language"] == "en":
             hints.append("英语：按单词断句，单词之间保留空格；单词时间由 Qwen3-ForcedAligner 对齐。")
         if aligner_missing and options["recognition_language"] == "ja":
@@ -10094,12 +10192,32 @@ class MainWindow(QWidget):
         from .recognition_choices import cloud_asr_readiness
         key_ready, self._cloud_asr_block_reason = cloud_asr_readiness(
             _models_cfg, typed_key=self.qwen_asr_api_key.text())
+        # 2026-10-14: the timeline card names what really runs for the spoken
+        # language. Japanese and English never use the Chinese timeline model:
+        # words are timed by Qwen3-ForcedAligner, and Japanese line starts are
+        # then checked by the CTC aligner when it is installed and switched on
+        # (moss_firered_pipeline). Before, the card kept saying FireRedASR2-AED
+        # and the CTC model chosen in the workshop showed nowhere.
+        timeline_backend = firered_backend
+        timeline_name = timeline_short.get(firered_backend, firered_backend)
+        spoken = self._subtitle_language_options()["recognition_language"]
+        if spoken in ("ja", "en") and firered_backend != "off":
+            timeline_backend = "qwen_aligner"
+            timeline_name = translate("Qwen3 对齐", language)
+            if spoken == "ja":
+                try:
+                    from .ctc_alignment import enabled as ctc_enabled, model_dir as ctc_model_dir
+                    if ctc_enabled(self.legacy.RUNTIME_SETTINGS) and ctc_model_dir():
+                        timeline_name = translate("Qwen3 对齐 + 日语 CTC", language)
+                except Exception:  # noqa: BLE001 - the card still names the aligner
+                    pass
+        timeline_short = dict(timeline_short, **{timeline_backend: timeline_name})
         self.asr_panel.set_summary(
             " / ".join(
                 (
                     primary_short.get(primary_backend, primary_backend),
                     review_short.get(qwen_backend, qwen_backend),
-                    timeline_short.get(firered_backend, firered_backend),
+                    timeline_name,
                 )
             )
         )
@@ -10161,7 +10279,7 @@ class MainWindow(QWidget):
         if hasattr(self, "recognition_plan"):
             role_specs = (
                 ("primary", primary_backend, primary_short),
-                ("timeline", firered_backend, timeline_short),
+                ("timeline", timeline_backend, timeline_short),
                 ("review", qwen_backend, review_short),
             )
             for role, backend, labels in role_specs:
@@ -10196,7 +10314,7 @@ class MainWindow(QWidget):
             plan_items = []
             for role, backend in (
                 ("primary", primary_backend),
-                ("timeline", firered_backend),
+                ("timeline", timeline_backend),
                 ("review", qwen_backend),
             ):
                 _kind, status, _tone = _status(role, backend)
@@ -11105,7 +11223,9 @@ class MainWindow(QWidget):
         self.ai_save_status.style().unpolish(self.ai_save_status)
         self.ai_save_status.style().polish(self.ai_save_status)
 
-    def _save_ai_configuration(self, *, show_feedback: bool, require_ready: bool = False) -> bool:
+    def _save_ai_configuration(self, *, show_feedback: bool, require_ready: bool = False,
+                               local_without_key: bool = False) -> bool:
+        self._text_ai_local_roles = ()
         try:
             p = self.polish_editor.values()
             g = self.group_editor.values()
@@ -11136,7 +11256,9 @@ class MainWindow(QWidget):
                 use_ai_grouping=self.ai_grouping.isChecked(),
                 enable_ai_polish=self.ai_polish.isChecked(),
                 prefer_arabic_numbers=self.prefer_arabic_numbers.isChecked() if hasattr(self,'prefer_arabic_numbers') else None,
+                local_without_key=local_without_key,
             )
+            self._text_ai_local_roles = tuple(result.get("local_roles") or ())
             _secret_save_trace("after_persist_ai_configuration", self.polish_editor, self.polish_editor.values(), extra={"editor": "polish"})
             _secret_save_trace("after_persist_ai_configuration", self.group_editor, self.group_editor.values(), extra={"editor": "group"})
         except Exception as exc:
@@ -11184,10 +11306,13 @@ class MainWindow(QWidget):
         self._refresh_ai_summary()
         missing = result["missing_keys"]
         language = getattr(self, "_ui_language", current_language())
-        self.ai_save_status.setObjectName("statusWarn" if missing else "statusGood")
-        (bind_text(self.ai_save_status, translate('配置已保存；运行前还需填写：', language) + '、'.join(missing)) if missing else bind_text(self.ai_save_status, credential_storage_notice(language) if session_credentials_enabled() else translate('AI 配置与密钥已保存，重启后仍会保留', language)))
+        # 2026-10-15: a step without a key is not a problem any more; it runs
+        # on the local rules until a key is filled in.
+        self.ai_save_status.setObjectName("muted" if missing else "statusGood")
+        (bind_text(self.ai_save_status, translate('已保存。没填 Key 的步骤会用本地规则：', language) + '、'.join(translate(item, language) for item in missing)) if missing else bind_text(self.ai_save_status, credential_storage_notice(language) if session_credentials_enabled() else translate('AI 配置与密钥已保存，重启后仍会保留', language)))
         self.ai_save_status.style().unpolish(self.ai_save_status)
         self.ai_save_status.style().polish(self.ai_save_status)
+        self._refresh_home_process_facts()
         return True
 
     def _apply_unified_glm_mode(self, checked: bool):
@@ -11503,8 +11628,13 @@ class MainWindow(QWidget):
                 pass
 
             local_analysis=(getattr(self,'_studio_recognition_context',None) or {}).get('recognition_purpose')=='analysis'
-            if not self._save_ai_configuration(show_feedback=True, require_ready=not local_analysis):
+            # 2026-10-15: a text-AI step without a key runs on the local rules
+            # (users who never fill in a key still get exportable subtitles).
+            if not self._save_ai_configuration(show_feedback=True, require_ready=not local_analysis,
+                                               local_without_key=True):
                 return
+            if local_analysis:
+                self._text_ai_local_roles = ()   # an analysis run has no text-AI steps at all
             if not self._confirm_run_disclosure():
                 return
             game_name = self.legacy.canonicalize_runtime_game_name(self.game_box.currentText())
@@ -11536,7 +11666,7 @@ class MainWindow(QWidget):
             language_options = self._subtitle_language_options()
             options = RunOptions(
                 **language_options,
-                settings_snapshot_json=json.dumps(self.legacy.RUNTIME_SETTINGS, ensure_ascii=False),
+                settings_snapshot_json=json.dumps(self._run_settings_snapshot(), ensure_ascii=False),
                 glossary_snapshot_json=json.dumps(
                     snapshot_glossaries(self.legacy, enabled_glossary_ids if terms_enabled else ()).to_dict(),
                     ensure_ascii=False),
@@ -11576,6 +11706,10 @@ class MainWindow(QWidget):
             self._last_run_options = options
             self._launch_pipeline_worker(options)
             launched = True
+            local_note = self._text_ai_local_note()
+            if local_note:
+                self._append_feed('任务配置', local_note, BLUE)
+                self._append_console_line('[本次识别] ' + local_note)
             started_profile = getattr(self, 'current_project_profile', None)
             started_configuration = self._profile_configuration()
             try:

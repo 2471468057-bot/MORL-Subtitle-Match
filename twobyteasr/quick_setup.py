@@ -585,6 +585,13 @@ class QuickSetupDialog(SpringDialog):
         custom.setCursor(Qt.CursorShape.PointingHandCursor)
         custom.clicked.connect(self._choose_custom)
         footer.addWidget(custom)
+        # 2026-10-15: many people have never heard of an API key (or that it needs credit).
+        key_help = QPushButton()
+        bind_text(key_help, 'API Key 是什么？')
+        key_help.setObjectName('quickSetupLink')
+        key_help.setCursor(Qt.CursorShape.PointingHandCursor)
+        key_help.clicked.connect(self._explain_api_key)
+        footer.addWidget(key_help)
         footer.addStretch(1)
         self.later_button = button_role(QPushButton(), 'secondary')
         bind_text(self.later_button, '稍后再说')
@@ -599,7 +606,7 @@ class QuickSetupDialog(SpringDialog):
         for key, card in self.cards.items():
             backends = PLANS[key].backends
             size = self._size_of(backends)
-            card.set_status(tr('需要 API Key · 会上传音频') if key == 'cloud' else tr('下载约 {size:.1f} GB', size=size))
+            card.set_status(tr('需要 API Key（先充值）· 会上传音频') if key == 'cloud' else tr('下载约 {size:.1f} GB', size=size))
         self.cuda_ready.connect(self._cuda_checked)
         if 'local' in self.cards:
             self.cards['local'].set_status(tr('正在检查显卡…') + '  ·  ' +
@@ -646,6 +653,10 @@ class QuickSetupDialog(SpringDialog):
             return
         self.backends = PLANS[self.choice].backends
         self.accept()
+
+    def _explain_api_key(self) -> None:
+        from .api_key_explainer import open_api_key_explainer
+        open_api_key_explainer(self, offer_setup=False)
 
     def _choose_custom(self) -> None:
         self.choice = 'custom'

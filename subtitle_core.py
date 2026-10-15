@@ -1856,7 +1856,8 @@ def runtime_settings_snapshot():
             "enable_ai_polish": plan.polish,
             "enable_qwen_asr_reference": bool(USE_QWEN_ASR_REFERENCE),
             "enable_firered_boundary_refinement": bool(USE_FIRERED_BOUNDARY_REFINEMENT),
-            "use_ai_grouping": bool(RUNTIME_SETTINGS["switches"].get("use_ai_grouping", True)),
+            # The task plan, not the global switch: a step without a key runs locally (2026-10-15).
+            "use_ai_grouping": plan.group,
             "unified_glm_processing": bool(
                 RUNTIME_SETTINGS["switches"].get("unified_glm_processing", True)
             ),

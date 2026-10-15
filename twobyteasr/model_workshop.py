@@ -3687,6 +3687,9 @@ class ModelDownloadDialog(QDialog):
                     'invalid_response':'来源返回了错误页或不正确的文件范围；文件没有安装。请切换已验证来源。',
                     'checksum':'文件未通过锁定哈希校验，未标记安装完成。请重试或切换已验证来源。',
                     'hardware_unsupported':'当前硬件无法执行此模型，已校验权重和运行库会保留。',
+                    'system_memory':'电脑的可用内存不够加载这个模型（Windows 虚拟内存/页面文件太小），已校验的权重和运行库会保留。'
+                        '请先关闭浏览器、游戏等占内存的程序，再点“继续重试”；仍失败时，在“系统属性 → 高级 → 性能设置 → 高级 → 虚拟内存”'
+                        '里改为“系统管理的大小”，给系统盘留出至少 10 GB 空闲空间，重启电脑后再试。',
                     'dependency_conflict':'依赖版本冲突，请保留包名与版本日志；更换模型下载源不能解决此问题。'}
                 if not category and ('no solution found' in lowered or 'unsatisfiable' in lowered):category='dependency_conflict'
                 if (len(sources) > 1 and failure.get('phase') == 'weights_downloading'

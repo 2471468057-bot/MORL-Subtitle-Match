@@ -17,7 +17,7 @@
 ## 跟著做
 
 1. **註冊並登入**：開啟 <https://platform.mosi.cn/>。是否需要實名認證：官方文件沒寫（**待核實**）。
-2. **確認有積分**：價格見 <https://platform.mosi.cn/app/pricing/>；充值入口在登入後的控制台（**待核實**）。想先試試可以用線上體驗 <https://platform.mosi.cn/app/playground/>。
+2. **確認有積分**：價格見 <https://platform.mosi.cn/app/pricing/>；充值入口在登入後的控制台（**待核實**）。按 ¥2 / 小時音訊算，充 10 元約夠識別 5 小時音訊。想先試試可以用線上體驗 <https://platform.mosi.cn/app/playground/>。
 3. **建立 API Key**：開啟 <https://platform.mosi.cn/app/api-keys/> 新建一個 Key，**立刻複製**（官方：完整金鑰只顯示一次）。
 4. **貼到兔白**：首頁右上角“說明”→“申請與設定 API…”→ 左側選“MOSS-Transcribe-Diarize Pro 雲端”。上方步驟卡里的“開啟網頁”就是第 1、3 步的頁面。把 Key 貼進“API Key”。
 5. **檢查**：點“免費檢查（不上傳音訊）”。想確認真的能識別，再點“試識別一小段…”（會先問你，約 6 秒，約 ¥0.003）。

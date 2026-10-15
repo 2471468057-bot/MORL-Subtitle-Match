@@ -42,7 +42,14 @@ def match_project(project, text: str) -> tuple[list[str], ScriptMatch]:
     tokens = tokens_from_project(project)
     if not tokens:
         raise ScriptMatchError(tr('这个工程还没有字级时间：请先识别，或在首页用「匹配文稿」生成'))
-    return lines, match_script(lines, tokens)
+    # 2026-10-15: the project's spoken language picks the comparison rules
+    # (Japanese kana/kanji, English letters); Chinese keeps homophone anchoring.
+    from .language_rules import detect_language, project_language
+    try:
+        language = project_language(project) or detect_language(lines)[0]
+    except Exception:
+        language = ''
+    return lines, match_script(lines, tokens, language=language)
 
 
 def _overlap(cue, start, end) -> int:

@@ -73,7 +73,8 @@ MODEL_COPY = {
     "funasr_nano": ModelCopy("中文方言与多语言转写，可提供独立文字复核证据。"),
     "qwen_aligner": ModelCopy("已有字幕的高精度字词时间轴对齐。", "ASR 转写与纠错后的最终时间轴精修",
                               "不能独立转写，也不负责识别或纠正字幕内容", "先由 ASR 得到文字，再根据音频定位字词。"),
-    "ja_ctc_aligner": ModelCopy("日语字幕句首的第二路对齐证据，与 Qwen 对齐器一致时才校正句首。", "日语字幕的句首时间",
+    # 2026-10-14: it sits under 字幕时间轴 but never replaces the timeline model; say so on the card.
+    "ja_ctc_aligner": ModelCopy("日语字幕的句首校正：跟在时间轴之后运行，不替换时间轴模型；只在字幕语言是日语时使用。", "日语字幕的句首时间",
                                 "只用于日语句首，不改文字与句尾；对带配乐的对白识别能力弱",
                                 "Qwen 对齐器测出字词时间后，再用它核对每句的起点。"),
     "mlx_qwen3_asr_0_6b": ModelCopy("Apple Silicon Mac 本地转写，不需要 NVIDIA 显卡。", "M 系列芯片 Mac 上的离线字幕",

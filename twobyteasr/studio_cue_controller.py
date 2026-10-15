@@ -885,7 +885,8 @@ class StudioCueController:
             if not token or len(pair) != 2:
                 return
             if undone:
-                self.page._learning_store.revert_evidence([token])
+                from .studio_glossary_autosave import forget_tokens
+                forget_tokens(self.page, self.page._learning_store.revert_evidence_tokens([token]))
                 return
             context = ""
             if isinstance(command, BatchReplaceTextCommand):
@@ -898,7 +899,7 @@ class StudioCueController:
                 cue = self.session._cue_lookup.get(str(command.cue_id))
                 if cue is not None:
                     context = cue.text[:240]
-            self.page._learning_store.record_manual_edit(
+            entries = self.page._learning_store.record_manual_edit(
                 str(pair[0]),
                 str(pair[1]),
                 project=str(self.session.project_path or (project.project_id if project else "")),
@@ -907,6 +908,8 @@ class StudioCueController:
                 source="studio_search_replace",
                 token=token,
             )
+            from .studio_glossary_autosave import remember_learned_edit
+            remember_learned_edit(self.page, project, entries, str(pair[0]), str(pair[1]), token, explicit=True)
             return
         if undone:
             # Typing chain undone: revert evidence whose resulting text no
@@ -918,9 +921,10 @@ class StudioCueController:
                 return
             tokens = list(self.page._learning_evidence_tokens.get(cue_id, ()))
             if tokens:
-                self.page._learning_store.revert_evidence(
+                from .studio_glossary_autosave import forget_tokens
+                forget_tokens(self.page, self.page._learning_store.revert_evidence_tokens(
                     tokens, cue_after_text=restored
-                )
+                ))
             self.page._manual_text_baselines[cue_id] = restored
             return
         before = command.before if isinstance(command.before, dict) else {}
@@ -1022,7 +1026,7 @@ class StudioCueController:
                 if item.text
             ]
         token = new_evidence_token()
-        page._learning_store.record_manual_edit(
+        entries = page._learning_store.record_manual_edit(
             before,
             after,
             project=str(self.session.project_path or project.project_id),
@@ -1032,6 +1036,8 @@ class StudioCueController:
             source="studio_manual_edit",
             token=token,
         )
+        from .studio_glossary_autosave import remember_learned_edit
+        remember_learned_edit(page, project, entries, before, after, token)
         recorded = page._learning_evidence_tokens.setdefault(cue_id, [])
         if token not in recorded:
             recorded.append(token)

@@ -103,6 +103,8 @@ ACTIONS: tuple[ShortcutAction, ...] = (
     _a('review_adopt_2', '采用第 2 个候选', '2', 'studio.review', '审核'),
     _a('review_adopt_3', '采用第 3 个候选', '3', 'studio.review', '审核'),
     _a('review_adopt_4', '采用第 4 个候选', '4', 'studio.review', '审核'),
+    # 2026-10-15 (user: 他/她 is the most frequent fix): flip the caption's pronouns.
+    _a('review_flip_pronoun', '切换这一条的人称（他 ↔ 她）', 'P', 'studio.review', '审核'),
     # Home page
     _a('home.start_run', '开始生成字幕', 'Ctrl+Return', 'home', '首页'),
     _a('home.choose_media', '选择素材', 'Ctrl+O', 'home', '首页'),

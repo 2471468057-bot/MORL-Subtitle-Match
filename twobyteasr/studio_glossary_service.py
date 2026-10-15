@@ -185,9 +185,13 @@ def preview_glossary_correction(project, cue_ids, snapshot, settings, *, cancel_
         source='local_confirmed' if local_only else 'ai_accepted'
         reason='当前词库本地确认名称规范化（未核验原音）' if local_only else 'AI 校对建议'
         if manual and not local_only:reason+='；已有人工修改，需确认'
-        hits.extend(diff_occurrences(cue,final,reason=reason,source=source,
-            selected=local_only or not manual,missing='未核验原音',
-            ignore_format_only=not local_only))
+        from .pronouns import is_pronoun_swap
+        from dataclasses import replace as _replace
+        hits.extend(_replace(hit, reason='AI 按上下文判断人称（他/她/它同音）' + ('；已有人工修改，需确认' if manual else ''))
+            if source == 'ai_accepted' and is_pronoun_swap(hit.original, hit.replacement) else hit
+            for hit in diff_occurrences(cue,final,reason=reason,source=source,
+                selected=local_only or not manual,missing='未核验原音',
+                ignore_format_only=not local_only))
         detail=details.get(segment.segment_id,{})
         review,invalid=recover_review_edits(cue,segment.text,detail,snapshot,scene)
         cue_candidates=[row for row in candidates if any(m.get('cue_id')==segment.segment_id for m in row['matches'])]

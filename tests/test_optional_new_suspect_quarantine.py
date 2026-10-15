@@ -142,9 +142,9 @@ def test_v13_cache_identity_and_native_schema_preserve_strict_mandatory_fields(c
     from twobyteasr.asr_provider_snapshot import POLISH_PROMPT_VERSION
     from twobyteasr.cli_schema import request_schema
     _core, owner, _cache = context
-    assert POLISH_PROMPT_VERSION == 'correction-edits-v13-optional-suspect-local-quarantine'
+    assert POLISH_PROMPT_VERSION == 'correction-edits-v14-pronoun-gender'
     old_versions = dict(owner.provider_snapshot.prompt_versions)
-    old_versions['polished'] = 'correction-edits-v12-scene-position-validated-receipts'
+    old_versions['polished'] = 'correction-edits-v13-optional-suspect-local-quarantine'
     old = replace(owner.provider_snapshot, prompt_versions=tuple(old_versions.items()))
     assert old.fingerprint != owner.provider_snapshot.fingerprint
     native, preflight = request_schema(polishing.POLISH_SCHEMA)

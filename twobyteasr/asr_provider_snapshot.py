@@ -12,7 +12,7 @@ from .grouping_request import GROUPING_PROMPT_VERSION
 
 GROUP_PROMPT_VERSION = "numeric-boundaries-v5-shared-scene-compact-short-material:" + GROUPING_PROMPT_VERSION
 GROUP_CACHE_VERSION = "snapshot-validated-grouped-v5-shared-scene-full-context"
-POLISH_PROMPT_VERSION = "correction-edits-v13-optional-suspect-local-quarantine"
+POLISH_PROMPT_VERSION = "correction-edits-v14-pronoun-gender"
 
 
 def _numeric_rule_version():

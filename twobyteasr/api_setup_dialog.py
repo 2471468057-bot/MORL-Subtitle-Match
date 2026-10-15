@@ -92,6 +92,11 @@ class ApiSetupDialog(SpringDialog):
         title.setProperty('typography', 'title')
         header.addWidget(title, 1)
         from .design.presentation import button_role, glyph_button
+        # 2026-10-15: the picture explainer (what a key is, top up 10 yuan, paste it in).
+        key_help = button_role(QPushButton(tr('第一次用 API Key？看图解')), 'secondary', size='compact')
+        key_help.setObjectName('apiSetupExplainer')
+        key_help.clicked.connect(self._explain_api_key)
+        header.addWidget(key_help)
         close = glyph_button(button_role(QPushButton('×'), 'ghost'))
         bind_text(close, '关闭', property='accessibleName')
         close.clicked.connect(self.reject)
@@ -133,6 +138,10 @@ class ApiSetupDialog(SpringDialog):
         # Start in the list (arrow keys pick a service). The header × came
         # first in the tab order: it opened with a focus ring, and Enter closed.
         self.provider_list.setFocus()
+
+    def _explain_api_key(self):
+        from .api_key_explainer import open_api_key_explainer
+        open_api_key_explainer(self, offer_setup=False)
 
     # ------------------------------------------------------------------ list
     def _populate_list(self, show_advanced: bool):
@@ -268,11 +277,13 @@ class ApiSetupDialog(SpringDialog):
                     self.accept()
                     self.host.open_text_settings(guide.key)
             if guide.links and guide.key != 'cli_accounts':
-                from .guide_steps import GuideStep, StepCards
+                from .guide_steps import GuideStep, StepCards, topup_step
                 links = list(guide.links)
                 key_link = next((item for item in links if 'key' in item.label.lower()), links[0])
                 signup = next((item for item in links if '注册' in item.label), key_link)
+                topup = topup_step(guide)
                 steps = [GuideStep('注册并登录', 'account', '打开网页', signup.url),
+                         *([topup] if topup else []),
                          GuideStep('创建 API Key', 'key', '打开网页', key_link.url),
                          GuideStep('贴到“AI 智能断句设置”并测试', 'paste', '去填写' if go_fill else '', callback=go_fill)]
                 self._step_cards = StepCards(steps)
@@ -321,13 +332,15 @@ class ApiSetupDialog(SpringDialog):
         贴到下面 › 检查并保存; each button opens the exact official page or
         does the step. Steps tick off as the key is pasted and a check passes.
         """
-        from .guide_steps import GuideStep, StepCards
+        from .guide_steps import GuideStep, StepCards, topup_step
         links = list(guide.links)
         key_link = next((item for item in links if 'key' in item.label.lower() or 'AppID' in item.label), links[0])
         signup = next((item for item in links if '注册' in item.label),
                       next((item for item in links if not item.needs_login and item is not key_link), key_link))
         key_title = '创建应用，复制三项' if guide.key == 'spark_asr_v2' else '创建 API Key'
+        topup = topup_step(guide)
         steps = [GuideStep('注册并登录', 'account', '打开网页', signup.url),
+                 *([topup] if topup else []),
                  GuideStep(key_title, 'key', '打开网页', key_link.url)]
         self._step_paste = len(steps)
         if guide.needs_storage:

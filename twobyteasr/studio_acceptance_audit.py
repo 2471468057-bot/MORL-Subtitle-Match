@@ -60,7 +60,7 @@ def isolate_acceptance_settings() -> None:
         from .blank_project_audit import install_offline_guards
         install_offline_guards()
         return
-    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in ('razor-word-split', 'ja-bilingual', 'bilingual-playback', 'speaker-roles', 'mcp', 'ctc-refine', 'onboarding-settings', 'api-setup', 'review-window'):
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') in ('razor-word-split', 'ja-bilingual', 'bilingual-playback', 'speaker-roles', 'mcp', 'ctc-refine', 'onboarding-settings', 'api-setup', 'review-window', 'review-click-fix', 'tour-motion'):
         from .blank_project_audit import install_offline_guards
         install_offline_guards()
         output = audit_directory()
@@ -392,6 +392,11 @@ def start_acceptance(window) -> None:
         output = audit_directory()
         if output is not None: start(window, output)
         return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'tour-motion':
+        from .tour_motion_audit import start
+        output = audit_directory()
+        if output is not None: start(window, output)
+        return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'ui-polish':
         from .ui_polish_audit import start
         output = audit_directory()
@@ -618,6 +623,12 @@ def start_acceptance(window) -> None:
         return
     if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'review-window':
         from .review_window_audit import start
+        output = audit_directory()
+        if output is not None:
+            start(window, output)
+        return
+    if os.environ.get('TWOBYTEASR_ACCEPTANCE_SCENARIO') == 'review-click-fix':
+        from .review_click_fix_audit import start
         output = audit_directory()
         if output is not None:
             start(window, output)

@@ -16,7 +16,7 @@
 ## 跟着做
 
 1. **注册并登录**：打开 <https://platform.mosi.cn/>。是否需要实名认证：官方文档没写（**待核实**）。
-2. **确认有积分**：价格见 <https://platform.mosi.cn/app/pricing/>；充值入口在登录后的控制台（**待核实**）。想先试试可以用在线体验 <https://platform.mosi.cn/app/playground/>。
+2. **确认有积分**：价格见 <https://platform.mosi.cn/app/pricing/>；充值入口在登录后的控制台（**待核实**）。按 ¥2 / 小时音频算，充 10 元约够识别 5 小时音频。想先试试可以用在线体验 <https://platform.mosi.cn/app/playground/>。
 3. **创建 API Key**：打开 <https://platform.mosi.cn/app/api-keys/> 新建一个 Key，**立刻复制**（官方：完整密钥只显示一次）。
 4. **贴到兔白**：首页右上角“说明”→“申请与设置 API…”→ 左侧选“MOSS-Transcribe-Diarize Pro 云端”。上方步骤卡里的“打开网页”就是第 1、3 步的页面。把 Key 贴进“API Key”。
 5. **检查**：点“免费检查（不上传音频）”。想确认真的能识别，再点“试识别一小段…”（会先问你，约 6 秒，约 ¥0.003）。

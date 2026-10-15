@@ -1023,6 +1023,7 @@ class SubtitleStudioPage(
             "review_adopt_2": lambda: self._adopt_review_candidate(1),
             "review_adopt_3": lambda: self._adopt_review_candidate(2),
             "review_adopt_4": lambda: self._adopt_review_candidate(3),
+            "review_flip_pronoun": self._flip_review_pronouns,
         }
         if getattr(self,'_new_shortcut_conflicts',None):
             bind_text(self.save_state,'新增快捷键与已有自定义绑定冲突，已保留原绑定；请在快捷键设置中改绑')
