@@ -1,8 +1,8 @@
 # 2ByteASR user guide
 
-Last checked: 2026-10-14, for the public release **0.7.1**. This guide replaces the earlier version that described "0.5.0" and said no public installer was available; that is no longer true.
+Last checked: 2026-10-15, for the public release **0.7.2**. This guide replaces the earlier version that described "0.5.0" and said no public installer was available; that is no longer true.
 
-[Back to the README](../README_EN.md) · [Interface tour](product-demo.en.md) · [API setup guides (Chinese)](api-setup/README.md) · [中文](product-guide.zh-CN.md) · [日本語](product-guide.ja.md)
+[Back to the README](../README_EN.md) · [Interface tour](product-demo.en.md) · [API setup guides (Chinese)](api-setup/README.md) · [中文](product-guide.zh-CN.md) · [日本語](product-guide.ja.md) · [한국어](product-guide.ko.md)
 
 **Contents:** [Which file to download](#which-file-to-download) · [Installing on Windows](#installing-on-windows) · [Installing on Mac (experimental)](#installing-on-mac-experimental) · [First launch](#first-launch) · [Choosing a recognition route](#choosing-a-recognition-route) · [Costs and privacy](#costs-and-privacy) · [Recognition plans and models](#recognition-plans-and-models) · [Everyday Studio actions](#everyday-studio-actions) · [Input and output](#input-and-output) · [Updating](#updating) · [Common questions](#common-questions) · [Running from source](#running-from-source) · [Reporting problems](#reporting-problems)
 
@@ -10,26 +10,26 @@ Last checked: 2026-10-14, for the public release **0.7.1**. This guide replaces 
 
 | Your computer | Download | Status |
 | --- | --- | --- |
-| Windows 10 22H2 (19045) or later, 64-bit | [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe) (about 1 GB) | Stable |
-| Mac with Apple silicon (M1 or later), macOS 15 or later | [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg) (about 0.5 GB) | Experimental; Intel Macs not supported |
+| Windows 10 22H2 (19045) or later, 64-bit | [`2ByteASR-Setup-0.7.2.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe) (about 1 GB) | Stable |
+| Mac with Apple silicon (M1 or later), macOS 15 or later | [`2ByteASR-0.7.2-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg) (about 0.5 GB) | Experimental; Intel Macs not supported |
 
 What the other files on the [Releases page](https://github.com/NOTBAD314/2ByteASR/releases/latest) are for:
 
 | File | For |
 | --- | --- |
-| `2ByteASR-Source-0.7.1.zip` | Reading or rebuilding the installer: the complete build inputs of the Windows installer |
-| `2ByteASR-ThirdParty-Materials-0.7.1.zip`, `mingw-w64-libiconv-…src.tar.zst`, `…GPL-Additional-Permission.txt` | Third-party licence terms, notices and upstream source |
-| `2ByteASR-update.json(.sig)`, `2ByteASR-0.7.1-<component>-<hash>.zip` | Used automatically by in-app updates; no need to download |
+| `2ByteASR-Source-0.7.2.zip` | Reading or rebuilding the installer: the complete build inputs of the Windows installer |
+| `2ByteASR-ThirdParty-Materials-0.7.2.zip`, `mingw-w64-libiconv-…src.tar.zst`, `…GPL-Additional-Permission.txt` | Third-party licence terms, notices and upstream source |
+| `2ByteASR-update.json(.sig)`, `2ByteASR-0.7.2-<component>-<hash>.zip` | Used automatically by in-app updates; no need to download |
 | `SHA256SUMS.txt(.sig)` | Checking that a download is complete and was published by this project |
 
 ## Installing on Windows
 
-1. Download `2ByteASR-Setup-0.7.1.exe`. To check it, open PowerShell in the download folder, run `certutil -hashfile 2ByteASR-Setup-0.7.1.exe SHA256`, and compare with `SHA256SUMS.txt` from the release.
+1. Download `2ByteASR-Setup-0.7.2.exe`. To check it, open PowerShell in the download folder, run `certutil -hashfile 2ByteASR-Setup-0.7.2.exe SHA256`, and compare with `SHA256SUMS.txt` from the release.
 2. Run the installer. It installs to `%LOCALAPPDATA%\Programs\2ByteASR` by default, needs no administrator rights, and can go on another drive. It takes about 1.9 GB.
 3. The installer is **not code-signed**, so Windows may show "unknown publisher" or "Windows protected your PC". Once you have confirmed the file came from this repository's Releases and the checksum matches, click "More info" → "Run anyway". **There is no need to turn off SmartScreen, antivirus or other security features, and you should not.**
 4. Start the app from the Start menu or the desktop shortcut.
 
-**Already installed an earlier version?** From 0.6.5 or 0.7.0, use "Check for updates" in the app; it downloads only what changed (about 79 MB from 0.7.0). From 0.6.0 or earlier, close the app and run the new installer over it **without uninstalling first**. Settings, glossaries, projects, downloaded models and runtimes are kept.
+**Already installed an earlier version?** From 0.6.5, 0.7.0 or 0.7.2, use "Check for updates" in the app; it downloads only what changed (about 50 MB from 0.7.2). From 0.6.0 or earlier, close the app and run the new installer over it **without uninstalling first**. Settings, glossaries, projects, downloaded models and runtimes are kept.
 
 **Where files go:** settings, glossaries, projects and logs live in `%LOCALAPPDATA%\2ByteASR`. On a new installation, models download to a `models` folder next to the program (install on drive D and the models go to D too); models downloaded earlier are reused where they are.
 
@@ -37,7 +37,7 @@ What the other files on the [Releases page](https://github.com/NOTBAD314/2ByteAS
 
 **Supported:** Apple silicon (M series) with macOS 15 or later. **Intel Macs are not supported.** 16 GB of memory or more is recommended; 8 GB Macs have not been tested. This version was checked only on GitHub's virtual Macs (virtual M1, 7 GB of memory), not on a physical Mac.
 
-1. Download the DMG. To check it, run `shasum -a 256 2ByteASR-0.7.1-macos-arm64-Setup.dmg` in Terminal and compare with `SHA256SUMS.txt`.
+1. Download the DMG. To check it, run `shasum -a 256 2ByteASR-0.7.2-macos-arm64-Setup.dmg` in Terminal and compare with `SHA256SUMS.txt`.
 2. Open the DMG and drag `2ByteASR` into Applications.
 3. The app has **no Developer ID signature and is not notarized by Apple**. The first time, Control-click the app in Finder, choose "Open", then "Open" again. If it is still blocked, go to System Settings → Privacy & Security and click "Open Anyway" near the bottom. **There is no need to turn off Gatekeeper or other security settings, and you should not.**
 4. After that, open it normally.
@@ -81,7 +81,7 @@ Notes:
 - **The app is free**, with no paid features, sign-up or subscription.
 - **Local recognition:** after the models are downloaded it works offline; your media stays on your computer.
 - **Cloud recognition:** audio is uploaded to the provider you choose and billed by them (check their pricing page). The app never signs you up or pays for you.
-- **Text AI** (DeepSeek, Alibaba Cloud Bailian, OpenAI, Gemini, xAI or a custom compatible service, all with your own key): only subtitle text is sent. It is used by AI segmentation, AI proofreading, the AI mode of AI glossary proofreading, Japanese / English subtitle translation, AI term building and web updates of glossaries, AI ranking of highlight candidates, and AI Subtitle Design. Without it these features are unavailable or fall back to local rules; recognition, editing and export work as usual.
+- **Text AI** (DeepSeek, Alibaba Cloud Bailian, OpenAI, Gemini, xAI or a custom compatible service, all with your own key): only subtitle text is sent. It is used by AI segmentation, AI proofreading, the AI mode of AI glossary proofreading, subtitle translation (Chinese, Japanese and English subtitles into Simplified or Traditional Chinese, English, Japanese or Korean), AI term building and web updates of glossaries, AI ranking of highlight candidates, and AI Subtitle Design. Without it these features are unavailable or fall back to local rules; recognition, editing and export work as usual.
 - **External AI (MCP):** off by default. When enabled, your AI client reads the current project's subtitle text and sends it to the AI service that client uses.
 
 ## Recognition plans and models
@@ -161,9 +161,9 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-- The `main` branch holds the application source. The tag `v0.7.1` is the build source of the 0.7.1 installers, and the full build inputs are in the release's `2ByteASR-Source-0.7.1.zip`; see "源码与校验" in the [0.7.1 release notes](releases/0.7.1.md#源码与校验).
+- The `main` branch holds the application source. The tag `v0.7.2` is the build source of the 0.7.2 installers, and the full build inputs are in the release's `2ByteASR-Source-0.7.2.zip`; see "Source and checksums" in the [0.7.2 release notes](releases/0.7.2.md#source-and-checksums).
 - Development and testing conventions are in [CONTRIBUTING.md](../CONTRIBUTING.md).
-- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md), [SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md) and [SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) were written for 0.5.0. They record that release's source scope and build, and have not been updated for 0.7.1.
+- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md), [SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md) and [SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) were written for 0.5.0. They record that release's source scope and build, and have not been updated for 0.7.2.
 
 ## Reporting problems
 

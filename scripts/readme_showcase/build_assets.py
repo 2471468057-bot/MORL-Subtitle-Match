@@ -167,8 +167,8 @@ def main():
     made.append(webp_from_frames('zh-01', 'razor', 'razor.webp', box=(0, 440, 1320, 430), width=1320))
     made.append(webp_from_frames('zh-01', 'review', 'review.webp', box=(284, 306, 670, 174), width=1005,
                                  first=3, last=14, lead=1.5, tail=3.0))
-    for lang in ('en', 'ja'):
-        # English and Japanese labels are longer: these runs use a 1600x1000 window.
+    for lang in ('en', 'ja', 'ko'):
+        # English, Japanese and Korean labels are longer: these runs use a 1600x1000 window.
         runs = RUNS / f'{lang}-02'
         result = runs / 'result.json'
         if not result.is_file() or not json.loads(result.read_text('utf8')).get('finished'):

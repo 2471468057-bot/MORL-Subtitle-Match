@@ -2,7 +2,7 @@
 
 Except for the last section, "Illustrations", everything below is the **real 0.7.1 interface**, captured on 2026-10-14 from the source of tag `v0.7.1`, running in an isolated test folder that never touched anyone's data. The sample is a self-made test card with two synthetic Chinese voices, transcribed locally with MOSS + FireRedASR2-AED + Qwen3-ASR (NVIDIA RTX 5070 Ti). Captions without "Chinese interface" show the English interface; the subtitles are Chinese because the speech is. How the assets were made is described in the [asset notes](assets/readme/README.md) (Chinese).
 
-[Back to the README](../README_EN.md) · [User guide](product-guide.en.md) · [中文](product-demo.zh-CN.md) · [日本語](product-demo.ja.md)
+[Back to the README](../README_EN.md) · [User guide](product-guide.en.md) · [中文](product-demo.zh-CN.md) · [日本語](product-demo.ja.md) · [한국어](product-demo.ko.md)
 
 ## Home and recognition
 

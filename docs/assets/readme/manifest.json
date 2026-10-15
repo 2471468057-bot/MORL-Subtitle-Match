@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "updated": "2026-10-14",
-  "source": "screenshots and razor/review clips: real window captures of the v0.7.1 source (same commit as the 0.7.1 installers), isolated profile, 2026-10-14; clips*.webp: HyperFrames illustration from 2026-10-09 with sample data; caption-effects.gif: sample works made with AI Subtitle Design, 2026-09-30",
+  "updated": "2026-10-15",
+  "source": "screenshots and razor/review clips: real window captures of the v0.7.1 source (same commit as the 0.7.1 installers), isolated profile, 2026-10-14; *-ko.* screenshots and clips: the same captures from the v0.7.2 source with the Korean interface, 2026-10-15; clips*.webp: HyperFrames illustration from 2026-10-09 with sample data (clips-ko.webp rendered 2026-10-15); caption-effects.gif: sample works made with AI Subtitle Design, 2026-09-30",
   "sample": "self-made test card + Windows OneCore zh-CN synthetic voices (Kangkang, Yaoyao)",
   "recognition": "local MOSS-Transcribe-Diarize + FireRedASR2-AED + Qwen3-ASR 1.7B on an RTX 5070 Ti, AI segmentation/proofreading off; 14 subtitles, 2 speakers",
   "edits": "crops, scaling, rounded frames, two windows layered on a plain ground (hero*), palette PNG and WebP encoding; export.png has the local output path masked; no interface text or result redrawn",
-  "total_bytes": 8960175,
+  "total_bytes": 11061817,
   "files": [
     {
       "path": "docs/assets/readme/caption-effects.gif",
@@ -30,6 +30,14 @@
       "height": 550,
       "frames": 249,
       "sha256": "8bb2d74512b5b5b89a2389a4fd44d676851e551cb070c1b393333c9603eade0b"
+    },
+    {
+      "path": "docs/assets/readme/clips-ko.webp",
+      "bytes": 1040954,
+      "width": 1100,
+      "height": 550,
+      "frames": 249,
+      "sha256": "7b11002af2b92793c4cac11660bf65c6e553a94c34de6d290d29caae19ff2a76"
     },
     {
       "path": "docs/assets/readme/clips.webp",
@@ -72,6 +80,14 @@
       "sha256": "70dae4b563945110cb336be14f298a4ed30b69cd0ceda0bbc8070f281de75413"
     },
     {
+      "path": "docs/assets/readme/glossary-ko.png",
+      "bytes": 104729,
+      "width": 1760,
+      "height": 1152,
+      "frames": 1,
+      "sha256": "ff1b62a929c36d45e5d06c2115a3bcddb8be13120592e001e762940b458679d9"
+    },
+    {
       "path": "docs/assets/readme/glossary.png",
       "bytes": 135043,
       "width": 1760,
@@ -96,6 +112,14 @@
       "sha256": "5d0d7471f2a656a6dd6230cbeac389ade49ae01b48b6fe49864034098815452b"
     },
     {
+      "path": "docs/assets/readme/hero-ko.png",
+      "bytes": 212702,
+      "width": 2000,
+      "height": 1430,
+      "frames": 1,
+      "sha256": "93411e51ffd982f2e89ca40ecea8a6a34952c2ab7b131a9ae346d8e516722634"
+    },
+    {
       "path": "docs/assets/readme/hero.png",
       "bytes": 216857,
       "width": 2000,
@@ -118,6 +142,14 @@
       "height": 1100,
       "frames": 1,
       "sha256": "2544756b70e7d6333ed14870fa4fe53eb6624fabf2817ddacf2fa41ab590657d"
+    },
+    {
+      "path": "docs/assets/readme/home-ko.png",
+      "bytes": 93427,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "bfcac4d18dbe369db67024ecb2af5b92b866e6194e23372279300b2739eaa3cf"
     },
     {
       "path": "docs/assets/readme/home.png",
@@ -160,6 +192,14 @@
       "sha256": "f6fb9fa885faed30400208307f0c39eff8085ea90c3b20ceb5a9f6c78f6460dc"
     },
     {
+      "path": "docs/assets/readme/razor-ko.webp",
+      "bytes": 284604,
+      "width": 1320,
+      "height": 396,
+      "frames": 22,
+      "sha256": "7de7a7fc3ea69078363ed27f21f74c65efe7d5b122e107504be798b7a927a334"
+    },
+    {
       "path": "docs/assets/readme/razor.webp",
       "bytes": 287180,
       "width": 1320,
@@ -182,6 +222,14 @@
       "height": 220,
       "frames": 4,
       "sha256": "7d73ef2d6276a69fb752fbe655f982b12480ced100f3ddad6e363e1e9178c9d4"
+    },
+    {
+      "path": "docs/assets/readme/review-ko.webp",
+      "bytes": 21710,
+      "width": 1180,
+      "height": 220,
+      "frames": 2,
+      "sha256": "b4b5edfa72233514ef76c9ab2a88a9c960a2f7980486ecc5b7992ad0244dcee2"
     },
     {
       "path": "docs/assets/readme/review.webp",
@@ -208,6 +256,14 @@
       "sha256": "0b12093754422a6efd55a1a16fb36621e8d39309c59f8c318edcc88ba55ac86c"
     },
     {
+      "path": "docs/assets/readme/speakers-ko.png",
+      "bytes": 74141,
+      "width": 1600,
+      "height": 1059,
+      "frames": 1,
+      "sha256": "549e67c268831e8c381f93afe2b7273d45f50d06ef460d7b9dfbc1513ef09b4a"
+    },
+    {
       "path": "docs/assets/readme/speakers.png",
       "bytes": 77136,
       "width": 1600,
@@ -230,6 +286,14 @@
       "height": 1100,
       "frames": 1,
       "sha256": "79e5556b6c3621f3d15492d64c23abc0fd5da5f0a26dbdd61480f58504db403c"
+    },
+    {
+      "path": "docs/assets/readme/studio-ko.png",
+      "bytes": 118130,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "c653075bf87144f3602dad290f82a31ec5ad76604075209cd77e82b2ec0d8576"
     },
     {
       "path": "docs/assets/readme/studio.png",
@@ -270,6 +334,14 @@
       "height": 1100,
       "frames": 1,
       "sha256": "184d5c510696bb70c96713ea50498a65aa62c713f67e7b0165dcfa5d1b70b15c"
+    },
+    {
+      "path": "docs/assets/readme/workshop-ko.png",
+      "bytes": 151245,
+      "width": 1760,
+      "height": 1100,
+      "frames": 1,
+      "sha256": "01913b3bc304ef0fa159647448e1d85c9eaa9ad82e3f5b96f2e0b10a76c3bb57"
     },
     {
       "path": "docs/assets/readme/workshop.png",

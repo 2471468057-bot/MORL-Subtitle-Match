@@ -1,8 +1,8 @@
 # 2ByteASR 使い方ガイド
 
-最終確認：2026-10-14。公開版 **0.7.1** に対応しています。「0.5.0」「公開インストーラーはまだない」と書かれていた以前のガイドは、現在の状況に当てはまりません。
+最終確認：2026-10-15。公開版 **0.7.2** に対応しています。「0.5.0」「公開インストーラーはまだない」と書かれていた以前のガイドは、現在の状況に当てはまりません。
 
-[README へ戻る](../README_JA.md) · [画面紹介](product-demo.ja.md) · [API の申請と設定（中国語）](api-setup/README.md) · [中文](product-guide.zh-CN.md) · [English](product-guide.en.md)
+[README へ戻る](../README_JA.md) · [画面紹介](product-demo.ja.md) · [API の申請と設定（中国語）](api-setup/README.md) · [中文](product-guide.zh-CN.md) · [English](product-guide.en.md) · [한국어](product-guide.ko.md)
 
 **目次**：[どのファイルをダウンロードするか](#どのファイルをダウンロードするか) · [Windows へのインストール](#windows-へのインストール) · [Mac へのインストール（実験版）](#mac-へのインストール実験版) · [初回起動](#初回起動) · [認識方法の選び方](#認識方法の選び方) · [費用とプライバシー](#費用とプライバシー) · [認識プランとモデル](#認識プランとモデル) · [字幕スタジオのよく使う操作](#字幕スタジオのよく使う操作) · [入力と出力](#入力と出力) · [更新](#更新) · [よくある質問](#よくある質問) · [ソースからの実行](#ソースからの実行) · [問題の報告](#問題の報告)
 
@@ -10,26 +10,26 @@
 
 | お使いのコンピューター | ダウンロード | 状態 |
 | --- | --- | --- |
-| Windows 10 22H2（19045）以降、64 ビット | [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe)（約 1 GB） | 正式版 |
-| Apple シリコン（M1 以降）の Mac、macOS 15 以降 | [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg)（約 0.5 GB） | 実験版、Intel Mac は非対応 |
+| Windows 10 22H2（19045）以降、64 ビット | [`2ByteASR-Setup-0.7.2.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe)（約 1 GB） | 正式版 |
+| Apple シリコン（M1 以降）の Mac、macOS 15 以降 | [`2ByteASR-0.7.2-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg)（約 0.5 GB） | 実験版、Intel Mac は非対応 |
 
 [Releases ページ](https://github.com/NOTBAD314/2ByteASR/releases/latest)のほかのファイルの用途：
 
 | ファイル | 用途 |
 | --- | --- |
-| `2ByteASR-Source-0.7.1.zip` | インストーラーを読んだり作り直したりしたい方向け：Windows インストーラーに対応する完全なビルド入力 |
-| `2ByteASR-ThirdParty-Materials-0.7.1.zip`、`mingw-w64-libiconv-…src.tar.zst`、`…GPL-Additional-Permission.txt` | サードパーティーのライセンス条項、通知、上流のソース |
-| `2ByteASR-update.json(.sig)`、`2ByteASR-0.7.1-<コンポーネント>-<ハッシュ>.zip` | アプリ内更新が自動で使います。手動でのダウンロードは不要です |
+| `2ByteASR-Source-0.7.2.zip` | インストーラーを読んだり作り直したりしたい方向け：Windows インストーラーに対応する完全なビルド入力 |
+| `2ByteASR-ThirdParty-Materials-0.7.2.zip`、`mingw-w64-libiconv-…src.tar.zst`、`…GPL-Additional-Permission.txt` | サードパーティーのライセンス条項、通知、上流のソース |
+| `2ByteASR-update.json(.sig)`、`2ByteASR-0.7.2-<コンポーネント>-<ハッシュ>.zip` | アプリ内更新が自動で使います。手動でのダウンロードは不要です |
 | `SHA256SUMS.txt(.sig)` | ダウンロードしたファイルが完全で、本プロジェクトが公開したものか確認するため |
 
 ## Windows へのインストール
 
-1. `2ByteASR-Setup-0.7.1.exe` をダウンロードします。確認したい場合は、ダウンロードしたフォルダーで PowerShell を開き、`certutil -hashfile 2ByteASR-Setup-0.7.1.exe SHA256` を実行して `SHA256SUMS.txt` の値と比べてください。
+1. `2ByteASR-Setup-0.7.2.exe` をダウンロードします。確認したい場合は、ダウンロードしたフォルダーで PowerShell を開き、`certutil -hashfile 2ByteASR-Setup-0.7.2.exe SHA256` を実行して `SHA256SUMS.txt` の値と比べてください。
 2. インストーラーを実行します。既定のインストール先は `%LOCALAPPDATA%\Programs\2ByteASR` で、管理者権限は不要です。別のドライブにも変更できます。インストール後は約 1.9 GB です。
 3. インストーラーには**コード署名がありません**。そのため「不明な発行元」や「Windows によって PC が保護されました」と表示されることがあります。本リポジトリの Releases から入手したものでハッシュ値が一致していれば、「詳細情報」→「実行」を選んでください。**SmartScreen やウイルス対策ソフトなどのセキュリティ機能を無効にする必要はなく、無効にすべきではありません。**
 4. スタートメニューかデスクトップのショートカットから起動します。
 
-**以前のバージョンを使っている場合：** 0.6.5 / 0.7.0 はアプリ右上の「更新を確認」から、変わった部分だけをダウンロードできます（0.7.0 からは約 79 MB）。0.6.0 以前は、アプリを閉じてから新しいインストーラーで**アンインストールせずに上書き**してください。設定、用語集、プロジェクト、ダウンロード済みのモデルと実行環境は残ります。
+**以前のバージョンを使っている場合：** 0.6.5 / 0.7.0 / 0.7.2 はアプリ右上の「更新を確認」から、変わった部分だけをダウンロードできます（0.7.2 からは約 50 MB）。0.6.0 以前は、アプリを閉じてから新しいインストーラーで**アンインストールせずに上書き**してください。設定、用語集、プロジェクト、ダウンロード済みのモデルと実行環境は残ります。
 
 **ファイルの保存場所：** 設定、用語集、プロジェクト、ログは `%LOCALAPPDATA%\2ByteASR` にあります。新規インストールでは、モデルはプログラムのあるフォルダーの `models` にダウンロードされます（D ドライブにインストールすればモデルも D ドライブ）。以前ダウンロードしたモデルはその場所のまま使います。
 
@@ -37,7 +37,7 @@
 
 **対応環境：** Apple シリコン（M シリーズ）、macOS 15 以降。**Intel Mac には対応していません。** メモリは 16 GB 以上を推奨し、8 GB の Mac は未確認です。このバージョンは GitHub の仮想 Mac（仮想 M1、メモリ 7 GB）でのみ確認しており、実機の Mac では確認していません。
 
-1. DMG をダウンロードします。確認したい場合は「ターミナル」で `shasum -a 256 2ByteASR-0.7.1-macos-arm64-Setup.dmg` を実行し、`SHA256SUMS.txt` と比べてください。
+1. DMG をダウンロードします。確認したい場合は「ターミナル」で `shasum -a 256 2ByteASR-0.7.2-macos-arm64-Setup.dmg` を実行し、`SHA256SUMS.txt` と比べてください。
 2. DMG を開き、`2ByteASR` を「アプリケーション」へドラッグします。
 3. アプリには **Developer ID 署名がなく、Apple の公証も受けていません**。初回は Finder で Control キーを押しながらアプリをクリックし、「開く」を選び、確認で再度「開く」を選びます。それでも開けない場合は「システム設定 → プライバシーとセキュリティ」の下のほうにある「このまま開く」をクリックします。**Gatekeeper などのセキュリティ設定を無効にする必要はなく、無効にすべきではありません。**
 4. 次からは通常どおり開けます。
@@ -81,7 +81,7 @@
 - **アプリ自体は無料**で、有料機能、登録、サブスクリプションはありません。
 - **ローカル認識：** モデルをダウンロードしたあとはオフラインで使え、映像や音声は PC の外に出ません。
 - **クラウド認識：** 音声は選んだサービスにアップロードされ、料金はサービス側の規定に従います（料金はサービスのページで確認してください）。アプリが代わりに契約や支払いをすることはありません。
-- **テキスト AI**（DeepSeek、Alibaba Cloud 百炼、OpenAI、Gemini、xAI、互換サービス。いずれもご自身のキー）：送るのは字幕の文字だけです。使う機能は、AI による文分割、AI 校正、AI 用語集校正の AI モード、日本語・英語字幕の翻訳、AI による用語作成と用語集のオンライン更新、切り抜き候補の AI 順位付け、AI 字幕デザインです。設定しない場合、これらの機能は使えないかローカルの規則で動き、認識、編集、書き出しは通常どおり使えます。
+- **テキスト AI**（DeepSeek、Alibaba Cloud 百炼、OpenAI、Gemini、xAI、互換サービス。いずれもご自身のキー）：送るのは字幕の文字だけです。使う機能は、AI による文分割、AI 校正、AI 用語集校正の AI モード、字幕の翻訳（中国語・日本語・英語の字幕を簡体字・繁体字中国語、英語、日本語、韓国語へ）、AI による用語作成と用語集のオンライン更新、切り抜き候補の AI 順位付け、AI 字幕デザインです。設定しない場合、これらの機能は使えないかローカルの規則で動き、認識、編集、書き出しは通常どおり使えます。
 - **外部 AI（MCP）：** 初期設定はオフです。オンにすると、AI クライアントが現在のプロジェクトの字幕テキストを読み、そのクライアントが使う AI サービスへ送ります。
 
 ## 認識プランとモデル
@@ -161,9 +161,9 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-- `main` ブランチがアプリのソースです。0.7.1 のインストーラーに対応するビルド元はタグ `v0.7.1` で、完全なビルド入力はリリースの `2ByteASR-Source-0.7.1.zip` にあります。[0.7.1 リリースノート](releases/0.7.1.md#源码与校验)の「源码与校验」を参照してください。
+- `main` ブランチがアプリのソースです。0.7.2 のインストーラーに対応するビルド元はタグ `v0.7.2` で、完全なビルド入力はリリースの `2ByteASR-Source-0.7.2.zip` にあります。[0.7.2 リリースノート](releases/0.7.2.md#ソースと検証)の「ソースと検証」を参照してください。
 - 開発とテストの約束事は [CONTRIBUTING.md](../CONTRIBUTING.md) にあります。
-- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md)、[SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md)、[SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) は 0.5.0 の時点のソース範囲とビルドの記録で、0.7.1 向けには更新されていません。
+- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md)、[SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md)、[SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) は 0.5.0 の時点のソース範囲とビルドの記録で、0.7.2 向けには更新されていません。
 
 ## 問題の報告
 

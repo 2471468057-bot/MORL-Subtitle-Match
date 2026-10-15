@@ -1,8 +1,8 @@
 # 兔白字幕使用指南
 
-最后核对：2026-10-14，对应公开版本 **0.7.1**。这份指南取代以前写着“0.5.0”“目前尚无公开安装包”的旧版说明；那些内容已经不适用。
+最后核对：2026-10-15，对应公开版本 **0.7.2**。这份指南取代以前写着“0.5.0”“目前尚无公开安装包”的旧版说明；那些内容已经不适用。
 
-[返回首页](../README.md) · [界面一览](product-demo.zh-CN.md) · [申请与设置 API](api-setup/README.md) · [English](product-guide.en.md) · [日本語](product-guide.ja.md)
+[返回首页](../README.md) · [界面一览](product-demo.zh-CN.md) · [申请与设置 API](api-setup/README.md) · [English](product-guide.en.md) · [日本語](product-guide.ja.md) · [한국어](product-guide.ko.md)
 
 **目录**：[下载哪一个](#下载哪一个) · [Windows 安装](#windows-安装) · [Mac 安装（实验版）](#mac-安装实验版) · [第一次启动](#第一次启动) · [选择识别方式](#选择识别方式) · [费用与隐私](#费用与隐私) · [识别方案与模型](#识别方案与模型) · [字幕工作台常用操作](#字幕工作台常用操作) · [输入与输出](#输入与输出) · [更新](#更新) · [常见问题](#常见问题) · [从源码运行](#从源码运行) · [反馈问题](#反馈问题)
 
@@ -10,26 +10,26 @@
 
 | 你的电脑 | 下载这个文件 | 状态 |
 | --- | --- | --- |
-| Windows 10 22H2（19045）或更新，64 位 | [`2ByteASR-Setup-0.7.1.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-Setup-0.7.1.exe)（约 1 GB） | 正式版 |
-| Mac：Apple 芯片（M1 及以后），macOS 15 或更新 | [`2ByteASR-0.7.1-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.1/2ByteASR-0.7.1-macos-arm64-Setup.dmg)（约 0.5 GB） | 实验版，不支持 Intel Mac |
+| Windows 10 22H2（19045）或更新，64 位 | [`2ByteASR-Setup-0.7.2.exe`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe)（约 1 GB） | 正式版 |
+| Mac：Apple 芯片（M1 及以后），macOS 15 或更新 | [`2ByteASR-0.7.2-macos-arm64-Setup.dmg`](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg)（约 0.5 GB） | 实验版，不支持 Intel Mac |
 
 [Release 页面](https://github.com/NOTBAD314/2ByteASR/releases/latest)里其他附件的用途：
 
 | 附件 | 给谁用 |
 | --- | --- |
-| `2ByteASR-Source-0.7.1.zip` | 想看或重新构建安装包的人：与 Windows 安装包对应的完整构建输入 |
-| `2ByteASR-ThirdParty-Materials-0.7.1.zip`、`mingw-w64-libiconv-…src.tar.zst`、`…GPL-Additional-Permission.txt` | 第三方许可条款、声明和上游源码 |
-| `2ByteASR-update.json(.sig)`、`2ByteASR-0.7.1-<组件>-<哈希>.zip` | 程序内更新自动使用，不需要手动下载 |
+| `2ByteASR-Source-0.7.2.zip` | 想看或重新构建安装包的人：与 Windows 安装包对应的完整构建输入 |
+| `2ByteASR-ThirdParty-Materials-0.7.2.zip`、`mingw-w64-libiconv-…src.tar.zst`、`…GPL-Additional-Permission.txt` | 第三方许可条款、声明和上游源码 |
+| `2ByteASR-update.json(.sig)`、`2ByteASR-0.7.2-<组件>-<哈希>.zip` | 程序内更新自动使用，不需要手动下载 |
 | `SHA256SUMS.txt(.sig)` | 核对下载的文件是否完整、是否由本项目发布 |
 
 ## Windows 安装
 
-1. 下载 `2ByteASR-Setup-0.7.1.exe`。想确认文件完整，可以在下载文件夹打开 PowerShell，运行 `certutil -hashfile 2ByteASR-Setup-0.7.1.exe SHA256`，和 Release 里 `SHA256SUMS.txt` 的值比对。
+1. 下载 `2ByteASR-Setup-0.7.2.exe`。想确认文件完整，可以在下载文件夹打开 PowerShell，运行 `certutil -hashfile 2ByteASR-Setup-0.7.2.exe SHA256`，和 Release 里 `SHA256SUMS.txt` 的值比对。
 2. 运行安装程序。默认装在 `%LOCALAPPDATA%\Programs\2ByteASR`，不需要管理员权限，也可以换到别的磁盘。安装后约占 1.9 GB。
 3. 安装程序**没有代码签名**，Windows 可能显示“未知发布者”，或出现“Windows 已保护你的电脑”。确认文件来自本仓库的 Releases、校验值一致后，点“更多信息”→“仍要运行”即可。**不需要、也不应该关闭 SmartScreen、杀毒软件或其他安全功能。**
 4. 安装完成后从开始菜单或桌面快捷方式启动。
 
-**已经装过旧版本：** 0.6.5、0.7.0 在程序右上角“检查更新”，只下载变化的部分（从 0.7.0 约 79 MB）。0.6.0 及更早版本：关闭兔白字幕，运行新的安装程序**直接覆盖安装，不要先卸载**。设置、词库、工程、已下载的模型和运行环境都会保留。
+**已经装过旧版本：** 0.6.5、0.7.0、0.7.2 在程序右上角“检查更新”，只下载变化的部分（从 0.7.2 约 50 MB）。0.6.0 及更早版本：关闭兔白字幕，运行新的安装程序**直接覆盖安装，不要先卸载**。设置、词库、工程、已下载的模型和运行环境都会保留。
 
 **文件放在哪里：** 设置、词库、工程和日志在 `%LOCALAPPDATA%\2ByteASR`。新安装时，模型默认下载到程序所在文件夹的 `models`（程序装在 D 盘，模型也在 D 盘）；以前下载过的模型原地沿用，不会搬动。
 
@@ -37,7 +37,7 @@
 
 **适用范围：** Apple 芯片（M 系列）、macOS 15 或更新。**不支持 Intel Mac**。建议 16 GB 以上内存，8 GB 的 Mac 没有测过。这个版本只在 GitHub 提供的虚拟 Mac（虚拟 M1、7 GB 内存）上检查过，没有在实体 Mac 上测过。
 
-1. 下载 DMG，可以在“终端”运行 `shasum -a 256 2ByteASR-0.7.1-macos-arm64-Setup.dmg`，和 `SHA256SUMS.txt` 比对。
+1. 下载 DMG，可以在“终端”运行 `shasum -a 256 2ByteASR-0.7.2-macos-arm64-Setup.dmg`，和 `SHA256SUMS.txt` 比对。
 2. 打开 DMG，把 `2ByteASR` 拖进“应用程序”。
 3. 安装包**没有 Developer ID 签名，也没有经过 Apple 公证**。第一次打开时，在 Finder 里按住 Control 点按 App，选“打开”，再在提示里选“打开”。如果仍被拦下，到“系统设置 → 隐私与安全性”，在下方点“仍要打开”。**不需要、也不应该关闭 Gatekeeper 等系统安全设置。**
 4. 以后直接打开即可。
@@ -81,7 +81,7 @@
 - **软件本身免费**，没有付费功能、注册或订阅。
 - **本机识别**：模型下载后可以离线使用，影音不离开电脑。
 - **云端识别**：音频会上传到你选的服务商，按服务商的规则计费（价格以服务商页面为准）。程序不会替你开通或付费。
-- **文字 AI**（DeepSeek、阿里云百炼、OpenAI、Gemini、xAI 或自定义兼容服务，都用你自己的 Key）：只发送字幕文字。用到它的功能有 AI 断句、AI 校对、“AI 词库校对”的 AI 模式、日语 / 英语字幕翻译、AI 建词和联网更新词库、直播切片的 AI 排序、AI 字幕设计。没有配置时，这些功能不可用或改用本地规则，识别、编辑和导出照常。
+- **文字 AI**（DeepSeek、阿里云百炼、OpenAI、Gemini、xAI 或自定义兼容服务，都用你自己的 Key）：只发送字幕文字。用到它的功能有 AI 断句、AI 校对、“AI 词库校对”的 AI 模式、字幕翻译（中文、日语、英语字幕可译成简体中文、繁體中文、英语、日语或韩语）、AI 建词和联网更新词库、直播切片的 AI 排序、AI 字幕设计。没有配置时，这些功能不可用或改用本地规则，识别、编辑和导出照常。
 - **外部 AI（MCP）**：默认关闭。开启后，你的 AI 客户端会读取当前工程的字幕文字，并发送给该客户端所用的 AI 服务。
 
 ## 识别方案与模型
@@ -161,9 +161,9 @@ cd 2ByteASR
 .\.venv-main\Scripts\python.exe quick_start.py
 ```
 
-- `main` 分支是程序源码；与 0.7.1 安装包对应的构建来源是 tag `v0.7.1`，完整构建输入在 Release 的 `2ByteASR-Source-0.7.1.zip`，详见 [0.7.1 发布说明的“源码与校验”](releases/0.7.1.md#源码与校验)。
+- `main` 分支是程序源码；与 0.7.2 安装包对应的构建来源是 tag `v0.7.2`，完整构建输入在 Release 的 `2ByteASR-Source-0.7.2.zip`，详见 [0.7.2 发布说明的“源码与校验”](releases/0.7.2.md#源码与校验)。
 - 开发和测试约定见[贡献指南](../CONTRIBUTING.md)。
-- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md)、[SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md) 和 [SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) 写于 0.5.0 阶段，是当时的源码范围与构建记录，尚未按 0.7.1 更新。
+- [BUILD_FROM_SOURCE.md](../BUILD_FROM_SOURCE.md)、[SOURCE_ONLY_SCOPE.md](../SOURCE_ONLY_SCOPE.md) 和 [SOURCE_DELIVERY.md](../SOURCE_DELIVERY.md) 写于 0.5.0 阶段，是当时的源码范围与构建记录，尚未按 0.7.2 更新。
 
 ## 反馈问题
 

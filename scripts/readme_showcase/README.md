@@ -28,6 +28,8 @@ powershell -ExecutionPolicy Bypass -File scripts\readme_showcase\tts.ps1 -Dialog
 #    en-02 / ja-02：英日界面（标签较长，用 1600×1000）
 <开发仓库>\.venv-main\Scripts\python.exe -X utf8 scripts\readme_showcase\showcase_studio.py --name en-02 --source run-071 --lang en --size 1600x1000 --scale 2 --scenes speakers,razor,review,fixups,hero,home,pages
 <开发仓库>\.venv-main\Scripts\python.exe -X utf8 scripts\readme_showcase\showcase_studio.py --name ja-02 --source run-071 --lang ja --size 1600x1000 --scale 2 --scenes speakers,razor,review,fixups,hero,home,pages
+#    ko-02：韩语界面（2026-10-15 起，需 0.7.2 及以后的源码；run-071 复制过来时要把 result.json 里的工程路径改成新位置）
+<开发仓库>\.venv-main\Scripts\python.exe -X utf8 scripts\readme_showcase\showcase_studio.py --name ko-02 --source run-071 --lang ko --size 1600x1000 --scale 2 --scenes speakers,razor,review,fixups,hero,home,pages
 # 4. 生成 README 图片（输出到 $env:README_SHOWCASE_DIR\assets）
 <开发仓库>\.venv-main\Scripts\python.exe -X utf8 scripts\readme_showcase\build_assets.py
 # 5. 复制到 main 的工作树，重写清单，并用 GitHub 渲染接口检查链接、图片与锚点（需要 gh 登录）
@@ -53,7 +55,7 @@ npx hyperframes@0.8.143 render . -q high -o renders\video.mp4
 ffmpeg -ss 35 -t 10 -i renders\video.mp4 -vf "fps=25,scale=1100:-1:flags=lanczos" -c:v libwebp_anim -q:v 82 -compression_level 6 -loop 0 clips.webp
 ```
 
-英文、日文版用 `build_anim_variant.py <目录> en|ja <输出目录>` 生成后同样渲染、切片。
+英文、日文、韩文版用 `build_anim_variant.py <目录> en|ja|ko <输出目录>` 生成后同样渲染、切片（韩文版 2026-10-15 加入）。
 
 ## 取景时避开的已知问题（2026-10-14）
 

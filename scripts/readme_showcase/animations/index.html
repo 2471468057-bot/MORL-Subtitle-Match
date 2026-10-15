@@ -36,39 +36,50 @@
       html[lang="ja"] .dm {
         font-family: "HanSans", sans-serif;
       }
-      /* en / ja subtitles: word-sized labels centred on their timing slot */
+      /* Korean wraps between words, never inside one (2026-10-15) */
+      html[lang="ko"] #root {
+        word-break: keep-all;
+      }
+      /* en / ja / ko subtitles: word-sized labels centred on their timing slot */
       html[lang="en"] .cue .cc,
-      html[lang="ja"] .cue .cc {
+      html[lang="ja"] .cue .cc,
+      html[lang="ko"] .cue .cc {
         width: auto;
         margin-left: 0;
         white-space: nowrap;
         transform: translateX(-50%);
       }
-      html[lang="en"] .cue .cc {
+      html[lang="en"] .cue .cc,
+      html[lang="ko"] .cue .cc {
         font-size: 30px;
       }
       html[lang="ja"] .cue .cc {
         font-size: 34px;
       }
       html[lang="en"] .l4-t,
-      html[lang="ja"] .l4-t {
+      html[lang="ja"] .l4-t,
+      html[lang="ko"] .l4-t {
         white-space: nowrap;
       }
-      /* en / ja replacement: the old word narrows while the new one widens, so the line never has a gap */
+      /* en / ja / ko replacement: the old word narrows while the new one widens, so the line never has a gap */
       html[lang="en"] .sw,
-      html[lang="ja"] .sw {
+      html[lang="ja"] .sw,
+      html[lang="ko"] .sw {
         display: inline-flex;
       }
       html[lang="en"] .sw .old,
       html[lang="en"] .sw .new,
       html[lang="ja"] .sw .old,
-      html[lang="ja"] .sw .new {
+      html[lang="ja"] .sw .new,
+      html[lang="ko"] .sw .old,
+      html[lang="ko"] .sw .new {
         position: relative;
         display: inline-block;
         overflow: hidden;
       }
       html[lang="en"] .sw .new,
-      html[lang="ja"] .sw .new {
+      html[lang="ja"] .sw .new,
+      html[lang="ko"] .sw .new {
         max-width: 0;
       }
       /* en / ja review line: old and new versions stacked, crossfaded on adopt */
@@ -1553,6 +1564,95 @@
             "#s5-k3 .cd-why": "ひと言から大量のネタコメント",
             ".cd-btn .b0": "＋ クリップへ追加",
             "#s5-btn .b1": "✓ クリップに追加済み",
+          },
+          // 2026-10-15: Korean (words split on spaces like English; UI terms as in locales/ko.json)
+          ko: {
+            _before: "앞부분",
+            _after: "뒷부분",
+            _words: true,
+            _s1: ["먼저 강을 따라가자", "알았어, 먼저 가", "보인다, 내가 잡을게"],
+            _s2: [["알았어,", "너희", "먼저", "가"], ["나는", "뒤따라갈게"], [1, 2, 3, 4]],
+            "#s1-eb": "01 · 인식",
+            "#s1-ti": "자막 하나, 세 가지 역할",
+            "#s1-c1": "<b>① MOSS</b>가 글자를 받아 적고 화자 A·B를 나눕니다",
+            "#s1-c2": "<b>② FireRedASR2-AED</b>가 글자마다 시작·끝 시간을 붙입니다",
+            "#s1-c3": "<b>③ Qwen3-ASR</b>가 다시 듣고 글자를 하나씩 대조합니다",
+            "#s1-c4": "마지막으로 <b>화자별</b> 자막 트랙에 들어갑니다",
+            "#s1-r1 .rc-k": DOT + "주 전사",
+            "#s1-r1 .rc-d": "받아 적고 화자 구분",
+            "#s1-r2 .rc-k": DOT + "자막 타임라인",
+            "#s1-r2 .rc-d": "글자마다 시간 표시",
+            "#s1-r3 .rc-k": DOT + "텍스트 검토",
+            "#s1-r3 .rc-d": "다시 듣고 대조",
+            "#s1-work .wave-label": "방송 녹화본 · 2명 대화",
+            "#s1 .ok": "✓ 일치",
+            "#s1-b1": "먼저…",
+            "#s1-b2": "알았어…",
+            "#s1-b3": "보인다…",
+            "#s2-eb": "02 · 다듬기",
+            "#s2-ti": "단어와 단어 사이에서 자르기",
+            "#s2-c1": "단어마다 <b>시작과 끝 시간</b>이 있습니다",
+            "#s2-c2": "자르기 도구를 끌면 <b>단어 사이</b>에서만 멈춥니다",
+            "#s2-c3": "놓으면 분할, <b>시간은 글자를 따라갑니다</b>",
+            "#s2-c4": "잘못 잘랐다면 <b>바로 실행 취소</b>",
+            "#s2 .lane2-h": DOT_B + "B 흰토끼",
+            "#s2-prev .pv-t": "✂ 단어 시간으로 분할, 자른 위치 유지",
+            "#s2-undo-k": "↶ 실행 취소&emsp;Ctrl + Z",
+            "#s2-undo .undo-d": "병합·분할·이동도 되돌립니다",
+            "#s3-eb": "03 · 교정",
+            "#s3-ti": "같은 말의 후보를 비교해 채택",
+            "#s3-c1": "세 모델이 각각 듣고 <b>다르게 적힌 곳</b>을 표시합니다",
+            "#s3-c2": "MOSS와 FireRed는 “그를”, Qwen3-ASR는 <b>“그걸”</b>로 적었습니다",
+            "#s3-cur .cur3-t":
+              '<span class="v" id="s3-old">내가 <span class="w">그를<i class="mark" id="s3-mark"></i></span> 잡을게, 옆에서 쳐</span>' +
+              '<span class="v v2" id="s3-new">내가 <span class="w">그걸<i class="mark" id="s3-mark2" style="background: #69cf9b; opacity: 1"></i></span> 잡을게, 옆에서 쳐</span>',
+            "#s3-m1 .mc-t, #s3-m2 .mc-t": '내가 <span class="diff"><i></i><em>그를</em></span> 잡을게, 옆에서 쳐',
+            "#s3-m3 .mc-t": '내가 <span class="diff"><i></i><em>그걸</em></span> 잡을게, 옆에서 쳐',
+            "#s3-c3": "클릭해서 채택하면 <b>자막이 바로 바뀌고</b> 다음 자막으로",
+            "#s3-cur .cur3-l": "현재 자막 · A 강변 탐험가 · 00:17.6",
+            "#s3-warn": "⚠ 모델마다 다르게 적음",
+            "#s3-done": "✓ Qwen3-ASR 채택",
+            "#s3-m1 .chip": "현재 · MOSS",
+            "#s3-tag": "✓ 채택됨",
+            "#s4-eb": "04 · 용어",
+            "#s4-ti": "게임 용어집: 한 번 정리하면 계속 사용",
+            "#s4-c1": "캐릭터 이름, 용어, <b>자주 틀리는 인식</b>을 게임별로 정리",
+            "#s4-c2": "용어집과 대조해 자막의 <b>잘못 적힌 이름</b>을 찾습니다",
+            "#s4-c3": "확인하면 자막에 반영, <b>다음 녹화에도 그대로</b>",
+            "#s4-lib .lib-h": "내 용어 라이브러리<span>게임별</span>",
+            "#s4-lib .games": '<span class="chip on">명일방주</span><span class="chip">VALORANT</span><span class="chip">젠레스 존 제로</span>',
+            "#s4-t1 .term-a": "아미야<small>← 아미아, 아미야아</small>",
+            "#s4-t2 .term-a": "오리지늄 아츠<small>← 오리지널 아츠</small>",
+            "#s4-t3 .term-a": "엑시아<small>← 엑시야</small>",
+            "#s4-l1 .l4-t": '<span class="sw" data-room="110"><span class="old">아미아<i class="strike"></i></span><span class="new">아미야</span></span>&nbsp;스킬 쓸 때까지 기다려',
+            "#s4-l2 .l4-t": '이&nbsp;<span class="sw" data-room="230"><span class="old">오리지널 아츠<i class="strike"></i></span><span class="new">오리지늄 아츠</span></span>&nbsp;너무 세다',
+            "#s4-l3 .l4-t": "엑시아 화력 최고야",
+            "#s4-t1 .term-b": '캐릭터 · 내장 참고 자료 · <span class="ok2">확인됨</span>',
+            "#s4-t2 .term-b": '용어 · 내장 참고 자료 · <span class="ok2">확인됨</span>',
+            "#s4-t3 .term-b": '캐릭터 · 직접 추가 · <span class="ok2">확인됨</span>',
+            "#s4-subs .subs4-h": "이번 묶음의 자막",
+            "#s4-l1 .l4-r, #s4-l2 .l4-r": "✓ 수정됨",
+            "#s4-l3 .l4-r": "✓ 수정 불필요",
+            "#s5-eb": "05 · 제작",
+            "#s5-ti": "방송에서 잘라낼 장면 찾기",
+            "#s5-c1": "방송 <b>탄막 XML</b>을 불러와 자막과 함께 분석",
+            "#s5-c2": "하이라이트를 찾아 <b>이유와 시간 범위</b>를 함께 표시",
+            "#s5-c3": "<b>클립에 추가</b>하면 타임라인에서도 범위가 선택됩니다",
+            "#s5-heat .heat-l": "탄막 활성도 · 2시간 녹화본",
+            "#s5-p1 .pk-lab span": "역전",
+            "#s5-p2 .pk-lab span": "웃긴 실수",
+            "#s5-p3 .pk-lab span": "탄막 폭주",
+            "#s5-k1 .cd-t": "빈사 상태에서 역전, 방송이 들썩",
+            "#s5-k1 .cd-time": "0:42:10 – 0:42:48 · 38초",
+            "#s5-k1 .cd-why": "탄막이 평소의 약 5배 · 시청자 감탄",
+            "#s5-k2 .cd-t": "실수 변명에 탄막 폭소",
+            "#s5-k2 .cd-time": "1:05:30 – 1:06:02 · 32초",
+            "#s5-k2 .cd-why": "웃음 탄막이 급증",
+            "#s5-k3 .cd-t": "한마디에 탄막이 도배됨",
+            "#s5-k3 .cd-time": "1:38:00 – 1:38:40 · 40초",
+            "#s5-k3 .cd-why": "한 문장에 반응이 쏟아짐",
+            ".cd-btn .b0": "+ 클립에 추가",
+            "#s5-btn .b1": "✓ 클립에 추가됨",
           },
         };
         var LANG = (document.documentElement.lang || "zh").slice(0, 2);

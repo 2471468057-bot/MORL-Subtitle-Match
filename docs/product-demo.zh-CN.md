@@ -2,7 +2,7 @@
 
 除最后“功能示意”一节外，下面全部是 **0.7.1 的真实界面**（2026-10-14 截取）。截图来自 tag `v0.7.1` 的程序源码，在隔离的测试文件夹里运行，没有读写任何用户资料。示例素材是项目自制的测试卡画面和两段合成语音，字幕由本机 MOSS + FireRedASR2-AED + Qwen3-ASR 识别（NVIDIA RTX 5070 Ti）。素材来源与处理方法见[素材说明](assets/readme/README.md)。
 
-[返回首页](../README.md) · [使用指南](product-guide.zh-CN.md) · [English](product-demo.en.md) · [日本語](product-demo.ja.md)
+[返回首页](../README.md) · [使用指南](product-guide.zh-CN.md) · [English](product-demo.en.md) · [日本語](product-demo.ja.md) · [한국어](product-demo.ko.md)
 
 ## 首页与识别
 

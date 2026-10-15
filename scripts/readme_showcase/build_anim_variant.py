@@ -1,7 +1,7 @@
 """Copy the README animation project into a per-language render folder.
 
-index.html carries all three text sets; the <html lang> attribute picks one.
-Usage: build_anim_variant.py <project_dir> <en|ja|zh-CN> <out_dir>
+index.html carries every text set (zh, en, ja, ko); the <html lang> attribute picks one.
+Usage: build_anim_variant.py <project_dir> <en|ja|ko|zh-CN> <out_dir>
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def main() -> int:
         print(__doc__)
         return 2
     src, lang, out = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-    if lang not in ("en", "ja", "zh-CN"):
+    if lang not in ("en", "ja", "ko", "zh-CN"):
         raise SystemExit(f"unsupported language: {lang}")
     html = (src / "index.html").read_text(encoding="utf-8")
     marker = '<html lang="zh-CN">'

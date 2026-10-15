@@ -2,7 +2,7 @@
 
 最後の「機能のイメージ」の節を除き、以下はすべて **0.7.1 の実際の画面**です（2026-10-14 撮影）。タグ `v0.7.1` のソースを、利用者のデータに触れない隔離したテストフォルダーで実行して撮影しました。サンプルはプロジェクトで作ったテストカード映像と 2 人分の中国語合成音声で、ローカルの MOSS + FireRedASR2-AED + Qwen3-ASR（NVIDIA RTX 5070 Ti）で認識しました。「中国語表示」と書いていないものは日本語表示です。音声が中国語なので、字幕は中国語です。素材の作り方は[素材の説明](assets/readme/README.md)（中国語）を参照してください。
 
-[README へ戻る](../README_JA.md) · [使い方ガイド](product-guide.ja.md) · [中文](product-demo.zh-CN.md) · [English](product-demo.en.md)
+[README へ戻る](../README_JA.md) · [使い方ガイド](product-guide.ja.md) · [中文](product-demo.zh-CN.md) · [English](product-demo.en.md) · [한국어](product-demo.ko.md)
 
 ## ホームと認識
 
