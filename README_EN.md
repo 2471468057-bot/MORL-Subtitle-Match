@@ -15,14 +15,14 @@ Built for Chinese first, with Japanese and English recognition too. Run everythi
 
 ## Download
 
-Current release: **0.7.2** (2026-10-15). Pick the one installer for your computer:
+Current release: **0.7.3** (2026-10-16). Pick the one installer for your computer:
 
 | Your computer | Download |
 | --- | --- |
-| **Windows 10 22H2 or later (64-bit)**<br>Stable | **[2ByteASR-Setup-0.7.2.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe)** (about 1 GB)<br>The installer is not code-signed, so Windows may show an "unknown publisher" warning. See [Installing on Windows](docs/product-guide.en.md#installing-on-windows). |
-| **Mac with Apple silicon (M1 or later), macOS 15 or later**<br>**Experimental** | **[2ByteASR-0.7.2-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg)** (about 0.5 GB)<br>Tested only on GitHub's virtual Macs. **Intel Macs are not supported.** Not notarized by Apple; see [Installing on Mac](docs/product-guide.en.md#installing-on-mac-experimental) for the first launch. |
+| **Windows 10 22H2 or later (64-bit)**<br>Stable | **[2ByteASR-Setup-0.7.3.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-Setup-0.7.3.exe)** (about 1 GB)<br>The installer is not code-signed, so Windows may show an "unknown publisher" warning. See [Installing on Windows](docs/product-guide.en.md#installing-on-windows). |
+| **Mac with Apple silicon (M1 or later), macOS 15 or later**<br>**Experimental** | **[2ByteASR-0.7.3-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-0.7.3-macos-arm64-Setup.dmg)** (about 0.5 GB)<br>Tested only on GitHub's virtual Macs. **Intel Macs are not supported.** Not notarized by Apple; see [Installing on Mac](docs/product-guide.en.md#installing-on-mac-experimental) for the first launch. |
 
-- **Already on 0.6.5, 0.7.0 or 0.7.1?** Use "Check for updates" in the app; it downloads only what changed. For 0.6.0 or earlier, run the new installer over the old one without uninstalling first.
+- **Already on 0.6.5, 0.7.0, 0.7.1 or 0.7.2?** Use "Check for updates" in the app; it downloads only what changed. For 0.6.0 or earlier, run the new installer over the old one without uninstalling first.
 - **You don't need the other files.** The `Source`, `ThirdParty`, `update` and `.sig` files on the [Releases page](https://github.com/NOTBAD314/2ByteASR/releases/latest) are for source code, licence materials and in-app updates. `SHA256SUMS.txt` lets you check that a download is complete.
 
 <img src="docs/assets/readme/hero-en.png" width="100%" alt="Subtitle Studio in 2ByteASR 0.7.1 with the English interface: captions list on the left, video preview with a subtitle in the middle, style panel on the right, and a timeline with one subtitle track each for Host and Teammate, a video track and the audio waveform; the home window sits behind it">

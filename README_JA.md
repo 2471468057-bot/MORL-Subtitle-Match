@@ -15,14 +15,14 @@
 
 ## ダウンロード
 
-現在のバージョン：**0.7.2**（2026-10-15）。お使いのコンピューターに合うインストーラーをひとつ選んでください。
+現在のバージョン：**0.7.3**（2026-10-16）。お使いのコンピューターに合うインストーラーをひとつ選んでください。
 
 | お使いのコンピューター | ダウンロード |
 | --- | --- |
-| **Windows 10 22H2 以降（64 ビット）**<br>正式版 | **[2ByteASR-Setup-0.7.2.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe)**（約 1 GB）<br>インストーラーにはコード署名がないため、「不明な発行元」と表示されることがあります。[Windows へのインストール](docs/product-guide.ja.md#windows-へのインストール)を参照してください。 |
-| **Apple シリコン（M1 以降）の Mac、macOS 15 以降**<br>**実験版** | **[2ByteASR-0.7.2-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg)**（約 0.5 GB）<br>GitHub の仮想 Mac でのみ確認しています。**Intel Mac には対応していません。** Apple の公証を受けていないため、初回の開き方は [Mac へのインストール](docs/product-guide.ja.md#mac-へのインストール実験版)を参照してください。 |
+| **Windows 10 22H2 以降（64 ビット）**<br>正式版 | **[2ByteASR-Setup-0.7.3.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-Setup-0.7.3.exe)**（約 1 GB）<br>インストーラーにはコード署名がないため、「不明な発行元」と表示されることがあります。[Windows へのインストール](docs/product-guide.ja.md#windows-へのインストール)を参照してください。 |
+| **Apple シリコン（M1 以降）の Mac、macOS 15 以降**<br>**実験版** | **[2ByteASR-0.7.3-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-0.7.3-macos-arm64-Setup.dmg)**（約 0.5 GB）<br>GitHub の仮想 Mac でのみ確認しています。**Intel Mac には対応していません。** Apple の公証を受けていないため、初回の開き方は [Mac へのインストール](docs/product-guide.ja.md#mac-へのインストール実験版)を参照してください。 |
 
-- **0.6.5 / 0.7.0 / 0.7.1 をお使いの場合：** アプリ右上の「更新を確認」から、変わった部分だけをダウンロードできます。0.6.0 以前は、アンインストールせずに新しいインストーラーで上書きしてください。
+- **0.6.5 / 0.7.0 / 0.7.1 / 0.7.2 をお使いの場合：** アプリ右上の「更新を確認」から、変わった部分だけをダウンロードできます。0.6.0 以前は、アンインストールせずに新しいインストーラーで上書きしてください。
 - **ほかの添付ファイルは不要です。** [Releases ページ](https://github.com/NOTBAD314/2ByteASR/releases/latest)の `Source`、`ThirdParty`、`update`、`.sig` などは、ソースコード、ライセンス資料、アプリ内更新のためのものです。`SHA256SUMS.txt` でダウンロードしたファイルが完全かどうか確認できます。
 
 <img src="docs/assets/readme/hero-ja.png" width="100%" alt="日本語表示の 2ByteASR 0.7.1 字幕スタジオ：左に字幕リスト、中央に字幕付きの動画プレビュー、右にスタイルパネル、下のタイムラインには配信者と相方の字幕トラック、映像トラック、音声波形が並び、背後にホーム画面のウィンドウがある">

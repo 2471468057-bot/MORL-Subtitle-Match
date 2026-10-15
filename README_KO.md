@@ -15,14 +15,14 @@
 
 ## 다운로드
 
-현재 버전: **0.7.2**(2026-10-15). 내 컴퓨터에 맞는 설치 프로그램을 하나 고르세요.
+현재 버전: **0.7.3**(2026-10-16). 내 컴퓨터에 맞는 설치 프로그램을 하나 고르세요.
 
 | 내 컴퓨터 | 다운로드 |
 | --- | --- |
-| **Windows 10 22H2 이상(64비트)**<br>정식 버전 | **[2ByteASR-Setup-0.7.2.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-Setup-0.7.2.exe)**(약 1 GB)<br>설치 프로그램에 코드 서명이 없어서 Windows가 “알 수 없는 게시자” 경고를 표시할 수 있습니다. [Windows에 설치하기](docs/product-guide.ko.md#windows에-설치하기)를 참고하세요. |
-| **Apple 실리콘(M1 이후) Mac, macOS 15 이상**<br>**실험판** | **[2ByteASR-0.7.2-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.2/2ByteASR-0.7.2-macos-arm64-Setup.dmg)**(약 0.5 GB)<br>GitHub의 가상 Mac에서만 확인했습니다. **Intel Mac은 지원하지 않습니다.** Apple 공증을 받지 않았으므로 처음 여는 방법은 [Mac에 설치하기](docs/product-guide.ko.md#mac에-설치하기실험판)를 참고하세요. |
+| **Windows 10 22H2 이상(64비트)**<br>정식 버전 | **[2ByteASR-Setup-0.7.3.exe](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-Setup-0.7.3.exe)**(약 1 GB)<br>설치 프로그램에 코드 서명이 없어서 Windows가 “알 수 없는 게시자” 경고를 표시할 수 있습니다. [Windows에 설치하기](docs/product-guide.ko.md#windows에-설치하기)를 참고하세요. |
+| **Apple 실리콘(M1 이후) Mac, macOS 15 이상**<br>**실험판** | **[2ByteASR-0.7.3-macos-arm64-Setup.dmg](https://github.com/NOTBAD314/2ByteASR/releases/download/v0.7.3/2ByteASR-0.7.3-macos-arm64-Setup.dmg)**(약 0.5 GB)<br>GitHub의 가상 Mac에서만 확인했습니다. **Intel Mac은 지원하지 않습니다.** Apple 공증을 받지 않았으므로 처음 여는 방법은 [Mac에 설치하기](docs/product-guide.ko.md#mac에-설치하기실험판)를 참고하세요. |
 
-- **이미 0.6.5, 0.7.0, 0.7.1을 쓰고 있다면:** 앱 오른쪽 위의 “업데이트 확인”을 누르면 바뀐 부분만 내려받습니다. 0.6.0 이하라면 기존 버전을 제거하지 말고 새 설치 프로그램을 실행해 덮어 설치하세요.
+- **이미 0.6.5, 0.7.0, 0.7.1, 0.7.2를 쓰고 있다면:** 앱 오른쪽 위의 “업데이트 확인”을 누르면 바뀐 부분만 내려받습니다. 0.6.0 이하라면 기존 버전을 제거하지 말고 새 설치 프로그램을 실행해 덮어 설치하세요.
 - **다른 첨부 파일은 받지 않아도 됩니다.** [Releases 페이지](https://github.com/NOTBAD314/2ByteASR/releases/latest)의 `Source`, `ThirdParty`, `update`, `.sig` 등은 소스 코드, 라이선스 자료, 앱 내 업데이트용 파일입니다. 내려받은 파일이 온전한지는 `SHA256SUMS.txt`로 확인할 수 있습니다.
 
 <img src="docs/assets/readme/hero-ko.png" width="100%" alt="한국어 인터페이스로 실행한 2ByteASR 0.7.2의 자막 스튜디오: 왼쪽에 자막 목록, 가운데에 자막이 표시된 동영상 미리보기, 오른쪽에 스타일 패널이 있고, 아래 타임라인에는 스트리머와 팀원의 자막 트랙이 하나씩, 그리고 비디오 트랙과 오디오 파형이 있습니다. 뒤쪽에는 홈 창이 보입니다">
