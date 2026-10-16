@@ -18,6 +18,7 @@ as for Chinese. The language is picked in the dialog or read from the script.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import uuid
 
@@ -194,10 +195,36 @@ def build_project(media_path: str, match: ScriptMatch, rows: dict[str, dict], la
     return save_project(project, path)
 
 
+def failure_text(exc: BaseException) -> tuple[str, str]:
+    """One line for the dialog and the full error for 「复制错误详情」.
+
+    2026-10-16 (user: English matching "did nothing"): a model worker's error
+    is its whole stdout/stderr tail, so the dialog shows only its last line,
+    and running out of Windows commit (page file too small) reads as advice.
+    """
+    import traceback
+    detail = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+    text = str(exc).strip() or type(exc).__name__
+    if isinstance(exc, ScriptMatchError):
+        return text, detail
+    from .asr import windows_commit_limit_error
+    if windows_commit_limit_error(text):
+        return tr('电脑的可用内存不够加载模型（Windows 虚拟内存/页面文件太小）。请先关闭浏览器、游戏等占内存的程序再试；'
+                  '仍失败时，在“系统属性 → 高级 → 性能设置 → 高级 → 虚拟内存”里改为“系统管理的大小”，重启电脑后再试。'), detail
+    head, _, rest = text.partition('\n')
+    worker = re.match(r'(\S+) worker failed \(exit (-?\d+)\):', head)
+    if worker:
+        lines = [line.strip() for line in rest.splitlines()
+                 if line.strip() and line.strip() not in ('stdout:', 'stderr:') and not line.startswith('[2BYTEASR_')]
+        reason = lines[-1][:300] if lines else tr('退出码 {code}', code=worker.group(2))
+        return tr('{model} 运行失败：{reason}', model=worker.group(1), reason=reason), detail
+    return head[:300], detail
+
+
 class ScriptMatchJob(QThread):
     progressed = Signal(str)
     succeeded = Signal(str, object)
-    failed = Signal(str)
+    failed = Signal(str, str)   # one-line reason, full error
 
     def __init__(self, media_path: str, lines: list[str], parent=None, *, language: str = 'zh'):
         super().__init__(parent)
@@ -212,7 +239,11 @@ class ScriptMatchJob(QThread):
             path = build_project(self.media_path, match, rows, self.language)
             self.succeeded.emit(str(path), match)
         except Exception as exc:
-            self.failed.emit(str(exc) or type(exc).__name__)
+            try:
+                reason, detail = failure_text(exc)
+            except Exception:  # never lose the failure itself
+                reason = detail = str(exc) or type(exc).__name__
+            self.failed.emit(str(reason), str(detail))
 
 
 def open_home_script_match(window) -> None:
@@ -221,7 +252,8 @@ def open_home_script_match(window) -> None:
     from .design.presentation import button_role
     from .studio_script_match import read_script_file
     media = [str(path) for path in getattr(window, 'media_paths', ()) if str(path).strip()]
-    state = {'media': media[0] if media else '', 'job': None, 'ready': {}}
+    # 'error': (reason, full error) of the last failed run, shown until an input changes.
+    state = {'media': media[0] if media else '', 'job': None, 'ready': {}, 'error': None}
 
     class _Dialog(QDialog):
         def reject(self):  # ×, Esc and 取消 wait while the timestamp job runs
@@ -276,10 +308,14 @@ def open_home_script_match(window) -> None:
     actions = QHBoxLayout()
     load = button_role(QPushButton(tr('从文件读取…')), 'secondary')
     workshop = button_role(QPushButton(tr('打开模型工坊')), 'secondary')
+    copy_error = button_role(QPushButton(tr('复制错误详情')), 'secondary')
+    copy_error.setObjectName('homeScriptMatchCopyError')
+    copy_error.hide()
     cancel = button_role(QPushButton(tr('取消')), 'secondary')
     start = button_role(QPushButton(tr('开始匹配')), 'primary')
     actions.addWidget(load)
     actions.addWidget(workshop)
+    actions.addWidget(copy_error)
     actions.addStretch(1)
     actions.addWidget(cancel)
     actions.addWidget(start)
@@ -306,9 +342,17 @@ def open_home_script_match(window) -> None:
             state['ready'][route] = timestamp_model_ready(language)
         ready, reason = state['ready'][route]
         workshop.setVisible(not ready)
+        error = state['error']
         if state['job'] is None:
-            status.setText('' if ready else reason)
+            # A failed run keeps its reason here; it used to be cleared right away,
+            # so a failure looked like the button "did nothing" (2026-10-16).
+            status.setText(tr('匹配没有完成：{error}', error=error[0]) if error else ('' if ready else reason))
+        copy_error.setVisible(bool(error) and state['job'] is None)
         start.setEnabled(bool(ready and state['media'] and state['job'] is None))
+
+    def inputs_changed():
+        state['error'] = None
+        refresh()
 
     def choose_media():
         from .main_ui_helpers import SUPPORTED_MEDIA_SUFFIXES
@@ -316,7 +360,7 @@ def open_home_script_match(window) -> None:
         path, _ = QFileDialog.getOpenFileName(dialog, tr('选择素材'), '', tr('音视频 ({pattern})', pattern=pattern))
         if path:
             state['media'] = path
-            refresh()
+            inputs_changed()
 
     def load_file():
         path, _ = QFileDialog.getOpenFileName(dialog, tr('选择文稿'), '', tr('文本文件 (*.txt);;所有文件 (*)'))
@@ -334,19 +378,28 @@ def open_home_script_match(window) -> None:
         dialog.accept()
         window.open_studio_project(path, mode='edit', source='script_match')
 
-    def failed(message):
+    def failed(reason, detail=''):
         bar.hide()
         state['job'] = None
-        status.setText(tr('匹配没有完成：{error}', error=message))
+        state['error'] = (reason, detail or reason)
+        copy_error.setText(tr('复制错误详情'))
         for widget in (script, load, choose, cancel, language_box):
             widget.setEnabled(True)
         refresh()
+
+    def copy_failure():
+        from PySide6.QtWidgets import QApplication
+        if state['error']:
+            QApplication.clipboard().setText(state['error'][1])
+            copy_error.setText(tr('已复制'))
 
     def begin():
         lines = parse_script(script.toPlainText())
         if not lines:
             status.setText(tr('文稿是空的：每行一条字幕'))
             return
+        state['error'] = None
+        copy_error.hide()
         job = ScriptMatchJob(state['media'], lines, dialog, language=current_language())
         state['job'] = job
         job.progressed.connect(status.setText)
@@ -360,16 +413,20 @@ def open_home_script_match(window) -> None:
     choose.clicked.connect(choose_media)
     load.clicked.connect(load_file)
     workshop.clicked.connect(lambda: (dialog.reject(), window._open_model_workshop()))
+    copy_error.clicked.connect(copy_failure)
     cancel.clicked.connect(dialog.reject)
     start.clicked.connect(begin)
-    language_box.currentIndexChanged.connect(lambda _index: refresh())
-    script.textChanged.connect(refresh)
+    language_box.currentIndexChanged.connect(lambda _index: inputs_changed())
+    script.textChanged.connect(inputs_changed)
     refresh()
     window._home_script_match_dialog = dialog
     dialog._begin = begin  # automated checks drive the real handlers
     dialog._script = script
     dialog._state = state
     dialog._language = language_box
+    dialog._status = status
+    dialog._start = start
+    dialog._copy_error = copy_error
     try:
         dialog.exec()
     finally:
@@ -379,5 +436,5 @@ def open_home_script_match(window) -> None:
             job.wait()
 
 
-__all__ = ['ScriptMatchJob', 'build_project', 'heard_tokens', 'open_home_script_match', 'script_language',
-           'timestamp_model_ready', 'uses_qwen']
+__all__ = ['ScriptMatchJob', 'build_project', 'failure_text', 'heard_tokens', 'open_home_script_match',
+           'script_language', 'timestamp_model_ready', 'uses_qwen']

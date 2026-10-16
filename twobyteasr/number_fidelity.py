@@ -203,6 +203,38 @@ def numeric_event_values(text):
     return tuple(event.value for event in numeric_events(text))
 
 
+NUMERIC_CUT_WINDOW = 8
+
+
+def numeric_unsafe_cut_offsets(text, window=NUMERIC_CUT_WINDOW):
+    """Content offsets where cutting the text changes its numeric events.
+
+    2026-10-16 (users: "字幕保真检查未通过" with AI line breaking off): the
+    final check compares ``numeric_event_values`` per cue, and a Chinese
+    numeral only counts with its context (第/还剩 before it, 个/把/金币 after
+    it, or standing alone). Cuts that read fine - 一万｜金币, 一百多｜把,
+    还剩｜一条命 - change what each side counts, so splitters avoid them.
+
+    Offset ``b`` is the cut before the b-th content character, the index the
+    line breakers use (``content_exact``). Each cut is judged inside a window
+    of ``window`` content characters on both sides: the window edges affect
+    "cut" and "not cut" alike, so only the cut itself can make a difference.
+    """
+    from .text_rules import content_exact
+    text = str(text)
+    positions = [index for index, char in enumerate(text) if content_exact(char)]
+    if len(positions) < 2 or len(positions) != len(content_exact(text)):
+        return set()
+    unsafe = set()
+    for offset in range(1, len(positions)):
+        cut = positions[offset]
+        low = positions[max(0, offset - window)]
+        high = positions[min(len(positions), offset + window) - 1] + 1
+        if numeric_event_values(text[low:cut]) + numeric_event_values(text[cut:high]) != numeric_event_values(text[low:high]):
+            unsafe.add(offset)
+    return unsafe
+
+
 def preference():
     from .runtime import get_runtime_context
     context=get_runtime_context()
@@ -279,7 +311,20 @@ def mapped_content_timeline(segment):
     if receipt['result'] != segment.text:return None
     words=getattr(segment,'words',())
     source=receipt['source']; output=receipt['result']
-    content=lambda s: ''.join(re.findall(r'[\u3400-\u9fffA-Za-z0-9]',s))
+    # 2026-10-16 (user: Japanese task failed with "本地修复的文字与时间单元不一致"):
+    # count the same characters as every other text comparison, kana included.
+    # Kanji and ASCII alone left a formatted Japanese line with 22 times for 47
+    # characters, and the final local re-cut of that line failed the file.
+    from .language_rules import CONTENT_CHAR_CLASS
+    content=lambda s: ''.join(re.findall(f'[{CONTENT_CHAR_CLASS}]',s))
+    # 2026-10-16 (users: "字幕保真检查未通过" with AI line breaking off): a
+    # number formatted while the segment's words were still one span
+    # ("segment-only-no-word-alignment") has no character timing to map.
+    # Mapping it gave every character the whole segment (6 s+), so the line
+    # breaker made 5-second single-character cues and the final check failed;
+    # None lets the caller use the FireRed character tokens instead.
+    if len(words) <= 1 and len(content(output)) > 1:
+        return None
     if content(''.join(w.text for w in words)) == content(output):
         from .models import WordUnit
         return [WordUnit(w.start,w.end,ch,w.probability) for w in words for ch in content(w.text)]

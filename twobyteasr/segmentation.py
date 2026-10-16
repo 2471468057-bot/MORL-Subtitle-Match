@@ -1754,9 +1754,14 @@ def locally_repair_resegmented_cue(
             | semantic_restart_boundary_offsets(text),
         )
     )
+    # 2026-10-16 (users: "字幕保真检查未通过" with AI line breaking off): a cut
+    # such as 一万｜金币 changes the numbers each cue reads (the final check
+    # compares them per cue), so neither the DP nor the hard split takes it.
+    from .number_fidelity import numeric_unsafe_cut_offsets
+    numeric_unsafe = numeric_unsafe_cut_offsets(text)
     forbidden_boundaries = set(lexical_forbidden_boundary_offsets(text)) | set(
         segmenter_forbidden_boundary_offsets(text)
-    )
+    ) | numeric_unsafe
     count = len(units)
     if count <= 0 or display_length(text) != count:
         raise ValueError("本地修复的文字与时间单元不一致。")
@@ -1843,6 +1848,11 @@ def locally_repair_resegmented_cue(
                 if duration > MAX_SUBTITLE_SECONDS + 0.05:
                     break
             end_index = max(end_index, min(count, start_index + 1))
+            if end_index < count and end_index in numeric_unsafe and end_index not in forced_boundaries:
+                # Step back to the nearest cut that keeps every number whole;
+                # a shorter piece stays within the length and time limits.
+                end_index = next((cut for cut in range(end_index - 1, start_index, -1)
+                                  if cut not in numeric_unsafe), end_index)
             ranges.append((start_index, end_index))
             start_index = end_index
         cues = []

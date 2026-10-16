@@ -1853,6 +1853,7 @@ def polish_subtitles(segments, media_title, cache_context=None):
     normalized_segments = []
     from .terminology import runtime_snapshot, remap_words, apply_to_segments, TermResolver
     from .number_fidelity import format_segment, RULE_VERSION
+    from .language_rules import is_english, is_japanese
     term_snapshot = runtime_snapshot()
     final_term_resolver = TermResolver(term_snapshot)
     for segment in segments:
@@ -1884,8 +1885,12 @@ def polish_subtitles(segments, media_title, cache_context=None):
         # The same saved switch, source spelling and confirmed names govern
         # both AI-final text and subsequent local editorial passes. The shared
         # formatter records each numeric event and marks mapped timing derived.
+        # Japanese and English tasks get no Chinese numeral formatting, as in
+        # text_rules (ADR 0105). 2026-10-16 (user's Japanese task): this step
+        # still turned 十分 "enough" into 10分 and 一万 into 10000.
         prior_numeric_receipts = len(segment.caption_arbitration.get('numeric_formatting', ()))
-        format_segment(segment, source_text=source, protected_terms=term_snapshot.canonical_terms)
+        if not (is_japanese() or is_english()):
+            format_segment(segment, source_text=source, protected_terms=term_snapshot.canonical_terms)
         numeric_receipts = segment.caption_arbitration.get('numeric_formatting', ())
         number_events = [event for item in numeric_receipts[prior_numeric_receipts:]
                          for event in item.get('events', ())]
