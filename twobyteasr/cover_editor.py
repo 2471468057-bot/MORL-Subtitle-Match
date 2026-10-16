@@ -186,6 +186,13 @@ class CoverEditor(QDialog):
         self.zoom_label = QLabel()
         self.view.zoom_changed.connect(lambda value: bind_text(self.zoom_label, '查看 {value0:.0f}%', value0=value * 100))
         zoom_row.addWidget(self.zoom_label)
+        try:
+            from .cover_snap.qt import install
+        except ModuleNotFoundError as exc:
+            if exc.name not in ('twobyteasr.cover_snap', 'twobyteasr.cover_snap.qt'):
+                raise
+        else:
+            self._cover_snap = install(self.view, zoom_row)
         help_label = QLabel('等比开关控制缩放 · 滚轮查看')
         help_label.setWordWrap(True)
         zoom_row.addWidget(help_label, 1, Qt.AlignRight)
