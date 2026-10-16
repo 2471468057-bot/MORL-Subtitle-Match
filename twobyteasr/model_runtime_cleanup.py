@@ -162,3 +162,37 @@ def remove_unused_model_runtime(plan: RuntimeRemovalPlan, *, install_root: Path,
             _healthy_runtimes(managed, managed / 'download-cache', uv, lambda: busy(), _run)
             return execute_removal(plan.removal, busy_check=busy)
     except Exception as exc: return RemovalResult(failures={str(plan.root): str(exc)})
+
+
+def remove_superseded_runtimes(*, install_root: Path, data_root: Path | None = None,
+                               busy=lambda: False, cancel=lambda: False) -> dict | None:
+    """Automatic pass over what「清理不再使用的模型运行环境」would offer.
+
+    2026-10-16 (user: runtimes 17 GB): an updated runtime left the old version
+    (about 5 GB) until someone found that button. Only plans without a
+    protection reason are removed, each through remove_unused_model_runtime
+    (rescan, current runtimes healthy, files on the inventory only). Returns a
+    receipt, or None when there was nothing but current runtimes.
+    """
+    import time
+    plans = scan_unused_model_runtimes(data_root=data_root)
+    current = {plan.current_python.parent.parent for plan in plans if plan.current_python}
+    others = [plan for plan in plans if plan.root not in current]
+    if not others:
+        return None
+    receipt = dict(time=time.time(), removed=[], kept=[], failures={}, retained=0,
+                   logical_removed_bytes=0, cancelled=False)
+    for plan in others:
+        if cancel() or busy():
+            receipt['cancelled'] = True
+            break
+        if plan.protected_reason or plan.removal is None:
+            receipt['kept'].append(dict(path=str(plan.root)[:512], reason=(plan.protected_reason or '归属未确认')[:512]))
+            continue
+        result = remove_unused_model_runtime(plan, install_root=install_root, data_root=data_root, busy=busy)
+        receipt['logical_removed_bytes'] += result.logical_bytes
+        receipt['retained'] += len(result.retained)
+        if result.removed:
+            receipt['removed'].append(str(plan.root)[:512])
+        receipt['failures'].update({path[:512]: reason[:512] for path, reason in result.failures.items()})
+    return receipt

@@ -192,6 +192,14 @@ def prune_runtime_download_cache(install_root: Path, *, data_root: Path | None =
             marker = managed / 'download-cache-maintenance.json'
             if marker.is_file():
                 state = json.loads(marker.read_text('utf-8-sig'))
+                if state.get('state') == 'installing':
+                    # 2026-10-16 (user: runtimes 17 GB): we hold the install lock, so no
+                    # installer runs. Pausing kills the installer tree before it can mark
+                    # itself, which left "installing" for good; record it as interrupted
+                    # and keep its time, so resume retention counts from the interruption.
+                    state = {**state, 'state': 'paused', 'last_result': '安装已中断；按续传保留期限保护'}
+                    from .theme_persistence import write_text_atomic
+                    write_text_atomic(marker, json.dumps(state, ensure_ascii=False, indent=2))
                 if mode=='prune' and state.get('state') in {'installing', 'paused', 'failed'} and time.time() - float(state.get('updated_at', 0)) < max(1, int(resume_days)) * 86400:
                     return RuntimeCacheResult('skipped', f'未完成安装的可续传缓存保留{max(1, int(resume_days))}天；请完成或重试安装')
             lock = json.loads((Path(install_root) / 'dependencies.lock.json').read_text('utf-8-sig'))

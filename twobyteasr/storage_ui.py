@@ -119,13 +119,37 @@ def maintain_registered_storage(service, cancel):
                     payload['details'].append(dict(status='failed', path=path[:512], reason=reason[:512]))
         payload['truncated'] = sum(payload['counts'].values()) > len(payload['details'])
         _write_maintenance_receipt(service, 'last-model-download-cleanup.json', payload)
+    # 2026-10-16 (user: runtimes 17 GB): superseded runtimes go first, so the
+    # cache maintenance below can free the cached files only they linked to.
+    if not cancel.is_set() and not service.busy() and service.policy()['enabled']:
+        run_runtime_maintenance(service, cancel)
     marker = service.paths.user_data_root / 'runtimes' / 'download-cache-maintenance.json'
     try:
-        ready = safe_path(marker, (service.paths.user_data_root,)) and json.loads(marker.read_text('utf8')).get('state') == 'ready'
-    except (OSError, ValueError, AttributeError): ready = False
-    if ready and not cancel.is_set() and not service.busy() and service.policy()['enabled']:
+        state = json.loads(marker.read_text('utf8')).get('state') if safe_path(marker, (service.paths.user_data_root,)) else None
+    except (OSError, ValueError, AttributeError): state = None
+    # Interrupted installs ("installing" left by a pause, "paused", "failed")
+    # no longer block maintenance for good: the prune keeps their resume data
+    # for the retention days and maintains after that.
+    if state in {'ready', 'installing', 'paused', 'failed'} and not cancel.is_set() and not service.busy() and service.policy()['enabled']:
         run_uv_maintenance(service, cancel)
     return result
+
+
+def run_runtime_maintenance(service, cancel):
+    """Remove superseded runtimes automatically; the receipt feeds the storage page."""
+    from .model_runtime_cleanup import remove_superseded_runtimes
+    try:
+        receipt = remove_superseded_runtimes(install_root=service.paths.install_root,
+            data_root=service.paths.user_data_root, busy=service.busy, cancel=cancel.is_set)
+    except Exception as exc:
+        receipt = dict(time=time.time(), removed=[], kept=[], failures={'scan': str(exc)[:512]}, retained=0,
+                       logical_removed_bytes=0, cancelled=cancel.is_set())
+    if receipt is not None:
+        try:
+            _write_maintenance_receipt(service, 'last-runtime-cleanup.json', receipt)
+        except (OSError, ValueError):
+            pass
+    return receipt
 
 
 def app_busy(owner, *, manual=False):
@@ -319,8 +343,17 @@ class StoragePanel(QWidget):
         unknown=sum(i.size for i in result.items if i.category=='unknown')
         tool=sum(i.size for i in result.items if i.category=='uv')
         protected=sum(i.size for i in result.items if not i.manual_cleanable and i.category not in {'unknown','uv'})
+        # 2026-10-16 (user: runtimes 17 GB): runtimes are hard-linked to the
+        # download cache; Explorer adds every link, this counts each file once.
+        usage=result.runtime_usage;runtime=''
+        if usage is not None:
+            runtime='\n'+tr('运行环境实际占用 {size}',size=format_bytes(usage.unique_bytes))
+            if usage.logical_bytes>usage.unique_bytes:
+                runtime+=tr('（同一文件只算一次；资源管理器会把硬链接重复相加，显示约 {size}）',size=format_bytes(usage.logical_bytes))
+            runtime+=tr('；其中只有下载缓存在用 {size}（维护下载缓存最多能释放这么多）',size=format_bytes(usage.cache_only_bytes))
+            if not usage.deduplicated:runtime+=tr('；此磁盘不提供文件编号，按逻辑大小统计')
         self.summary.setText(tr('应用管理范围（逻辑）：')+format_bytes(result.total_bytes)+tr('；手动可清理（含待确认历史）：')+format_bytes(result.manual_cleanable_bytes)+
-            tr('；实际占用／保护：')+format_bytes(protected)+tr('；归属未确认：')+format_bytes(unknown)+tr('；官方工具范围：')+format_bytes(tool)+tr('；模型单列：')+model+'\n'+state+
+            tr('；实际占用／保护：')+format_bytes(protected)+tr('；归属未确认：')+format_bytes(unknown)+tr('；官方工具范围：')+format_bytes(tool)+tr('；模型单列：')+model+runtime+'\n'+state+
             ('\n'+'\n'.join(result.errors[:3]) if result.errors else ''))
         self._update_media_controls()
         self._update_clean_controls()
@@ -406,6 +439,13 @@ class StoragePanel(QWidget):
             stamp=datetime.datetime.fromtimestamp(uv['time']).strftime('%Y-%m-%d %H:%M')
             lines.append(tr('上次运行库缓存维护：')+stamp+'\n'+_uv_result_text(uv))
         except (ValueError,KeyError,TypeError,OverflowError):pass
+        runtime=_read_receipt(self.service,'last-runtime-cleanup.json')
+        try:
+            stamp=datetime.datetime.fromtimestamp(runtime['time']).strftime('%Y-%m-%d %H:%M')
+            lines.append(tr('上次自动清理旧版本运行环境：')+stamp+tr('；删除 ')+str(len(runtime['removed']))+tr(' 个，逻辑删除 ')+
+                format_bytes(runtime['logical_removed_bytes'])+(tr('；保留 ')+str(len(runtime['kept']))+tr(' 个（原因见详情）') if runtime['kept'] else '')+
+                (tr('；失败 ')+str(len(runtime['failures'])) if runtime['failures'] else ''))
+        except (ValueError,KeyError,TypeError,OverflowError):pass
         self.last.setText('\n'.join(lines))
     def show_details(self):
         dialog=QDialog(self);dialog.setWindowTitle(tr('存储清理详情'));dialog.resize(760,520)
@@ -413,6 +453,7 @@ class StoragePanel(QWidget):
         payload=dict(scan=asdict(self.scan_result) if self.scan_result else None,
             last_cleanup=_read_receipt(self.service,'last-cleanup.json'),
             last_uv_cleanup=_read_receipt(self.service,'last-uv-cleanup.json'),
+            last_runtime_cleanup=_read_receipt(self.service,'last-runtime-cleanup.json'),
             last_model_download_cleanup=_read_receipt(self.service,'last-model-download-cleanup.json'))
         text.setPlainText(json.dumps(payload,ensure_ascii=False,indent=2));layout.addWidget(text)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close);buttons.rejected.connect(dialog.reject);layout.addWidget(buttons);dialog.exec()
@@ -467,6 +508,12 @@ class IdleStorageMaintenance:
     def stop(self):
         self.cancel.set();self.timer.stop()
         if self.worker:self.worker.cancel.set()
+    def request_soon(self,delay_ms=5000):
+        """After a successful install, maintain now instead of within six hours (2026-10-16).
+        check() still waits until nothing else runs; the 15-minute timer retries until then."""
+        if self.cancel.is_set():return
+        self.last_attempt=0
+        QTimer.singleShot(delay_ms,self.owner,self.check)
     def check(self):
         self.timer.start()
         if self.cancel.is_set() or app_busy(self.owner):return

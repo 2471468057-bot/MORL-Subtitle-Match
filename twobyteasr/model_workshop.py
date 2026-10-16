@@ -6441,6 +6441,12 @@ class ModelWorkshopPage(QWidget):
         reset_preflight_cache()
         self.refresh()
         self._sync_download_activity()
+        if ok:
+            # 2026-10-16 (user: runtimes 17 GB): drop the superseded runtime and
+            # the kept PyTorch installers now, not within six hours (waits for idle).
+            maintenance = getattr(self.window(), '_storage_maintenance', None)
+            if maintenance is not None:
+                maintenance.request_soon()
         # Completion and failure remain in the persistent download dialog. A
         # second native message box duplicated state and reintroduced dark
         # Windows chrome after the task had already finished.

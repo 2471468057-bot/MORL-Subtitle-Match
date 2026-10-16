@@ -145,6 +145,7 @@ class ScanResult:
     cancelled: bool = False
     roots: list[str] = field(default_factory=list)
     model_bytes: int | None = None
+    runtime_usage: object | None = None  # runtime_usage.RuntimeUsage
     @property
     def complete(self):
         return not self.cancelled and not self.errors
@@ -416,6 +417,11 @@ class StorageService:
                     result.model_bytes = total
             except OSError as exc:
                 result.errors.append(f'模型统计不完整: {exc}')
+        if include_models and not cancel.is_set():
+            # Shown, never cleaned here: hard links counted once (2026-10-16).
+            from .runtime_usage import runtime_disk_usage
+            usage = runtime_disk_usage(self.paths.user_data_root / 'runtimes', cancel.is_set)
+            result.runtime_usage = usage if usage is not None and usage.complete else None
         result.items.sort(key=lambda i:(i.category,-i.size,i.path))
         return result
 
