@@ -55,6 +55,13 @@ class _DialogInputGuard(QObject):
         while current is not None:
             if current is self.dialog:
                 return False
+            # 嵌套模态（2026-10-17）：对话框里再弹出的 SpringDialog 不在本
+            # 对话框的 widget 祖先链上（QDialog 会把 child dialog 提升为独立
+            # 顶层窗口），原实现会把内层对话框的输入也拦掉，两层守卫互相
+            # 吞事件导致内层弹窗无法关闭/点击。凡是 SpringDialog 一律放行：
+            # 内层自己装了守卫负责拦截它的外部输入，这里不必越权代管。
+            if isinstance(current, SpringDialog):
+                return False
             current = current.parentWidget()
         # Popups and child dialogs belong to the dialog's widget ancestry.
         # Only its own backdrop may accept input outside that ancestry.

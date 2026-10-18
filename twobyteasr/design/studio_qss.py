@@ -24,21 +24,23 @@ class StudioComponentTokens:
 def build_studio_component_qss(theme, tokens: StudioComponentTokens | None = None) -> str:
     t = tokens or StudioComponentTokens()
     return f"""
-/* Timeline geometry belongs to this bar, independently of dialog controls. */
+/* Timeline geometry belongs to this bar, independently of dialog controls.
+   2026-10-18（用户："不要那么紧凑"）：按钮从 32×34 放到 38×36，文字按钮的
+   左右内边距 10→16，组合框 32→34，图标与文字之间不再贴着边。 */
 QWidget#studioTimelineCommandBar QToolButton#studioTool {{
-    min-width: 32px; min-height: 34px; max-height: 34px;
+    min-width: 38px; min-height: 36px; max-height: 36px;
     padding: 0; font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
 }}
 QWidget#studioTimelineCommandBar QPushButton#studioButton {{
-    min-height: 34px; max-height: 34px; padding: 0 10px;
+    min-height: 36px; max-height: 36px; padding: 0 16px;
     font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 600;
 }}
 QWidget#studioTimelineCommandBar QCheckBox {{
-    min-height: 34px; padding: 0; spacing: 8px;
+    min-height: 36px; padding: 0; spacing: 8px;
     font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
 }}
 QWidget#studioTimelineCommandBar QComboBox {{
-    min-height: 32px; max-height: 32px; padding: 0 8px;
+    min-height: 34px; max-height: 34px; padding: 0 10px;
     font-family: {UI_FONT_STACK}; font-size: {t.label_size}px;
 }}
 QLabel#projectRowStatus {{
@@ -129,7 +131,7 @@ QPlainTextEdit#performanceDetails {{
 QFrame#studioToolbar QPushButton[buttonRole="secondary"], QFrame#studioToolbar QPushButton[buttonRole="ghost"],
 QFrame#studioToolbar QPushButton[buttonRole="toggle"] {{
     background: transparent; color: {theme.text_secondary}; border: 1px solid transparent;
-    border-radius: {t.control_radius}px; min-height: 32px; max-height: 32px; padding: 0 10px;
+    border-radius: {t.control_radius}px; min-height: 36px; max-height: 36px; padding: 0 14px;
     font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 500;
 }}
 QFrame#studioToolbar QPushButton[buttonRole="secondary"]:hover, QFrame#studioToolbar QPushButton[buttonRole="ghost"]:hover,
@@ -138,7 +140,7 @@ QFrame#studioToolbar QPushButton[buttonRole="toggle"]:checked {{
     background: {theme.surface_elevated}; color: {theme.text}; border-color: {theme.border_strong}; }}
 QFrame#studioToolbar QPushButton[buttonRole="secondary"]:focus, QFrame#studioToolbar QPushButton[buttonRole="ghost"]:focus,
 QFrame#studioToolbar QPushButton[buttonRole="toggle"]:focus {{ border-color: {theme.focus}; }}
-QFrame#studioToolbar QPushButton[buttonRole="primary"] {{ min-height: 32px; max-height: 32px; padding: 0 14px; font-size: {t.label_size}px; }}
+QFrame#studioToolbar QPushButton[buttonRole="primary"] {{ min-height: 36px; max-height: 36px; padding: 0 18px; font-size: {t.label_size}px; }}
 QFrame#studioToolbar QPushButton[emphasis="accent"] {{ color: {theme.accent_text}; font-weight: 600; }}
 QFrame#studioToolbar QPushButton[emphasis="accent"]:hover {{ background: {theme.accent_tint}; color: {theme.accent_text}; }}
 QFrame#studioToolbar QPushButton[hasMenu="true"] {{ padding-right: 24px; }}
@@ -175,11 +177,11 @@ QPushButton#reviewEntryButton:focus {{ border-color: {theme.focus}; }}
 QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] {{
     background: {theme.surface}; border: 1px solid {theme.border}; border-radius: 12px; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"] {{
-    background: {theme.accent}; color: {theme.text_on_accent}; border: 0; border-radius: 16px; padding: 0;
-    min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }}
+    background: {theme.accent}; color: {theme.text_on_accent}; border: 0; border-radius: 18px; padding: 0;
+    min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; }}
 QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] QLineEdit#timelineTimecodeInput,
 QWidget#studioTimelineCommandBar QWidget[commandGroup="transport"] QComboBox {{
-    min-height: 30px; max-height: 30px; }}
+    min-height: 32px; max-height: 32px; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:hover {{ background: {theme.accent_hover}; }}
 QWidget#studioTimelineCommandBar QToolButton#studioTool[transportRole="play"]:pressed {{ background: {theme.accent_pressed}; }}
 QWidget#studioTimelineCommandBar QCheckBox#timelineToggleChip, QWidget#projectRangeBar QCheckBox#timelineToggleChip {{

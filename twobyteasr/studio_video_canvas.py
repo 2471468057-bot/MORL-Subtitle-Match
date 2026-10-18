@@ -953,10 +953,14 @@ class MpvCanvas(QFrame):
         self._video_display_size = (0, 0)
         try:
             self._ensure_controller_started()
-            self._startup_play_requested = True
+            # 2026-10-18（用户："默认不要播放视频"）：载入后停在首帧，由用户点
+            # 播放才开始。原先这里置 True，媒体就绪后会自动 set_paused(False)。
+            self._startup_play_requested = False
             self._startup_started_at = perf_counter()
             self._set_startup_state("MEDIA_OPENING")
             self.controller.set_paused(True)
+            # 播放器已就绪：把画幅填充设置补发一次（工程载入时可能还没起）。
+            self._reapply_canvas_fill()
             # Restore the clock before posting loadfile. Resetting it to zero
             # afterwards makes the initial media-graph binding seek back to
             # zero, while the saved timeline still selects its themed cue.
@@ -2719,6 +2723,43 @@ class MpvCanvas(QFrame):
         self._adopt_playback_snapshot(snapshot)
         if not paused:
             self._end_seek_hold(resumed=True)
+        # The 60 Hz visual tick only has work while the transport is running.
+        # Leaving it armed during pause woke the GUI thread every 16 ms just to
+        # bail out early, which showed up as general sluggishness. The 150 ms
+        # reconcile timer stays alive: it still watches the audio tail clock and
+        # the mpv lifecycle while paused.
+        if paused:
+            self._timer.stop()
+        elif not self._timer.isActive():
+            self._timer.start()
+
+    def set_canvas_fill(self, width: int, height: int) -> None:
+        """把画面填满画幅（panscan）。记住参数，媒体就绪后会再应用一次。"""
+        try:
+            self._canvas_fill_size = (max(2, int(width or 0)), max(2, int(height or 0)))
+        except (TypeError, ValueError):
+            self._canvas_fill_size = None
+        setter = getattr(self.controller, "set_canvas_fill", None)
+        if callable(setter):
+            setter(int(width or 0), int(height or 0))
+
+    def _reapply_canvas_fill(self) -> None:
+        """媒体/播放器就绪后补一次填充设置。
+
+        工程载入时 mpv 子进程可能还没起，命令会丢；媒体切换后也需要重新应用。
+        """
+        size = getattr(self, "_canvas_fill_size", None)
+        if not size:
+            return
+        setter = getattr(self.controller, "set_canvas_fill", None)
+        if callable(setter) and self.controller is not None and getattr(self.controller, "running", False):
+            setter(size[0], size[1])
+
+    def set_video_fill(self, enabled: bool) -> None:
+        """裁切填充视频区（达芬奇的"整幅缩放并裁切"语义），用于竖屏画幅。"""
+        setter = getattr(self.controller, "set_video_fill", None)
+        if callable(setter):
+            setter(bool(enabled))
 
     def set_speed(self, value: float) -> None:
         if not self.controller:

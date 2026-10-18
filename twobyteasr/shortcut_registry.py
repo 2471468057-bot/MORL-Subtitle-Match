@@ -87,7 +87,6 @@ ACTIONS: tuple[ShortcutAction, ...] = (
     _a('add_io_candidate', '将 I/O 加入剪辑候选', 'Shift+I', category='剪辑'),
     # Studio — file and panels
     _a('save', '保存工程', 'Ctrl+S', category='文件'),
-    _a('save_current_frame', '保存当前帧', 'Ctrl+Alt+F', category='文件'),
     _a('performance_panel', '播放性能面板', 'Ctrl+Shift+P', category='文件'),
     # Studio — review mode
     _a('toggle_review', '进入 / 退出审核模式', 'R', category='审核'),

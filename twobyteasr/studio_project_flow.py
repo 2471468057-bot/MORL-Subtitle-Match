@@ -37,27 +37,19 @@ class StudioProjectFlowMixin:
     def _confirm_leave_project(self, message: str) -> bool:
         return self.project_controller.dirty_guard.confirm(message.rstrip("？?"))
 
-    def _request_back(self) -> None:
-        export = getattr(self, "export_workspace", None)
-        if export is not None and export.isVisible():
-            self._close_export_workspace()
-            return
-        if self.project is not None and getattr(self, "_project_view_state", "") == "open":
-            self._request_return_library()
-            return
-        self._request_return_home()
+    def _show_hub_preferences(self) -> None:
+        """工具栏「应用设置」。工程库已删除，设置入口保留。"""
+        from .application_settings import open_application_settings
 
-    def _request_return_library(self) -> None:
-        if not self._confirm_leave_project("返回工程库前是否保存当前兔白字幕修改？"):
-            return
-        self.show_project_hub(skip_dirty_guard=True)
+        open_application_settings(
+            self,
+            on_saved=self._after_application_settings_saved,
+            reset_layout=getattr(self, "_reset_studio_layout_preferences", None),
+        )
 
-    def _request_return_home(self) -> None:
-        if not self._confirm_leave_project("返回字幕识别前是否保存当前兔白字幕修改？"):
-            return
-        self._close_export_workspace()
-        self.show_project_hub(skip_dirty_guard=True)
-        self.return_requested.emit()
+    def _after_application_settings_saved(self) -> None:
+        if self.project:
+            self._schedule_autosave()
 
     def _close_project_session(self, reason: str = "") -> int:
         """Unified A→Home/B boundary; services persist, project work does not."""
@@ -213,39 +205,56 @@ class StudioProjectFlowMixin:
         return generation
 
     def _sync_navigation_chrome(self) -> None:
-        hub = getattr(self, "_project_view_state", "hub") == "hub" or self.project is None
-        export = getattr(self, "export_workspace", None)
-        export_open = export is not None and export.isVisible()
-        if hasattr(self, "studio_back_button"):
-            if export_open:
-                self.studio_back_button.setVisible(True)
-                bind_text(self.studio_back_button, "返回兔白字幕", property="toolTip")
-            elif hub:
-                self.studio_back_button.setVisible(False)
-            else:
-                self.studio_back_button.setVisible(True)
-                bind_text(self.studio_back_button, "返回工程库", property="toolTip")
-        if hasattr(self, "studio_home_button"):
-            bind_text(self.studio_home_button, "返回字幕识别", property="toolTip")
-        if hasattr(self, "studio_library_button"):
-            bind_text(self.studio_library_button, "兔白字幕工程库", property="toolTip")
-            self.studio_library_button.setChecked(
-                bool(hub and not export_open)
-            ) if hasattr(self.studio_library_button, "setChecked") else None
-        # 2026-09-06（用户四图反馈·图一）：双语/剪辑助手只在工程打开后的编辑态显示，
-        # 主页（hub）右上角不再出现这两个按钮。双语按钮若已被收进 overflow 菜单
-        # （_studio_toolbar_overflow_widgets，常驻隐藏），此处不得把它重新显示回工具栏。
-        editing = bool(not hub and not export_open)
+        # 工程库与导出工作区都已删除：工具栏只反映编辑态，没有整页切换。
+        editing = True
         overflow = set(
             id(widget) for widget in getattr(self, "_studio_toolbar_overflow_widgets", ())
         )
+        # Anything parked in the overflow menu stays out of the bar for good.
+        for widget in getattr(self, "_studio_toolbar_overflow_widgets", ()):
+            widget.setVisible(False)
         if hasattr(self, "studio_clip_assistant_button"):
-            self.studio_clip_assistant_button.setVisible(editing and id(self.studio_clip_assistant_button) not in overflow)
-        toggle = getattr(self, "bilingual_toggle_button", None)
-        if toggle is not None and id(toggle) not in overflow:
-            toggle.setVisible(editing)
+            self.studio_clip_assistant_button.setVisible(False)
         for button in getattr(self, "_studio_compact_commands", ()):
             button.setVisible(editing and self.width() >= (1800 if current_language() != "zh" else 1480))
+        # 2026-10-18（用户："画面增加多一点的自适应功能 感觉整个ui的挤挤的"）：
+        # 工具栏按钮在窄窗口里会换行/挤压。宽度不够时把按钮文字收掉、只留图标
+        # （tooltip 仍在），回到宽窗口再恢复文字。
+        self._sync_toolbar_icon_only()
+
+    def _sync_toolbar_icon_only(self) -> None:
+        """窄窗口下工具栏按钮只显示图标，避免换行拥挤。"""
+        bar = getattr(self, "studio_toolbar", None)
+        if bar is None:
+            return
+        # 用工具栏自身可用宽度判断（比窗口宽度准确：还要减去两侧边距）。
+        width = int(bar.width()) or int(self.width())
+        icon_only = width < 1120
+        if getattr(self, "_toolbar_icon_only", None) == icon_only:
+            return
+        self._toolbar_icon_only = icon_only
+        for name in (
+            "cue_list_toggle_button", "context_expand_button", "bilingual_toggle_button",
+            "punctuation_button", "speaker_manager_button", "studio_settings_button",
+            "review_mode_button", "studio_find_replace_button", "studio_script_match_button",
+        ):
+            button = getattr(self, name, None)
+            if button is None:
+                continue
+            text = getattr(button, "_full_text", None)
+            if text is None:
+                text = button.text()
+                button._full_text = text
+            if icon_only:
+                # 只留图标：文字清空但保留 tooltip（tooltip 里已有说明）。
+                if button.icon() is None or button.icon().isNull():
+                    continue  # 没图标的按钮不能只留空白
+                if not text:
+                    continue
+                button.setText("")
+            else:
+                if text and not button.text():
+                    button.setText(text)
 
     def dragEnterEvent(self, event) -> None:
         paths = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()]

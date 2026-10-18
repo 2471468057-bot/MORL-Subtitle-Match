@@ -1404,8 +1404,6 @@ def tutorial_steps(window, part: str = 'basic') -> list[TourStep]:
                  ready=studio_ready, anim='punct', enter=quiet(), page=to_studio),
         TourStep('导出字幕：选格式和文件夹', studio_part('studio_export_button'), ready=studio_ready,
                  anim='export', enter=quiet(), page=to_studio),
-        TourStep('压制成片：把字幕烧进视频', studio_part('studio_render_button'), ready=studio_ready,
-                 anim='burn', enter=quiet(), page=to_studio),
         TourStep('完成！现在放入你自己的影音开始吧', next_label='回到首页', enter=None),
     ]
     return advanced if part == 'advanced' else basic

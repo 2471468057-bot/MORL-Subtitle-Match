@@ -59,7 +59,10 @@ def prepare_controls(root: QWidget) -> None:
         if isinstance(widget, QAbstractButton) and not widget.property("buttonRole"):
             role = aliases.get(widget.objectName())
             if role:
-                button_role(widget, role, size="compact" if role in {"toolbar", "toggle"} else "default")
+                # 2026-10-18（用户："不要那么紧凑"）：工具栏图标按钮原先是 compact
+                # （28px），与旁边 36px 的文字按钮高低不齐、也显得拥挤；改为
+                # default（36px）。面板切换按钮（toggle）保持紧凑，避免撑坏窄面板。
+                button_role(widget, role, size="compact" if role == "toggle" else "default")
         if widget.property("fieldWidth") or widget.minimumWidth() == widget.maximumWidth():
             continue
         if isinstance(widget, QAbstractSpinBox):

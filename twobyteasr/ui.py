@@ -70,6 +70,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -700,7 +701,7 @@ class WindowTitleBar(QFrame):
         # The product brand belongs to the main header below.  Keeping the
         # draggable chrome intentionally quiet prevents a duplicate wordmark
         # while the title bar still reads as part of the same warm surface.
-        self.title = QLabel("2ByteASR  兔白字幕")
+        self.title = QLabel("MORL 字幕匹配")
         self.title.setObjectName("windowChromeTitle")
         self.title.hide()
         row.addStretch(1)
@@ -3149,7 +3150,7 @@ class GuidedSetupDialog(SpringDialog):
         if self._apple_silicon:
             self.PRESETS["apple_local"] = ("mlx_qwen3_asr", "mlx_qwen_aligner", "off")
             self.PRESETS["online_align"] = ("api", "mlx_qwen_aligner", "off")
-        bind_text(self, '首次使用设置 - 2ByteASR', property='windowTitle')
+        bind_text(self, '首次使用设置 - MORL 字幕匹配', property='windowTitle')
         self.setMinimumSize(760, 610)
         self.resize(820, 760)
         layout = QVBoxLayout(self)
@@ -3699,6 +3700,42 @@ class ModalHost(QFrame):
         if not self.card.geometry().contains(e.position().toPoint()):
             self._request_close()
 
+    def resizeEvent(self, event):
+        """Keep an open card centred and inside the window when it resizes.
+
+        show_content() places the card once; without this the dialog keeps its
+        original geometry and overflows after the user resizes the window.
+        """
+        super().resizeEvent(event)
+        if not self.isVisible() or not self.card.isVisible():
+            return
+        parent = self.parentWidget()
+        if parent is not None:
+            # Cover the whole parent so the backdrop keeps dimming everything.
+            self.setGeometry(parent.rect())
+        self.backdrop.setGeometry(self.rect())
+        self._relayout_card()
+
+    def _relayout_card(self) -> None:
+        """Recompute the card rectangle from the current window size."""
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        pr = parent.rect()
+        avail_w = max(1, pr.width() - 24)
+        avail_h = max(1, pr.height() - 24)
+        # Prefer the size the caller asked for, shrunk to fit the window.
+        want_w, want_h = getattr(self, "_card_want", (0, 0))
+        cw = max(320, min(want_w or avail_w, avail_w))
+        ch = max(240, min(want_h or avail_h, avail_h))
+        if getattr(self, "_dock", "") == "right":
+            cx = pr.width() - cw - 12
+            cy = max(12, (pr.height() - ch) // 2)
+        else:
+            cx = (pr.width() - cw) // 2
+            cy = max(12, (pr.height() - ch) // 2)
+        self.card.setGeometry(cx, cy, cw, ch)
+
     def _request_close(self):
         # Record close click time for real desktop "close click → dialog gone" measurement.
         self._close_click_ts = time.perf_counter() if GUI_PROFILE_ENABLED else None
@@ -3720,6 +3757,7 @@ class ModalHost(QFrame):
         on_closed=None,
         *,
         retain_content: bool = False,
+        dock: str = "",
     ):
         """Show the card and stable backdrop at their final state immediately."""
         self._click_ts = time.perf_counter() if GUI_PROFILE_ENABLED else None
@@ -3772,14 +3810,23 @@ class ModalHost(QFrame):
             hinted_w = hinted_h = 0
         target_w = max((size and size[0]) or hinted_w or 520, (min_size and min_size[0]) or 420)
         target_h = max((size and size[1]) or hinted_h or 420, (min_size and min_size[1]) or 320)
+        # Remember the requested size so resizeEvent can re-fit the card.
+        self._card_want = (target_w, target_h)
+        self._dock = (dock or "").strip().lower()
 
         parent = self.parentWidget()
         if parent:
             pr = parent.rect()
             cw = min(target_w, max(1, pr.width() - 24))
             ch = min(target_h, max(1, pr.height() - 24))
-            cx = (pr.width() - cw) // 2
-            cy = max(12, (pr.height() - ch) // 2)
+            if self._dock == "right":
+                # 贴右停泊：只改横坐标到窗口右缘，高度用请求值（强制全高会
+                # 触发这个重型页在滚动容器内的布局自激递归）。
+                cx = pr.width() - cw - 12
+                cy = max(12, (pr.height() - ch) // 2)
+            else:
+                cx = (pr.width() - cw) // 2
+                cy = max(12, (pr.height() - ch) // 2)
             self.card.setGeometry(cx, cy, cw, ch)
             self.setGeometry(pr)
         else:
@@ -3945,7 +3992,10 @@ class MainWindow(QWidget):
         self.legacy = legacy
         self.pipeline = pipeline
         self.startup_self_test = startup_self_test
-        self._recognition_page_deferred = startup_page == "project_library"
+        # "studio" skips both the recognition home and the project library and
+        # opens the editing workspace directly (used by the DaVinci panel).
+        self._start_in_studio = startup_page == "studio"
+        self._recognition_page_deferred = startup_page in {"project_library", "studio"}
         self.profile_store = ProjectProfileStore()
         self.current_project_profile: ProjectProfile | None = None
         # 方案切换守卫与脏标：_applying_profile 期间控件信号不标记脏、不回写方案。
@@ -3982,7 +4032,12 @@ class MainWindow(QWidget):
             | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinMaxButtonsHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        bind_text(self, tr('2ByteASR  兔白字幕') + ('【隔离测试】' if os.environ.get('TWOBYTEASR_TEST_ROOT') else ''), property='windowTitle')
+        # 2026-10-18（用户："圆角" / "首次进入会卡住这个画面"）：圆角改用 Windows 11
+        # 的 DWM 原生窗口圆角（系统合成器绘制，零开销、四角天然透明，且不需要
+        # WA_TranslucentBackground——那个属性会让窗口背景无法被正确擦除，首帧出现
+        # 整窗重影/面板错位，播放后每帧重绘才把残影盖掉）。见 _apply_native_round_corners。
+        self._window_corner_radius = 14
+        bind_text(self, tr('MORL 字幕匹配') + ('【隔离测试】' if os.environ.get('TWOBYTEASR_TEST_ROOT') else ''), property='windowTitle')
         self.setWindowIcon(_app_icon())
         self.setMinimumSize(900, 500)
         self.resize(1320, 880)
@@ -4084,13 +4139,96 @@ class MainWindow(QWidget):
         # P0: background preload of model install status + term index after first paint.
         # Never on click path; cheap FS/metadata only. No spinners.
         if self._recognition_page_deferred:
-            self._switch_page(self.studio_page)
+            # Building the Studio widget tree costs ~2.5 s. Doing it here would
+            # delay the window itself from appearing, so the build is queued
+            # for the first event-loop turn: the shell paints immediately and
+            # the workspace fills in a moment later.
+            QTimer.singleShot(0, self, self._deferred_studio_entry)
         else:
             QTimer.singleShot(0, self, self._background_preload)
             QTimer.singleShot(0, self, self._restore_last_project_profile)
         # Local MCP access (2026-10-12, off by default): one settings read;
         # the pipe and its modules load only when the user turned it on.
         QTimer.singleShot(0, self, self._start_mcp_bridge)
+
+    def _deferred_studio_entry(self):
+        """Paint the shell first, then build and show the Studio page.
+
+        The studio page tree is the single most expensive part of startup
+        (~2.5 s). Entering it synchronously inside __init__ keeps the whole
+        window off screen until it finishes; deferring it to the first event
+        loop turn lets the frame appear immediately.
+        """
+        # A busy cursor explains the gap the user sees on a blank frame.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._switch_page(self.studio_page)
+            if self._start_in_studio:
+                # Straight into the editor, not the project hub.
+                self._start_in_studio_workspace()
+        except Exception as exc:  # noqa: BLE001 - startup must still finish
+            print(f"[Studio] 进入工作台失败：{exc}", file=sys.stderr)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _start_in_studio_workspace(self):
+        """Open the newest project so the window lands in the editor itself.
+
+        The DaVinci integration launches the app this way: no home page, no
+        project library, just the workspace with the most recently edited
+        project already loaded. With no project on disk the hub stays visible,
+        which is the only sensible fallback.
+        """
+        try:
+            studio = self.studio_page
+            if studio is None:
+                return
+            # Hub-driven apps keep the empty state visible while project is None.
+            if getattr(studio, "project", None) is not None:
+                return
+            newest = self._newest_project_path()
+            if newest:
+                self.open_studio_project(newest, mode="edit", source="studio_recognition")
+        except Exception as exc:  # noqa: BLE001 - startup must never crash on this
+            print(f"[Studio] 直接进入编辑界面失败：{exc}", file=sys.stderr)
+
+    @staticmethod
+    def _newest_project_path():
+        """Path of the most recently modified .2byteproj, or '' when none exist.
+
+        Autosave mirrors are skipped: their filenames are internal hashes, and
+        opening one showed a hash as the window title instead of the media name
+        the user knows the project by.
+        """
+        try:
+            from .project_library import project_search_roots
+        except Exception:  # noqa: BLE001 - older layouts may not expose this
+            project_search_roots = None
+        roots = []
+        try:
+            if project_search_roots is not None:
+                roots = [Path(p) for p in project_search_roots()]
+        except Exception:  # noqa: BLE001
+            roots = []
+        if not roots:
+            from .runtime_paths import user_data_root
+            roots = [Path(user_data_root()) / "Projects"]
+        newest, newest_mtime = "", -1.0
+        for root in roots:
+            try:
+                candidates = list(Path(root).rglob("*.2byteproj"))
+            except OSError:
+                continue
+            for candidate in candidates:
+                if candidate.parent.name.lower() == "autosave":
+                    continue
+                try:
+                    mtime = candidate.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime > newest_mtime:
+                    newest, newest_mtime = str(candidate), mtime
+        return newest
 
     def _start_mcp_bridge(self):
         try:
@@ -4270,7 +4408,7 @@ class MainWindow(QWidget):
         if hasattr(self, "phase_cards") and hasattr(self, "_active_stages"):
             self._refresh_progress_cards()
             self._update_progress_clock()
-        bind_text(self, tr('2ByteASR  兔白字幕') + ('【隔离测试】' if os.environ.get('TWOBYTEASR_TEST_ROOT') else ''), property='windowTitle')
+        bind_text(self, tr('MORL 字幕匹配') + ('【隔离测试】' if os.environ.get('TWOBYTEASR_TEST_ROOT') else ''), property='windowTitle')
         if hasattr(self, "window_title_bar"):
             self.window_title_bar.set_title(
                 tr("2ByteASR  兔白字幕")
@@ -4402,7 +4540,7 @@ class MainWindow(QWidget):
         self.brand.setObjectName("brand")
         self.brand.setTextFormat(Qt.TextFormat.RichText)
         self.brand.setAccessibleName("2ByteASR")
-        subtitle = QLabel("兔白字幕")
+        subtitle = QLabel("MORL 字幕匹配")
         self.header_subtitle = subtitle
         subtitle.setObjectName("headerSubtitle")
         self.header_status = QLabel("")
@@ -4527,6 +4665,8 @@ class MainWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # 圆角：Win11 DWM 原生圆角，只需应用一次。
+        self._apply_window_round_mask()
         if not getattr(self, '_initial_focus_settled', False):
             self._initial_focus_settled = True
             # Start with no control focused; the first Tab reaches the header.
@@ -4563,6 +4703,14 @@ class MainWindow(QWidget):
             return
         hidden = self.isMaximized()
         width, height, edge, corner = self.width(), self.height(), 7, 12
+        # 拖拽窗口时这里每帧都被调用：raise_() 会改原生堆叠顺序，是这条路径里
+        # 最贵的一步。尺寸没变就整体跳过；最大化状态没变就不再重复 raise。
+        state = (width, height, hidden)
+        previous = getattr(self, "_resize_handles_state", None)
+        if previous == state:
+            return
+        self._resize_handles_state = state
+        needs_raise = previous is None or previous[2] != hidden
         geometry = {
             "left": QRect(0, corner, edge, max(0, height - corner * 2)),
             "right": QRect(max(0, width - edge), corner, edge, max(0, height - corner * 2)),
@@ -4576,7 +4724,8 @@ class MainWindow(QWidget):
         for name, handle in self._resize_handles.items():
             handle.setGeometry(geometry[name])
             handle.setVisible(not hidden)
-            handle.raise_()
+            if needs_raise:
+                handle.raise_()
 
     def _page_changed(self, index: int):
         current = self.pages.widget(index)
@@ -4711,10 +4860,45 @@ class MainWindow(QWidget):
             # Never break startup on geometry heuristics
             pass
 
+    def _save_startup_snapshot(self):
+        """Persist a small preview of the window for the launcher's quick open.
+
+        The Studio needs several seconds to build its widget tree. Rather than
+        staring at an empty frame, the next launch shows this image at once and
+        swaps to the live window when it is ready.
+
+        The preview is a compressed JPEG: the launcher reads it into memory and
+        ships it over IPC on every open, so a 500 KB PNG would cost ~700 KB of
+        base64 per launch. A 560 px wide JPEG is roughly 30 KB.
+        """
+        try:
+            from .runtime_paths import user_data_root
+            target_dir = Path(user_data_root()) / "snapshots"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            pixmap = self.grab()
+            if pixmap.isNull() or pixmap.width() < 200 or pixmap.height() < 150:
+                return
+            preview = pixmap.scaledToWidth(
+                min(560, pixmap.width()),
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            preview.save(str(target_dir / "studio-preview.jpg"), "JPG", 78)
+            # Drop the old heavy PNGs left by earlier builds.
+            for stale in target_dir.glob("studio-*.png"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001 - a missing snapshot is harmless
+            pass
+
     def closeEvent(self, event):
         try:
             studio = self.built_page("studio")
             if studio is not None:
+                # Save a window snapshot first: relaunch shows it instantly
+                # while the real window is still being built.
+                self._save_startup_snapshot()
                 studio.close_page()
             if getattr(self, "_persist_geometry", False):
                 settings = QSettings("2ByteASR", "2ByteASR")
@@ -4844,8 +5028,6 @@ class MainWindow(QWidget):
                 # its historical recognition settings to future jobs.
                 if mode == "review":
                     self.studio_page._activate_filter("priority")
-                elif mode == "render":
-                    self.studio_page._open_render_dialog()
             if on_ready is not None:
                 _base_ready = ready
 
@@ -4860,14 +5042,19 @@ class MainWindow(QWidget):
             self.studio_page.open_project(candidate, on_ready=ready, skip_dirty_guard=skip_dirty_guard,
                 expected_result_ref=expected_result_ref)
         else:
+            # 没有工程时不再显示工程库：整个应用依附达芬奇时间线，导航只进
+            # 编辑器。show_project_hub 现在只清会话、不显示工程库。
             self.studio_page.show_project_hub()
             self._retry_pending_recognition_reload()
 
     def _return_to_settings(self):
-        self._ensure_recognition_page()
-        self._refresh_available_asr_choices()
-        self._restore_global_recognition_plan_for_home()
-        self._switch_page(self.settings_scroll)
+        """（已停用）不再切到识别首页。
+
+        2026-10-18（用户："我要完全删除出来我这个主页面以外的所有页面"）：
+        识别首页（settings_scroll）不再作为可达页面。识别设置已在 Studio 编辑器
+        的「识别字幕」弹窗里完整提供，这里保持当前页面不动。
+        """
+        return
 
     def _restore_global_recognition_plan_for_home(self) -> None:
         """返回主页只刷新当前设置的视图；历史方案书签不拥有设置写权限。"""
@@ -4899,7 +5086,10 @@ class MainWindow(QWidget):
             modal = getattr(self, "_modal_host", None)
             if modal is not None:
                 modal.hide_content()
-            self._switch_page(self.settings_scroll)
+            # 2026-10-18（用户："我要完全删除出来我这个主页面以外的所有页面"）：
+            # 这里原本会 _switch_page(self.settings_scroll)，把识别首页翻出来。
+            # 该页面已不再作为入口，识别设置都在编辑器内的弹窗里，所以这里不切换
+            # 页面——保持在当前 Studio 编辑器，只把识别弹窗关掉。
             return
         try:
             self.studio_page.save()
@@ -5090,11 +5280,12 @@ class MainWindow(QWidget):
         )
 
     def _open_recognition_history(self):
-        # Nav buttons are checkable and exclusive: reset the highlight that may
-        # have been left on another item when this page was visited before.
-        if hasattr(self.history_page, "restore_active_navigation"):
-            self.history_page.restore_active_navigation()
-        self._switch_page(self.history_page)
+        """（已停用）不再切到识别历史页。
+
+        2026-10-18（用户："我要完全删除出来我这个主页面以外的所有页面"）：
+        主窗口只保留 Studio 编辑器，识别历史页不再作为可达页面。
+        """
+        return
 
     def _refresh_available_asr_choices(self):
         """Refresh selectors after a model workshop install or uninstall."""
@@ -5811,8 +6002,6 @@ class MainWindow(QWidget):
         if self.worker is not None and self.worker.isRunning():
             blockers.append(tr('字幕识别正在进行'))
         studio = self.built_page('studio')
-        if getattr(getattr(studio, 'export_workspace', None), '_running', False):
-            blockers.append(tr('视频导出正在进行'))
         workshop = self.built_page('workshop')
         active_download = getattr(workshop, '_active_download_dialog', None)
         if callable(active_download) and active_download() is not None:
@@ -5938,9 +6127,12 @@ class MainWindow(QWidget):
         formats = sorted(suffix.lstrip(".").upper() for suffix in SUPPORTED_MEDIA_SUFFIXES)
         self.media_formats = QLabel("  ·  ".join(formats))
         self.media_formats.setObjectName("mediaFormats")
+        # The suffix list is one long line (~535 px) and would pin the card's
+        # minimum width; let it wrap instead.
+        self.media_formats.setWordWrap(True)
         self.media_formats.hide()
         media_text.addWidget(self.media_formats)
-        self.media_origin_label = QLabel("来自兔白字幕工程")
+        self.media_origin_label = QLabel("来自 MORL 字幕匹配工程")
         self.media_origin_label.setObjectName("studioOrigin")
         self.media_origin_label.hide()
         media_text.addWidget(self.media_origin_label)
@@ -6040,7 +6232,80 @@ class MainWindow(QWidget):
         self.studio_entry_card = studio_entry
         studio_entry.refresh_requested.connect(self._refresh_studio_entry_card)
         self._refresh_studio_entry_card()
-        surface = QFrame()
+        class _ResponsiveSurface(QFrame):
+            """QFrame that re-orients its column layout when the width shrinks.
+
+            A narrow window (or a modal card narrower than the form) stacks the
+            two columns instead of clipping the right one; above the threshold
+            the original side-by-side reading order is restored.
+            """
+
+            # Below this content width the two columns no longer fit side by
+            # side and the right one gets clipped by the card edge. The left
+            # column needs ~300 px and the right holds three cards, so anything
+            # under ~900 px of content has to stack.
+            STACK_BELOW = 900
+
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self._box = None
+                self._wide_direction = None
+                self._stacked = None
+                # Inner rows (e.g. content choice | glossary) that stack with
+                # a tighter threshold than the outer columns.
+                self._inner_rows: list[tuple[QBoxLayout, int, bool | None]] = []
+
+            def attach_columns(self, box_layout, wide_direction) -> None:
+                self._box = box_layout
+                self._wide_direction = wide_direction
+                self.apply_columns()
+
+            def attach_inner_row(self, box_layout, stack_below: int) -> None:
+                """Register an inner two-panel row for narrow-width stacking."""
+                self._inner_rows.append((box_layout, stack_below, None))
+                # Rows registered after attach_columns() missed the first
+                # evaluation; run one now so the direction starts correct.
+                self.apply_columns()
+
+            def apply_columns(self) -> None:
+                if self._box is not None:
+                    # Measure the width actually available for the columns, not
+                    # the frame's own width: the frame follows its parent's
+                    # layout and can be wider than the space the modal leaves.
+                    margins = self._box.contentsMargins()
+                    avail = self.width() - margins.left() - margins.right()
+                    stacked = avail < self.STACK_BELOW
+                    if stacked != self._stacked:
+                        self._stacked = stacked
+                        self._box.setDirection(
+                            QBoxLayout.Direction.TopToBottom if stacked
+                            else self._wide_direction
+                        )
+                # Inner rows flip at their own (tighter) thresholds.
+                for row, threshold, state in self._inner_rows:
+                    row_stacked = self.width() < threshold
+                    if row_stacked == state:
+                        continue
+                    self._inner_rows[self._inner_rows.index((row, threshold, state))] = (
+                        row, threshold, row_stacked
+                    )
+                    row.setDirection(
+                        QBoxLayout.Direction.TopToBottom if row_stacked
+                        else QBoxLayout.Direction.LeftToRight
+                    )
+
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                self.apply_columns()
+
+            def showEvent(self, event):
+                # Reparenting into the modal's scroll area does not fire a
+                # resize before the widget becomes visible, so re-evaluate on
+                # show as well.
+                super().showEvent(event)
+                QTimer.singleShot(0, self.apply_columns)
+
+        surface = _ResponsiveSurface()
         surface.setObjectName("settingsSurface")
         # P0 Resize: allow vertical growth on tall windows; keep a sensible minimum for density.
         surface.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
@@ -6049,7 +6314,9 @@ class MainWindow(QWidget):
         # 2026-10-08 home columns (user): left = content & terms, then the
         # Studio gallery; right = recognition plan, then AI segmentation.
         # Each column stacks at natural height; blocks are not forced equal.
-        surface_layout = QHBoxLayout(surface)
+        # QBoxLayout (not QHBoxLayout) so the direction can flip to vertical
+        # when the card is narrow.
+        surface_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, surface)
         surface_layout.setContentsMargins(0, 2, 0, 0)
         surface_layout.setSpacing(20)
         left = QVBoxLayout()
@@ -6077,7 +6344,9 @@ class MainWindow(QWidget):
         profile_layout.addLayout(content_head)
         # Two framed panels of equal height: content choice | terms
         # (glossary correction and the optional web check as parallel rows).
-        content_body = QHBoxLayout()
+        # QBoxLayout so _ResponsiveSurface-style stacking can flip it when the
+        # card is narrower than both panels side by side.
+        content_body = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         content_body.setSpacing(14)
         # Left: name, input and recent chips without an extra frame.
         choice_panel = QWidget()
@@ -6291,6 +6560,13 @@ class MainWindow(QWidget):
         # so the three model cards start level with the Studio card.
         page_heading.addLayout(recognition_header, 3)
         self.page_subtitle = page_subtitle
+        # The heading row (title 56 + subtitle ~294 + plan toolbar ~604) needs
+        # ~980 px side by side. In the recognition modal the card is narrower,
+        # so the descriptive subtitle hides there instead of pinning the width;
+        # the toolbar dropdowns already shrink via AdjustToMinimumContentsLength.
+        def _heading_subtitle_visible(visible: bool) -> None:
+            page_subtitle.setVisible(visible)
+        self._set_heading_subtitle_visible = _heading_subtitle_visible
         # 识别方案：三张角色模型卡（批准图核心区）
         from twobyteasr.ui_recognition import RecognitionPlanWidget
 
@@ -6321,6 +6597,11 @@ class MainWindow(QWidget):
         surface_layout.addLayout(left, 1)
         surface_layout.addLayout(produce, 2)
         layout.addWidget(surface)
+        # Let the container decide horizontal vs stacked as it is resized.
+        surface.attach_columns(surface_layout, QBoxLayout.Direction.LeftToRight)
+        # The content|glossary row stacks earlier: two panels side by side need
+        # ~760 px, less than the outer columns.
+        surface.attach_inner_row(content_body, 760)
 
         settings = self.legacy.RUNTIME_SETTINGS
         self.asr_panel = CollapsibleFrame(
@@ -8446,17 +8727,19 @@ class MainWindow(QWidget):
         os.startfile(target)
 
     def _open_ai_provider_config(self) -> None:
-        """跳到设置页并展开 AI 模型与密钥面板（重试失败项引导）。"""
-        try:
-            self._switch_page(self.settings_scroll)
-        except Exception:
-            return
-        panel = getattr(self, "ai_panel", None)
-        if panel is not None:
+        """打开模型工坊的在线 API 配置（不再跳识别首页）。
+
+        2026-10-18（用户："我要完全删除出来我这个主页面以外的所有页面"）：
+        原先这里 _switch_page(settings_scroll) 翻出识别首页再展开 AI 面板。
+        识别首页已不再可达，改为直接开模型工坊（它有自己的「在线 API」页），
+        这也是配置密钥/模型的本来的正式位置。
+        """
+        opener = getattr(self, "_open_model_workshop", None)
+        if callable(opener):
             try:
-                panel.set_expanded(True)
-                self._schedule_ai_panel_visibility(True)
-            except Exception:
+                opener()
+                return
+            except Exception:  # noqa: BLE001
                 pass
 
     def _retry_completion_stage(self, stage=None):
@@ -8607,6 +8890,36 @@ class MainWindow(QWidget):
                 button.setText("" if compact else translate(label, current_language()))
                 ui_zoom.set_size(button, min_w=36 if compact else 0)
 
+    def _apply_window_round_mask(self) -> None:
+        """给窗口应用 Windows 11 原生圆角（DWM），零绘制开销。
+
+        2026-10-18 变更记录：
+          · 第一版用 setMask()：Windows 上每次调用都重建原生窗口区域并整窗重绘，
+            拖动/缩放时逐帧调用 → 完全卡死（用户："现在更卡了 完全不跟手"）。
+          · 第二版用 WA_TranslucentBackground + QSS 圆角：窗口背景无法正确擦除，
+            首帧出现整窗重影、面板错位（用户："首次进入莫名其妙的会卡住这个画面"），
+            播放后每帧重绘才把残影盖掉。
+          · 现版本：调用 DWM 的 DWMWA_WINDOW_CORNER_PREFERENCE。由系统合成器绘制
+            圆角，无透明背景、无遮罩、无重绘，也不会影响 Qt 的布局与擦除。
+        """
+        hwnd = int(self.winId() or 0)
+        if hwnd <= 0:
+            return
+        if getattr(self, "_native_round_applied", 0) == hwnd:
+            return
+        self._native_round_applied = hwnd
+        try:
+            import ctypes
+            from ctypes import wintypes
+            dwmapi = ctypes.windll.dwmapi
+            # DWMWA_WINDOW_CORNER_PREFERENCE = 33；DWMWCP_ROUND = 2
+            preference = ctypes.c_int(2)
+            dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(hwnd), 33, ctypes.byref(preference), ctypes.sizeof(preference)
+            )
+        except Exception:  # noqa: BLE001 - 非 Win11 或调用失败时保留直角，不影响功能
+            pass
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refresh_header_density()
@@ -8628,6 +8941,21 @@ class MainWindow(QWidget):
         if hasattr(self, "_modal_host") and self._modal_host.isVisible():
             self._modal_host.resize_to_parent()
         studio = self.built_page("studio")
+        # 标记"正在缩放"：时间轴等重绘路径据此跳过波形包络/缩略图这类贵活，
+        # 等风暴停下再补一次完整重绘（见 resize_activity 模块）。
+        try:
+            from .resize_activity import resize_activity
+            activity = resize_activity()
+            activity.mark()
+            if studio is not None and not getattr(activity, "_studio_hooked", False):
+                timeline = getattr(studio, "timeline", None)
+                if timeline is not None and hasattr(timeline, "update"):
+                    activity._studio_hooked = True
+                    # 不要传 lambda：每次都是新对象，on_settled 去重会失效并堆积。
+                    activity.on_settled(timeline.update)
+        except Exception:  # noqa: BLE001 - 缩放路径绝不能被任何异常打断
+            pass
+        self._apply_window_round_mask()
         if studio is None or self.pages.currentWidget() is not studio:
             self.apply_density()
         self._layout_resize_handles()
@@ -9706,7 +10034,8 @@ class MainWindow(QWidget):
         label = QLabel("字幕语言与输出")
         label.setObjectName("homeFieldLabel")
         layout.addWidget(label)
-        row = QHBoxLayout()
+        # QBoxLayout so the combo row can stack 2-up when the card is narrow.
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setSpacing(8)
         saved = dict((self.legacy.RUNTIME_SETTINGS or {}).get("subtitle_language") or {})
         self.recognition_language = FramelessPopupCombo()
@@ -9742,6 +10071,10 @@ class MainWindow(QWidget):
         bind_text(self.subtitle_output, '译文/双语：识别完成后用已配置的 AI 文字服务把字幕翻成所选语言（只发送字幕文字，不发送音频）；原文、说话人和时间保持不变。', property='toolTip')
         bind_text(self.translation_script, '译文语言', property='toolTip')
         layout.addLayout(row)
+        # Four combos side by side need ~505 px; stack 2-up when narrower.
+        surface = getattr(self, "settings_surface", None)
+        if surface is not None and hasattr(surface, "attach_inner_row"):
+            surface.attach_inner_row(row, 560)
         self.subtitle_language_hint = QLabel("")
         self.subtitle_language_hint.setObjectName("homeTermState")
         self.subtitle_language_hint.setWordWrap(True)
@@ -9750,6 +10083,30 @@ class MainWindow(QWidget):
         self.aligner_download_button.setObjectName("homeHeaderAction")
         self.aligner_download_button.clicked.connect(self._open_aligner_in_workshop)
         self.aligner_download_button.hide()
+
+        class _FlexibleWidthButton(QPushButton):
+            """Same look, but its minimum width never pins the parent layout.
+
+            The full label needs ~350 px; in the narrower recognition modal the
+            button shrinks and elides instead of pushing the card past the
+            window edge.
+            """
+
+            def minimumSizeHint(self):
+                hint = super().minimumSizeHint()
+                return QSize(0, hint.height())
+
+        self.aligner_download_button = _FlexibleWidthButton(
+            "去模型工坊下载 Qwen3-ForcedAligner（约 1.8 GB）"
+        )
+        self.aligner_download_button.setObjectName("homeHeaderAction")
+        self.aligner_download_button.clicked.connect(self._open_aligner_in_workshop)
+        self.aligner_download_button.hide()
+        # flexibleWidth keeps the i18n pass from re-pinning the minimum width.
+        self.aligner_download_button.setProperty("flexibleWidth", True)
+        self.aligner_download_button.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         layout.addWidget(self.aligner_download_button)
         for combo in (self.recognition_language, self.subtitle_output, self.translation_script, self.subtitle_punctuation):
             combo.currentIndexChanged.connect(self._subtitle_language_changed)
@@ -10186,6 +10543,16 @@ class MainWindow(QWidget):
 
             api_label, _ready = _api_combo_label(self.legacy.RUNTIME_SETTINGS.get("models", {}))
             primary_short["api"] = api_label
+        # 嵌套模态修复同轮（2026-10-17）：文字复核选 API 时也显示真实服务商·模型，
+        # 不再写死「Qwen API」。同一张卡在选自定义 OpenAI 兼容转写（ASR_API_PRESETS
+        # 的 custom 预设）后仍显示 Qwen 会误导。复用主力卡同款 _api_combo_label；
+        # review 与 primary 共用 qwen_asr_api_* 存储字段，标签一致是预期行为。
+        if qwen_backend == "api":
+            from .model_workshop import _api_combo_label as _review_api_label
+
+            review_api_label, _review_ready = _review_api_label(
+                self.legacy.RUNTIME_SETTINGS.get("models", {}))
+            review_short["api"] = review_api_label
         from .llm_config import read_asr_api_key
 
         _models_cfg = self.legacy.RUNTIME_SETTINGS.get("models", {})
@@ -11359,10 +11726,13 @@ class MainWindow(QWidget):
             QMessageBox.information(self, tr('添加术语'), tr('该术语已存在或内容为空。'))
 
     def _manage_terms(self):
-        # Full CRUD is a resident page. The lightweight per-batch selector
-        # remains in _pick_glossaries().
-        self._switch_page(self.term_library_page)
-        QTimer.singleShot(0, self.term_library_page, self.term_library_page.prepare_for_show)
+        """（已停用）不再切到术语库页。
+
+        2026-10-18（用户："我要完全删除出来我这个主页面以外的所有页面"）：
+        主窗口只保留 Studio 编辑器。术语库的增删改在识别设置（术语库对话框）
+        里完成，不占独立页面。
+        """
+        return
 
     def _ensure_runtime_environment(self):
         """Offer Repair Mode when preflight fails.  Versions stay in details."""
@@ -11847,11 +12217,11 @@ class MainWindow(QWidget):
         lowered = compact.lower()
         if getattr(self, "_studio_recognition_context", None):
             if "cuda" in lowered or "显存" in compact:
-                self.studio_page.set_recognition_runtime_stage("初始化 CUDA", compact)
+                self.studio_page.set_recognition_runtime_stage("初始化 CUDA", compact, self._studio_recognition_percent())
             elif "加载" in compact and ("模型" in compact or "asr" in lowered):
-                self.studio_page.set_recognition_runtime_stage("加载权重", compact)
+                self.studio_page.set_recognition_runtime_stage("加载权重", compact, self._studio_recognition_percent())
             elif "转写" in compact or "短块" in compact:
-                self.studio_page.set_recognition_runtime_stage("识别中", compact)
+                self.studio_page.set_recognition_runtime_stage("识别中", compact, self._studio_recognition_percent())
         if not hasattr(self, '_console_levels') or len(self._console_levels) != len(self._console_lines) - 1:
             self._console_levels = ['stdout'] * (len(self._console_lines) - 1)
         self._console_levels.append(level)
@@ -12011,6 +12381,18 @@ class MainWindow(QWidget):
             self._progress_motion.setEndValue(value)
             self._progress_motion.start()
         self.progress_percent.setText(percent_text(fraction))
+        # 2026-10-18（用户："左边这里就显示当前步骤还有 百分比"）：进度刷新时一并
+        # 把百分比同步到 Studio 左侧状态行，保持两处一致。
+        if getattr(self, '_studio_recognition_context', None):
+            studio = getattr(self, 'studio_page', None)
+            if studio is not None:
+                try:
+                    studio.set_recognition_runtime_stage(
+                        str(getattr(self, '_recognition_stage_message', '') or '识别中'),
+                        '', fraction * 100.0,
+                    )
+                except Exception:  # noqa: BLE001 - 进度刷新不能中断
+                    pass
         done = len(ended)
         steps = getattr(self, 'progress_steps', None)
         if steps is not None:
@@ -12296,6 +12678,24 @@ class MainWindow(QWidget):
         self._cancel_feed_card = None
 
 
+    def _studio_recognition_percent(self):
+        """当前整体进度百分比（0-100）；取不到时返回 None。
+
+        2026-10-18（用户："左边这里就显示当前步骤还有 百分比"）：Studio 左侧
+        状态行需要和主页进度条一致的百分比，这里直接复用进度条的千分位值。
+        """
+        try:
+            bar = getattr(self, "progress_bar", None)
+            if bar is None:
+                return None
+            span = int(bar.maximum()) - int(bar.minimum())
+            if span <= 0:
+                return None
+            value = int(bar.value())
+            return max(0.0, min(100.0, (value - int(bar.minimum())) * 100.0 / span))
+        except Exception:  # noqa: BLE001 - 读取失败不影响识别
+            return None
+
     def _update_progress_clock(self):
         if not self.started_at:
             return
@@ -12387,7 +12787,7 @@ class MainWindow(QWidget):
             if not hasattr(self,'_recognition_live_work'):self._recognition_live_work={}
             self._recognition_live_work['speaker']={'kind':event.kind,'payload':dict(payload),'at':time.monotonic()}
             self._append_feed('说话人区分',label,BLUE)
-            if getattr(self,'_studio_recognition_context',None):self.studio_page.set_recognition_runtime_stage(label,'')
+            if getattr(self,'_studio_recognition_context',None):self.studio_page.set_recognition_runtime_stage(label,'',self._studio_recognition_percent())
             self._update_progress_clock()
         elif event.kind in {'asr_progress','asr_evidence_delta','asr_worker_progress','asr_wait'}:
             payload=event.payload; backend=str(payload.get('backend','asr'))
@@ -12426,13 +12826,13 @@ class MainWindow(QWidget):
                 if fresh and isinstance(self.progress_bar, StageProgressBar):
                     self.progress_bar.note_activity()
             if backend == 'moss' and getattr(self, '_studio_recognition_context', None):
-                self.studio_page.set_recognition_runtime_stage(label, '')
+                self.studio_page.set_recognition_runtime_stage(label, '', self._studio_recognition_percent())
             self._update_progress_clock()
         elif event.kind in {'studio_project_saving', 'studio_project_saved'}:
             label = '正在保存工程' if event.kind=='studio_project_saving' else '工程已保存，准备载入 Studio'
             self._append_feed('交付', label, BLUE)
             if getattr(self, '_studio_recognition_context', None):
-                self.studio_page.set_recognition_runtime_stage(label, str(event.payload.get('project_path','')))
+                self.studio_page.set_recognition_runtime_stage(label, str(event.payload.get('project_path','')), self._studio_recognition_percent())
         elif event.kind == "cue_delta":
             if getattr(self, "_studio_recognition_context", None):
                 self.studio_page.apply_recognition_cue_delta(event.payload)
@@ -12473,7 +12873,7 @@ class MainWindow(QWidget):
                     stage = "写回工程"
                 else:
                     stage = "准备模型"
-                self.studio_page.set_recognition_runtime_stage(stage, label)
+                self.studio_page.set_recognition_runtime_stage(stage, label, self._studio_recognition_percent())
         elif event.kind in {"stage_completed", "stage_skipped"}:
             self._active_stages.pop(event.stage_index, None)
             self._completed_stages.add(event.stage_index)
@@ -13326,8 +13726,8 @@ def run_desktop_app(
             app,
             Path(os.environ.get("TWOBYTEASR_AUDIT_TOP_LEVEL_PATH", "tmp/top-level-windows.jsonl")),
         )
-    app.setApplicationName("2ByteASR")
-    app.setApplicationDisplayName("2ByteASR")
+    app.setApplicationName("MORL 字幕匹配")
+    app.setApplicationDisplayName("MORL 字幕匹配")
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     apply_application_theme(app)
@@ -13352,6 +13752,42 @@ def run_desktop_app(
             instance_guard.release()
             return 0
     _startup_mark("SETTINGS_LOADED")
+    # A standalone splash appears before the main window exists: the widget
+    # tree takes seconds to build, and a blank desktop reads as a failed launch.
+    startup_splash = None
+    try:
+        from .startup_splash import StartupSplash
+        from .runtime_paths import user_data_root
+
+        splash_project = ""
+        try:
+            for candidate in sorted(
+                (Path(user_data_root()) / "Projects").rglob("*.2byteproj"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ):
+                splash_project = candidate.stem
+                break
+        except Exception:  # noqa: BLE001 - the name is cosmetic
+            splash_project = ""
+        startup_splash = StartupSplash(splash_project)
+        startup_splash.center_on_screen()
+        startup_splash.setWindowOpacity(0.0)
+        startup_splash.show()
+        from PySide6.QtCore import QPropertyAnimation, QEasingCurve as _EC
+
+        _intro = QPropertyAnimation(startup_splash, b"windowOpacity", startup_splash)
+        _intro.setDuration(180)
+        _intro.setStartValue(0.0)
+        _intro.setEndValue(1.0)
+        _intro.setEasingCurve(_EC.Type.OutCubic)
+        _intro.start()
+        startup_splash._intro_anim = _intro
+        # Paint it before the heavy construction work blocks the event loop.
+        app.processEvents()
+    except Exception as exc:  # noqa: BLE001 - a missing splash must not block startup
+        print(f"[Startup] 启动画面不可用：{exc}", file=sys.stderr)
+        startup_splash = None
     # The window's construction scans the model registry several times
     # (ASR choices, summaries, language pass); nothing installs or removes a
     # model meanwhile, so they share one scan's path/record memo.
@@ -13387,7 +13823,38 @@ def run_desktop_app(
     paint_probe = _FirstPaintProbe(window)
     window._startup_paint_probe = paint_probe
     window.installEventFilter(paint_probe)
-    window.show()
+
+    # Hand over from splash to window: fade the window in, dissolve the splash.
+    if startup_splash is not None:
+        try:
+            from PySide6.QtCore import (
+                QPropertyAnimation as _QPA,
+                QEasingCurve as _Ease,
+                QTimer as _QT,
+            )
+
+            window.setWindowOpacity(0.0)
+            window.show()
+
+            _fade_in = _QPA(window, b"windowOpacity", window)
+            _fade_in.setDuration(260)
+            _fade_in.setStartValue(0.0)
+            _fade_in.setEndValue(1.0)
+            _fade_in.setEasingCurve(_Ease.Type.OutCubic)
+            _fade_in.start()
+            window._intro_fade = _fade_in
+            # Space the two animations slightly so the windows overlap.
+            startup_splash.close_with_fade(90)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Startup] 启动画面淡出失败：{exc}", file=sys.stderr)
+            try:
+                startup_splash.hide()
+            except Exception:  # noqa: BLE001
+                pass
+            window.setWindowOpacity(1.0)
+            window.show()
+    else:
+        window.show()
     _startup_mark("FIRST_SHOW")
     # 2026-10-14: a fresh install is offered the quick chooser once, after the
     # window shows; upgraded users and double-clicked projects never are.
@@ -13572,7 +14039,7 @@ def _preview(screenshot_path: str, state: str = "settings") -> int:
 
     _configure_windows_app_identity()
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationName("2ByteASR")
+    app.setApplicationName("MORL 字幕匹配")
     app.setWindowIcon(_app_icon())
     app.setStyle("Fusion")
     apply_application_theme(app)

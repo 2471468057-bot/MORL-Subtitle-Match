@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-APP_NAME = "2ByteASR"
+APP_NAME = "MORL"
 RUNTIME_PATHS_FILENAME = "runtime_paths.json"
 SCHEMA_VERSION = 1
 MODEL_ROOT_ENV = "2BYTEASR_MODEL_ROOT"

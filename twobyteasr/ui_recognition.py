@@ -9,10 +9,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
+    QBoxLayout,
     QHBoxLayout,
     QGridLayout,
     QLabel,
@@ -274,7 +275,11 @@ class RecognitionRoleCard(QFrame):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._sync_model_slot_height()
+        # During a reparent the card is briefly 0x0. Running the height sync
+        # then schedules a QTimer that fires while Qt is still mid-layout,
+        # which loops (C++ stack overflow). Only sync on a real size.
+        if self.width() > 0 and self.height() > 0:
+            self._sync_model_slot_height()
         self._layout_status()
 
     def retranslate_ui(self):
@@ -362,6 +367,9 @@ class RecognitionRoleCard(QFrame):
 
     def _sync_model_slot_height(self) -> None:
         """Keep the two-line identity slot valid after application QSS changes."""
+        # 同步执行 + 守卫：在 Qt 布局激活中途用 QTimer 触发 setFixedHeight 会
+        # 让 C++ 布局层自激递归（栈溢出）。这里直接走父级的批量同步，父级用
+        # _syncing_identity_height 标志挡住 setFixedHeight 触发的子卡回环。
         parent = self.parentWidget()
         sync = getattr(parent, "_sync_identity_height", None)
         if callable(sync):
@@ -399,15 +407,21 @@ class RecognitionRoleCard(QFrame):
 
 
 class RecognitionPlanWidget(QWidget):
-    """识别方案：三张角色卡横排。"""
+    """识别方案：三张角色卡横排；窄容器自动改为纵向堆叠。"""
 
     role_requested = Signal(str)          # 点击卡 → 打开工坊该角色
     recovery_requested = Signal(str, str)  # role, action → MainWindow 处理
 
+    # 每张卡的最小逻辑宽约 230px；两张并排至少需要 ~560px 内容宽，三张 ~760。
+    # 右停泊面板约 790px，减去边距后模型卡区仅 ~730px，三卡横排会超出右缘。
+    # 阈值取 900：在面板内一律竖排，避免横向裁切/溢出。
+    STACK_BELOW = 900
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout = QHBoxLayout(self)
+        # QBoxLayout (not QHBoxLayout) so the direction can flip at runtime.
+        layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         self.cards: dict[str, RecognitionRoleCard] = {}
@@ -418,6 +432,7 @@ class RecognitionPlanWidget(QWidget):
             layout.addWidget(card, 12 if role == "primary" else 10)
             self.cards[role] = card
         self._responsive_profile = ""
+        self._stacked: bool | None = None
 
     def apply_density(self, comfortable: bool):
         self._update_responsive_profile(comfortable)
@@ -439,7 +454,34 @@ class RecognitionPlanWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._apply_stacking()
         self._update_responsive_profile()
+
+    def showEvent(self, event):
+        # Reparenting into the modal scroll area does not fire a resize before
+        # show, so re-evaluate the stacking direction here too.
+        super().showEvent(event)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._apply_stacking)
+
+    def _apply_stacking(self) -> None:
+        """Stack the role cards vertically when the widget is too narrow.
+
+        Three cards side by side need roughly 760 logical px; below that the
+        rightmost card is clipped by the container edge with no way to reach
+        it, so the row re-orients instead.
+        """
+        layout = self.layout()
+        if layout is None:
+            return
+        stacked = self.width() < self.STACK_BELOW
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        layout.setDirection(
+            QBoxLayout.Direction.TopToBottom if stacked
+            else QBoxLayout.Direction.LeftToRight
+        )
 
     def _update_responsive_profile(self, comfortable: bool | None = None):
         layout = self.layout()

@@ -163,9 +163,6 @@ def app_busy(owner, *, manual=False):
             process=getattr(dialog,'process',None)
             if process and process.state()!=QProcess.ProcessState.NotRunning:return True
     studio = existing_page(owner, 'studio')
-    exporter=getattr(studio,'export_workspace',None)
-    export_worker=getattr(exporter,'_worker',None)
-    if export_worker and export_worker.is_alive():return True
     # An open project can have mmap/background consumers. Defer maintenance until
     # it closes, without closing it on the user's behalf. This is intentionally conservative.
     project=getattr(studio,'project',None)

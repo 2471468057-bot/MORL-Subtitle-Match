@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Developer / source-mode 2ByteASR launcher.
+"""Developer / source-mode MORL launcher.
 
 This is not the official user-facing desktop entry. The release process is
-``dist\\2ByteASR\\2ByteASR.exe`` (or the tiny ``2ByteASR.exe`` bootstrapper that
+``dist\\MORL\\MORL.exe`` (or the tiny ``MORL.exe`` bootstrapper that
 hands off to that packaged build). Keep this file for source hot-reload and
 headed automation.
 
@@ -234,7 +234,7 @@ def main() -> int:
             return 0
         # A crashed owner releases the OS mutex. A hung live owner is not safe to steal.
         if not instance_guard.acquire():
-            _show_error("2ByteASR 暂时无法接收文件",
+            _show_error("MORL 暂时无法接收文件",
                         "现有实例未确认接收。请稍后重试；如窗口无响应，请关闭该实例后重开。文件没有被修改。")
             return 2
     _startup_mark("EARLY_INSTANCE_OWNER")
@@ -247,7 +247,7 @@ def main() -> int:
     else:
         os.environ.setdefault("TWOBYTEASR_LAUNCH_MODE", "source-dev")
     _append_startup_log(
-        f"=== 2ByteASR {'packaged' if packaged else 'developer/source-mode'} cold start "
+        f"=== MORL {'packaged' if packaged else 'developer/source-mode'} cold start "
         f"pid={os.getpid()} argv={sys.argv} ==="
     )
     try:
@@ -330,7 +330,7 @@ def main() -> int:
             "请双击 setup_2byteasr.bat 重新完成配置，或在配置器中点击“重新检查”。\n"
         )
         _show_error(
-            "2ByteASR 启动失败",
+            "MORL 启动失败",
             "运行环境不完整（可能上次配置中断或修复失败），无法启动工作台。\n\n"
             f"{recovery}"
             "已下载的内容会自动续传、不会重复下载。\n\n"
@@ -340,7 +340,7 @@ def main() -> int:
         rc = 1
     finally:
         try:
-            _append_startup_log("=== 2ByteASR cold start exit ===")
+            _append_startup_log("=== MORL cold start exit ===")
         except Exception:
             pass
         # 2026-09-07（打包关停滞留）：主窗口完整关闭后，解释器/CRT/DLL 拆卸链

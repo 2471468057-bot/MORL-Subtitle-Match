@@ -255,6 +255,7 @@ class WaveformTimeline(QWidget):
         self.waveform_caches: dict[str, WaveformCache] = {}
         self.waveform_clip_keys: dict[str, str] = {}
         self._timeline_palette_cache: TimelinePalette | None = None
+        self._selection_items_cache = None
         self.visible_start_ms = 0
         self.visible_duration_ms = 60_000
         self.playhead_ms = 0
@@ -394,7 +395,48 @@ class WaveformTimeline(QWidget):
         waveform rows (36 → 72) so the waveform reads better, then steps the
         subtitle lanes up (52/68/84/96); the rest stays below the last lane.
         Explicit heights (drag / reset) always win and stay independent.
+
+        2026-10-18：这个函数在每次重绘里被 _video_track_rects / _audio_track_rects
+        反复调用，所以按"廉价签名"缓存。签名只用 O(1) 的原始状态，避免缓存本身
+        比原计算还贵（sorted/重复调用 _row_units 会抵消收益）。
         """
+        signature = (
+            self.height(),
+            self.waveform_visible,
+            self.bilingual,
+            self._candidate_visible_flag(),
+            len(self.project.video_tracks) if self.project else 0,
+            len(self.project.audio_tracks) if self.project else 0,
+            len(self._track_height_overrides),
+            id(self._track_height_overrides),
+            self._group_expanded,
+            len(self._group_members),
+            len(self._speaker_ids),
+            self._group_lane_count,
+        )
+        cached = getattr(self, '_auto_heights_cache', None)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        result = self._compute_auto_track_heights()
+        self._auto_heights_cache = (signature, result)
+        return result
+
+    def _candidate_visible_flag(self) -> bool:
+        """_candidate_lane_visible() 的廉价缓存：状态没变就不再重算。"""
+        signature = (
+            id(self.project),
+            bool(getattr(self, '_timeline_candidates', None)),
+            self.bilingual,
+            self.height(),
+        )
+        cache = getattr(self, '_candidate_visible_cache', None)
+        if cache is not None and cache[0] == signature:
+            return cache[1]
+        value = bool(self._candidate_lane_visible())
+        self._candidate_visible_cache = (signature, value)
+        return value
+
+    def _compute_auto_track_heights(self) -> tuple[int, int]:
         speakers, group_fixed = self._row_units()
         audio_rows = 0
         if self.waveform_visible:
@@ -748,6 +790,8 @@ class WaveformTimeline(QWidget):
 
     def invalidate_cue(self, cue_id: str, *, timing: bool = False) -> None:
         cue_id = str(cue_id)
+        # _selection_items 缓存：字幕时间变了，缓存里的矩形就失效了。
+        self._selection_items_cache = None
         self._text_layout_cache = {
             key: value for key, value in self._text_layout_cache.items() if key[0] != cue_id
         }
@@ -862,6 +906,28 @@ class WaveformTimeline(QWidget):
                 + self._pinned_bottom_height(minimum=True) + scrollbar)
 
     def _video_track_rects(self) -> dict[str, QRectF]:
+        # 2026-10-18（用户："依旧是卡卡的"）：这是时间轴最热的计算之一——重绘、
+        # 命中测试和各种 _xxx_rect 都会调它；结果只由少量状态决定，按签名缓存。
+        signature = (
+            self.width(),
+            self.height(),
+            self.waveform_visible,
+            self._candidate_visible_flag(),
+            len(self._track_height_overrides),
+            id(self._track_height_overrides),
+            id(self.project),
+            len(self.project.video_tracks) if self.project else 0,
+            len(self.project.audio_tracks) if self.project else 0,
+            len(self.project.av_track_groups) if self.project else 0,
+        )
+        cached = getattr(self, '_video_rects_cache', None)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        result = self._compute_video_track_rects()
+        self._video_rects_cache = (signature, result)
+        return result
+
+    def _compute_video_track_rects(self) -> dict[str, QRectF]:
         bottom = self._stack_bottom()
         if self._candidate_lane_visible():
             bottom -= CANDIDATE_LANE_HEIGHT
@@ -1297,6 +1363,8 @@ class WaveformTimeline(QWidget):
             self.update()
 
     def set_project(self, project: SubtitleProject | None) -> None:
+        # 换工程/重排后，选中框的坐标缓存必须失效。
+        self._selection_items_cache = None
         if project is not None:
             from .studio_caption_timeline import ensure_independent_captions
             ensure_independent_captions(project)
@@ -1400,6 +1468,8 @@ class WaveformTimeline(QWidget):
         return cache
 
     def refresh_media_graph(self) -> None:
+        # 片段被增删/移动/修剪后轨道几何变化，选中框缓存失效。
+        self._selection_items_cache = None
         if self.project and not any(
             track.id == self.selected_video_track_id for track in self.project.video_tracks
         ):
@@ -2259,6 +2329,15 @@ class WaveformTimeline(QWidget):
         tiles = getattr(self, "_waveform_tile_cache", None)
         if tiles is None:
             tiles = self._waveform_tile_cache = OrderedDict()
+        # 缩放风暴中 ms_per_px 每帧都变 → 缓存键全 miss → 每次都重建整屏包络，
+        # 这正是拖拽窗口时卡顿的主因之一。缩放期间改用"忽略缩放比的键"，命中
+        # 上一帧的贴片（画出来宽度略有偏差，但停下后会完整重画一次）。
+        live_resize = False
+        try:
+            from .resize_activity import resizing
+            live_resize = resizing()
+        except Exception:  # noqa: BLE001
+            live_resize = False
         pieces = []
         first = int(float(source_in) // tile_ms)
         last = int(max(float(source_in), float(source_out) - 1e-6) // tile_ms)
@@ -2269,12 +2348,24 @@ class WaveformTimeline(QWidget):
                 continue
             key = (id(cache), index, round(start, 3), round(end, 3), ms_per_px, rect.height())
             cached = tiles.get(key)
+            hit_key = key
+            if cached is None and live_resize:
+                # 缩放中：用不含 ms_per_px 的键找同区间同高度的贴片复用。
+                for existing_key in reversed(list(tiles)):
+                    if (existing_key[0] == key[0] and existing_key[1] == key[1]
+                            and existing_key[4] == key[5]):
+                        cached = tiles[existing_key]
+                        hit_key = existing_key
+                        break
             if cached is not None:
-                tiles.move_to_end(key)
+                tiles.move_to_end(hit_key)
                 self._paint_envelope_hits = getattr(self, '_paint_envelope_hits', 0) + 1
                 self._last_waveform_envelope_stats = cached[1]
                 path = cached[0]
             else:
+                if live_resize:
+                    # 缩放中且没有可复用贴片：先不画包络，等停下再补。
+                    continue
                 self._paint_envelope_misses = getattr(self, '_paint_envelope_misses', 0) + 1
                 built = self._build_waveform_envelope(cache, start, end, max(1, round((end - start) / ms_per_px)),
                                                       (end - start) / ms_per_px, rect.height())
@@ -3425,6 +3516,23 @@ class WaveformTimeline(QWidget):
     def _selection_items(self):
         if not self.project:
             return []
+        # 2026-10-18（用户："感觉卡卡的巨慢"）：这个函数在每次重绘时都会遍历全部
+        # 可见片段与字幕并逐条换算坐标；拖动窗口/滚动时每帧调用，是重绘热点之一。
+        # 只要几何、滚动位置与选择集都没变，就直接复用上一次的结果。
+        signature = (
+            id(self.project),
+            round(self.visible_start_ms, 3),
+            round(self.visible_duration_ms, 3),
+            self.width(),
+            self.height(),
+            len(self.project.video_tracks),
+            len(self.project.audio_tracks),
+            len(self.project.cues),
+            tuple(sorted(self.locked_speakers)) if self.locked_speakers else (),
+        )
+        cached = getattr(self, '_selection_items_cache', None)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
         from .studio_clip_edit import video_track_locked
         result=[]
         for kind,tracks,rects in (('video',self.project.video_tracks,self._video_track_rects()),
@@ -3446,6 +3554,7 @@ class WaveformTimeline(QWidget):
             if row is not None and cue.speaker_id not in self.locked_speakers:
                 row=self._cue_band(cue,row)
                 result.append(('subtitle',cue.id,QRectF(self._time_to_x(cue.start_ms),row.top()+5,max(1.,self._time_to_x(cue.end_ms)-self._time_to_x(cue.start_ms)),row.height()-10)))
+        self._selection_items_cache = (signature, result)
         return result
 
     def _selection_at_rect(self, rect):
@@ -3745,13 +3854,14 @@ class WaveformTimeline(QWidget):
 
             primary_id = primary_video_track_id(self.project) if self.project else "V1"
             clip = self._video_clip_at(track_id, click_ms)
-            if self.tool_mode == 'selection':
-                row = next(t for t in self.project.video_tracks if t.id == track_id)
-                edges = [(abs(event.position().x()-self._time_to_x(value)), c.id != self.selected_video_clip_id, c.id, c)
-                         for c in row.clips for value in (c.timeline_in_ms,c.timeline_out_ms)
-                         if abs(event.position().x()-self._time_to_x(value)) <= self.VIDEO_CLIP_TRIM_HANDLE_PX]
-                if edges and (clip is not None or min(e[0] for e in edges) <= 1):
-                    clip = min(edges,key=lambda item:item[:3])[3]
+            if self.tool_mode == 'selection' and self.project is not None:
+                row = next((t for t in self.project.video_tracks if t.id == track_id), None)
+                if row is not None:
+                    edges = [(abs(event.position().x()-self._time_to_x(value)), c.id != self.selected_video_clip_id, c.id, c)
+                             for c in row.clips for value in (c.timeline_in_ms,c.timeline_out_ms)
+                             if abs(event.position().x()-self._time_to_x(value)) <= self.VIDEO_CLIP_TRIM_HANDLE_PX]
+                    if edges and (clip is not None or min(e[0] for e in edges) <= 1):
+                        clip = min(edges,key=lambda item:item[:3])[3]
             previous_selection = set(self.selected_segment_ids)
             previous_anchor = self.selected_segment_id
             self.selected_video_clip_id = clip.id if clip else ''
@@ -3786,8 +3896,9 @@ class WaveformTimeline(QWidget):
                 selected = {clip.id}
                 if modifiers & Qt.KeyboardModifier.ControlModifier:
                     selected = previous_selection ^ {clip.id}
-                elif modifiers & Qt.KeyboardModifier.ShiftModifier and previous_anchor:
-                    ordered = [c.id for c in next(t for t in self.project.video_tracks if t.id == track_id).clips]
+                elif modifiers & Qt.KeyboardModifier.ShiftModifier and previous_anchor and self.project is not None:
+                    _anchor_track = next((t for t in self.project.video_tracks if t.id == track_id), None)
+                    ordered = [c.id for c in _anchor_track.clips] if _anchor_track is not None else []
                     if previous_anchor in ordered:
                         a, b = sorted((ordered.index(previous_anchor), ordered.index(clip.id)))
                         selected = previous_selection | set(ordered[a:b+1])
@@ -4792,6 +4903,11 @@ class WaveformTimeline(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        # 尺寸变了：轨道几何与候选泳道可见性都要重算。
+        self._video_rects_cache = None
+        self._auto_heights_cache = None
+        self._candidate_visible_cache = None
+        self._selection_items_cache = None
         self._sync_scrollbars()
         overlay = getattr(self, '_transport_overlay', None)
         if overlay is not None:

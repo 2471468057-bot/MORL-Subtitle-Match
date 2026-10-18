@@ -5,12 +5,77 @@ owns a separate browser lease for prefetch and never navigates the live page.
 """
 from collections import OrderedDict
 from dataclasses import dataclass
+import atexit
+import queue
 import threading
 import time
 import uuid
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
+
+# 租约释放的接收队列：``__del__`` 由 CPython 垃圾回收在 GUI 线程上调用，而释放
+# 租约要打开 SQLite（进/出各一次连接）。实测在快速缩放窗口时，GC 恰好落在这里
+# 会阻塞 GUI 线程 500ms 以上（studio-open.log 的 GUI_STALL 记录）。
+# 所以析构只入队，真正的文件删除与租约 DELETE 交给一个守护线程做。
+_release_queue: "queue.SimpleQueue" = queue.SimpleQueue()
+_release_worker: threading.Thread | None = None
+_release_worker_lock = threading.Lock()
+
+
+def _release_loop() -> None:
+    while True:
+        item = _release_queue.get()
+        if item is None:
+            return
+        path, lease = item
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if lease is not None:
+            try:
+                lease.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - 释放失败不影响界面
+                pass
+
+
+def _ensure_release_worker() -> None:
+    global _release_worker
+    if _release_worker is not None and _release_worker.is_alive():
+        return
+    with _release_worker_lock:
+        if _release_worker is not None and _release_worker.is_alive():
+            return
+        worker = threading.Thread(target=_release_loop, name="caption-pixel-release", daemon=True)
+        worker.start()
+        _release_worker = worker
+
+
+def _drain_releases() -> None:
+    """解释器退出前把队列排空，避免留下无人释放的租约行。"""
+    while True:
+        try:
+            item = _release_queue.get_nowait()
+        except queue.Empty:
+            return
+        if item is None:
+            continue
+        path, lease = item
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if lease is not None:
+            try:
+                lease.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+atexit.register(_drain_releases)
 
 
 @dataclass(frozen=True)
@@ -26,12 +91,23 @@ class PreparedPixels:
     def __del__(self):
         # The actor callback retains this object until the immutable file has
         # been consumed. Eviction/close then removes only this owned leaf.
-        if self.raw_path is not None:
-            try:self.raw_path.unlink(missing_ok=True)
-            except OSError:pass
-        if self.raw_lease is not None:
-            try:self.raw_lease.__exit__(None, None, None)
-            except Exception:pass
+        # 只入队，不在析构里做 SQLite / 磁盘 I/O（见文件顶部说明）。
+        if self.raw_path is None and self.raw_lease is None:
+            return
+        try:
+            _ensure_release_worker()
+            _release_queue.put((self.raw_path, self.raw_lease))
+        except Exception:  # noqa: BLE001 - 退化为同步释放，绝不抛出
+            if self.raw_path is not None:
+                try:
+                    self.raw_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if self.raw_lease is not None:
+                try:
+                    self.raw_lease.__exit__(None, None, None)
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def prepared_pixels(image, png, started, raw_folder=None):

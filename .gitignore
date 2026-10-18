@@ -135,3 +135,18 @@ licenses/source-materials/**/*.tar.xz
 licenses/source-materials/**/*.tar.gz
 licenses/source-materials/**/*.tar.bz2
 
+
+# ── MORL 字幕匹配：本地/私有目录（不上传） ──────────────────────
+_userdata/
+_dev/
+_audit/
+torchinductor_*/
+2byteasr-startup.log
+*.log
+assets/theme-references/
+models/
+*.mp4
+*.mkv
+*.mov
+*.wav
+*.m4a

@@ -29,6 +29,7 @@ from .waveform_cache import (WaveformCache, generate_progressive_waveform_cache)
 from .i18n import bind_text
 
 from .i18n import tr
+from .themed_icons import install_themed_icon
 
 class StudioMediaFlowMixin:
     """Feature-domain mixin; host class provides widgets and state."""
@@ -132,19 +133,6 @@ class StudioMediaFlowMixin:
             payload["recent_projects"] = records
             settings_path.parent.mkdir(parents=True, exist_ok=True)
             settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            # Update only the matching card surface; never rebuild or navigate
-            # the Hub while a project may already be opening.
-            cover_path = Path(cover)
-            if cover_path.is_file():
-                fresh = QPixmap(str(cover_path))
-                for card in getattr(self, "_hub_card_widgets", []):
-                    tooltip_lines = str(card.toolTip()).splitlines()
-                    if not tooltip_lines or tooltip_lines[-1] != path_text:
-                        continue
-                    cover_label = card.findChild(QLabel, "projectCardCover")
-                    if cover_label is not None and not fresh.isNull():
-                        cover_label.setPixmap(fresh)
-                    break
 
     def _open_or_create_media_project(self, media_path: Path) -> None:
         return self.project_controller._open_or_create_media_project(
@@ -627,6 +615,9 @@ class StudioMediaFlowMixin:
             self._generate_project_waveforms()
             return
         self.position_overlay.set_video_size(media.width or 1920, media.height or 1080)
+        aspect_host = getattr(self, "video_aspect_host", None)
+        if aspect_host is not None:
+            aspect_host.set_canvas_size(media.width or 0, media.height or 0)
         self.timeline.waveform_caches.clear()
         self.timeline.waveform_clip_keys.clear()
         self.timeline.set_project(project)
@@ -714,6 +705,91 @@ class StudioMediaFlowMixin:
                 cues.append(StudioCue(f"import-{index}", start_ms, end_ms, cue_text, speaker_id=actor or "S00", original_text=cue_text))
         return cues
 
+    def _save_recognition_options(self, *_args) -> None:
+        """把工具面板「识别」页的全部设置写回运行时设置（原子落盘）。"""
+        try:
+            from .settings import save_runtime_settings
+            window = self.window()
+            legacy = getattr(window, "legacy", None)
+            runtime = getattr(legacy, "RUNTIME_SETTINGS", None)
+            if not isinstance(runtime, dict):
+                return
+            models = runtime.setdefault("models", {})
+            switches = runtime.setdefault("switches", {})
+            language = runtime.setdefault("subtitle_language", {})
+
+            # 「识别方案」下拉已从面板移除（用户要求删除），这里不再有方案分支。
+            for attr, section, key in (
+                ("recognition_language", language, "recognition_language"),
+                ("recognition_punctuation", switches, "subtitle_punctuation"),
+                ("recognition_transcribe_style", models, "api_transcribe_style"),
+            ):
+                widget = getattr(self, attr, None)
+                value = widget.currentData() if widget is not None else None
+                if value:
+                    section[key] = value
+
+            for attr, key in (
+                ("recognition_ai_grouping", "use_ai_grouping"),
+                ("recognition_ai_polish", "enable_ai_polish"),
+                ("recognition_arabic_numbers", "prefer_arabic_numbers"),
+                ("recognition_review_track", "output_review_track"),
+                ("recognition_jianying_txt", "output_jianying_txt"),
+                ("recognition_speaker_tracks", "output_speaker_tracks"),
+                ("recognition_speaker_labels", "show_speaker_labels_in_srt"),
+            ):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    switches[key] = bool(widget.isChecked())
+
+            for attr, key in (
+                ("recognition_primary_backend", "primary_asr_backend"),
+                ("recognition_timeline_backend", "firered_asr_backend"),
+                ("recognition_review_backend", "qwen_asr_backend"),
+            ):
+                widget = getattr(self, attr, None)
+                value = widget.currentData() if widget is not None else None
+                if value:
+                    models[key] = value
+            for attr, key in (
+                ("recognition_api_model", "qwen_asr_api_model"),
+                ("recognition_api_url", "qwen_asr_api_url"),
+            ):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    text = widget.text().strip()
+                    if text:
+                        models[key] = text
+
+            saved, _warnings, _ = save_runtime_settings(runtime)
+            if isinstance(saved, dict):
+                legacy.RUNTIME_SETTINGS = saved
+                self.runtime_settings = saved
+        except Exception as exc:  # noqa: BLE001 - 保存失败不应打断编辑
+            print(f"[Studio] 保存识别选项失败：{exc}")
+
+    def _start_recognition_from_panel(self) -> None:
+        """工具面板「识别」页的主按钮：对当前素材开始识别。"""
+        project = self.project
+        if not project or not getattr(project.media, "path", ""):
+            studio_message_box(
+                self,
+                QMessageBox.Icon.Information,
+                tr('先导入媒体'),
+                tr('识别字幕需要当前工程中的视频或音频。请先导入媒体。'),
+            )
+            return
+        self.open_recognition_panel()
+
+    def _refresh_recognition_panel(self) -> None:
+        """（已停用）面板里的「尚未打开工程」概览已被删除，无需刷新。"""
+        return
+
+    def _open_script_match_sheet(self) -> None:
+        """左侧空状态的「文稿匹配」：弹窗输入文稿，一键生成（自动替换或生成）。"""
+        from .studio_script_match import open_simple_script_sheet
+        open_simple_script_sheet(self)
+
     def _open_subtitle_import_dialog(self) -> None:
         if not self.project:
             return
@@ -762,22 +838,21 @@ class StudioMediaFlowMixin:
         layout.addWidget(media)
 
         plan_row = QHBoxLayout()
-        plan_row.addWidget(QLabel("识别方案"))
+        # 2026-10-18（用户："去掉识别方案"）：不再显示「识别方案」下拉，
+        # 方案只作为内部默认值（沿用"当前主页方案"），用户直接选三个模型卡片。
         plan = QComboBox()
-        # 四十二轮：方案与主页 plan_options() 对齐（补 省显存/仅转写/API 转写），
-        # 另保留"当前主页方案"快捷项。此前硬编码 4 项，API 识别根本选不到。
+        plan.setVisible(False)
         for entry in plan_options():
             plan.addItem(entry.label, entry.key)
         plan.addItem("当前主页方案", "home")
         plan.setCurrentIndex(plan.findData("home"))
-        plan_row.addWidget(plan, 1)
-        layout.addLayout(plan_row)
 
+        # 2026-10-18（用户："去掉识别方案 / 高级配置"）：旧的折叠按钮与表单容器
+        # 不再需要——模型选择改成常驻卡片网格（见下方 cards_card）。
         advanced_toggle = QPushButton("▸ 高级配置 · 模型")
         advanced_toggle.setObjectName("studioButton")
         advanced_toggle.setCheckable(True)
         advanced_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(advanced_toggle)
         advanced = QFrame()
         advanced.setObjectName("contextCard")
         advanced_grid = QGridLayout(advanced)
@@ -852,25 +927,57 @@ class StudioMediaFlowMixin:
         plan_api_index = plan.findData("api")
         if plan_api_index >= 0:
             plan.setItemText(plan_api_index, f"API 转写（{api_short}）")
-        for row, (label, combo, role) in enumerate(
-            (
-                ("主力转写", primary_model, "primary"),
-                ("字幕时间轴", timeline_model, "timeline"),
-                ("文字复核", review_model, "review"),
-            )
-        ):
-            advanced_grid.addWidget(QLabel(label), row, 0)
-            advanced_grid.addWidget(combo, row, 1)
-            # 四十二轮：接入主页同款模型选择弹窗作为二级弹窗——本地下载、
-            # 在线 API 服务商选择与"配置"（Key/地址/转写风格）都能在这里完成。
-            picker_button = QPushButton("选择…")
-            picker_button.setObjectName("studioButton")
-            bind_text(picker_button, '打开与主页相同的模型选择弹窗（本地模型下载、在线 API 服务与配置）', property='toolTip')
-            picker_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            picker_button.clicked.connect(lambda _checked=False, r=role: open_role_picker(r))
-            advanced_grid.addWidget(picker_button, row, 2)
+
+        # 2026-10-18（用户："将图二这里的模型配置使用2x4的卡片窗口来进行选择
+        # 点击窗口后会弹出图三这里选项窗口 全部都要紧凑一点"）：
+        # 三个模型改为常驻 2×4 卡片网格（每张卡＝角色＋当前模型＋状态），
+        # 点击卡片直接打开主页同款模型选择弹窗（_open_model_picker）。
+        cards_card = QFrame()
+        cards_card.setObjectName("contextCard")
+        cards_grid = QGridLayout(cards_card)
+        cards_grid.setContentsMargins(8, 8, 8, 8)
+        cards_grid.setHorizontalSpacing(6)
+        cards_grid.setVerticalSpacing(6)
+        for column in range(4):
+            cards_grid.setColumnStretch(column, 1)
+
+        def _model_label(combo: QComboBox) -> str:
+            text = str(combo.currentText() or "").strip()
+            return text or "未选择"
+
+        card_specs = (
+            ("主力转写", primary_model, "primary", "fa5s.microphone-alt"),
+            ("字幕时间轴", timeline_model, "timeline", "fa5s.clock"),
+            ("文字复核", review_model, "review", "fa5s.check-circle"),
+        )
+        card_buttons: dict[str, QPushButton] = {}
+        for index, (label, combo, role, icon_name) in enumerate(card_specs):
+            card = QPushButton()
+            card.setObjectName("recognitionModelCard")
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setMinimumHeight(52)
+            card.setToolTip(f'{label}：点击选择模型（本地模型 / 在线 API 与配置）')
+            install_themed_icon(card, icon_name, "secondary")
+
+            def _refresh_card(btn=card, name=label, src=combo):
+                bind_text(btn, f"{name}\n{_model_label(src)}")
+
+            _refresh_card()
+            card.clicked.connect(lambda _checked=False, r=role: open_role_picker(r))
+            card_buttons[role] = card
+            combo.currentIndexChanged.connect(lambda _i, fn=_refresh_card: fn())
+            cards_grid.addWidget(card, index // 2, index % 2)
+
+        # 第 4 个位置放「说话人」卡片（同样是弹窗式选择），凑成 2×2 的紧凑网格。
+        speaker_combo_placeholder = QPushButton()
+        speaker_combo_placeholder.setObjectName("recognitionModelCard")
+        speaker_combo_placeholder.setCursor(Qt.CursorShape.PointingHandCursor)
+        speaker_combo_placeholder.setMinimumHeight(52)
+        speaker_combo_placeholder.setToolTip('说话人分离方式：点击切换')
+        install_themed_icon(speaker_combo_placeholder, "fa5s.users", "secondary")
+        cards_grid.addWidget(speaker_combo_placeholder, 1, 1)
+        layout.addWidget(cards_card)
         advanced.hide()
-        layout.addWidget(advanced)
 
         speaker_source = QComboBox()
         speaker_source.addItem("统一字幕轨（默认，不额外运行说话人分离）", "single")
@@ -882,14 +989,44 @@ class StudioMediaFlowMixin:
         speaker_settings=getattr(getattr(host,'legacy',None),'RUNTIME_SETTINGS',{})
         speaker_source.setCurrentIndex(max(0, speaker_source.findData(resolve(speaker_settings))))
         bind_text(speaker_source, '默认只组织为统一字幕轨，不代表已确认同一个人。原标签保留；旧版本自动分轨设置不沿用。其余方式需要在这里明确选择。', property='toolTip')
+        # 说话人下拉本身不进入界面：它由上面那张卡片驱动（卡片点击弹出选择菜单）。
+        speaker_source.setVisible(False)
         layout.addWidget(speaker_source)
+
+        _speaker_short = {
+            "single": "统一字幕轨",
+            "filetrans": "Filetrans 分轨",
+            "ecapa": "ECAPA 分离",
+            "native": "接口原生标签",
+            "moss": "MOSS 身份",
+        }
+
+        def _refresh_speaker_card() -> None:
+            key = str(speaker_source.currentData() or "single")
+            bind_text(speaker_combo_placeholder, f"说话人\n{_speaker_short.get(key, key)}")
+
+        def _pick_speaker() -> None:
+            from PySide6.QtWidgets import QMenu
+            menu = QMenu(speaker_combo_placeholder)
+            for index in range(speaker_source.count()):
+                action = menu.addAction(speaker_source.itemText(index))
+                action.setCheckable(True)
+                action.setChecked(index == speaker_source.currentIndex())
+
+                def _choose(_checked=False, i=index):
+                    speaker_source.setCurrentIndex(i)
+                    _refresh_speaker_card()
+
+                action.triggered.connect(_choose)
+            menu.exec(speaker_combo_placeholder.mapToGlobal(speaker_combo_placeholder.rect().bottomLeft()))
+
+        speaker_combo_placeholder.clicked.connect(_pick_speaker)
+        speaker_source.currentIndexChanged.connect(lambda _i: _refresh_speaker_card())
+        _refresh_speaker_card()
         local_analysis = QCheckBox('仅本地识别与分轨（跳过云端校对和 AI 断句）')
         local_analysis.setObjectName('localSpeakerRecognition')
         bind_text(local_analysis, '仍使用所选主转写与时间轴模型；需选择本地模型。说话人按上方选择运行，身份需试听确认。', property='toolTip')
         layout.addWidget(local_analysis)
-        speaker_scope=QLabel('默认来自当前方案；此处选择仅影响本次识别，不修改其他方案或已有字幕。')
-        speaker_scope.setWordWrap(True)
-        layout.addWidget(speaker_scope)
 
         glossary_card = QFrame()
         glossary_card.setObjectName("contextCard")
@@ -971,10 +1108,13 @@ class StudioMediaFlowMixin:
         confirm_row.hide()
         layout.addWidget(confirm_row)
 
+        # 2026-10-18（用户："点击图2这里的按钮就会进入到图一的这个页面中去
+        # 我要完全删除出来我这个主页面以外的所有页面"）：这个按钮已经删除。
+        # 它跳转到识别首页（_switch_page(settings_scroll)），而该页面不应再出现。
         configure = QPushButton("在主页管理全部识别设置")
         configure.setObjectName("studioButton")
         configure.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(configure)
+        configure.hide()  # 保留对象供 dispatch("configure") 分支使用，但不再显示
 
         def set_combo_value(combo: QComboBox, value: str) -> None:
             index = combo.findData(value)
@@ -1034,12 +1174,12 @@ class StudioMediaFlowMixin:
                 refresh_models_from_host()
                 host_modal = getattr(host, "_modal_host", None)
                 if host_modal is not None:
-                    sheet_height = min(760, max(520, host.height() - 120))
+                    sheet_height = min(620, max(430, host.height() - 160))
                     host_modal.show_content(
                         sheet,
                         title="识别字幕",
-                        size=(620, sheet_height),
-                        min_size=(500, 520),
+                        size=(560, sheet_height),
+                        min_size=(460, 430),
                         retain_content=True,
                     )
 
@@ -1112,12 +1252,7 @@ class StudioMediaFlowMixin:
                 return
             dispatch("start_final")
 
-        advanced_toggle.toggled.connect(
-            lambda checked: (
-                advanced.setVisible(checked),
-                bind_text(advanced_toggle, '{value0} 高级配置 · 模型', value0='▾' if checked else '▸'),
-            )
-        )
+        # 高级配置面板已由常驻模型卡片取代：不再有折叠切换。
         plan.currentIndexChanged.connect(lambda _index: apply_plan())
         for combo in (primary_model, timeline_model, review_model):
             combo.currentIndexChanged.connect(
@@ -1149,13 +1284,14 @@ class StudioMediaFlowMixin:
 
         modal = getattr(host, "_modal_host", None)
         if modal is not None:
-            # 四十三轮：768 高的屏幕放不下 760 的弹窗（词库区会被压出视野）。
-            sheet_height = min(760, max(520, host.height() - 120))
+            # 2026-10-18（用户："这个窗口紧凑一点"）：去掉折叠区与方案下拉后
+            # 内容变短，弹窗高度也收一档，避免大片留白。
+            sheet_height = min(620, max(430, host.height() - 160))
             modal.show_content(
                 sheet,
                 title="识别字幕",
-                size=(620, sheet_height),
-                min_size=(500, 520),
+                size=(560, sheet_height),
+                min_size=(460, 430),
                 retain_content=True,
             )
         else:
@@ -1176,10 +1312,24 @@ class StudioMediaFlowMixin:
         started = float(getattr(self, "_recognition_started_at", 0.0) or 0.0)
         label = getattr(self, "recognition_chip_label", None)
         stage = getattr(self, "_recognition_stage_message", None) or ((label.property("recognitionStage") if label is not None else "") or "识别中")
+        stage_text = stage if hasattr(stage, "source") else tr(stage)
+        # 2026-10-18（用户："当我点击确认生成后左边这里就显示当前步骤还有 百分比"）：
+        # 左侧状态行要同时显示「当前步骤 + 百分比」。
+        percent = getattr(self, "_recognition_percent", None)
+        percent_text_value = ""
+        if isinstance(percent, (int, float)) and 0 <= float(percent) <= 100:
+            percent_text_value = f"{int(round(float(percent)))}%"
         if running and started:
             elapsed = max(0, int(perf_counter() - started))
-            return tr('识别中 · {stage} · {minutes:02d}:{seconds:02d}', stage=stage if hasattr(stage, "source") else tr(stage), minutes=elapsed//60, seconds=elapsed%60)
-        return stage if hasattr(stage, "source") else tr(stage)
+            if percent_text_value:
+                return tr('识别中 · {stage} · {percent} · {minutes:02d}:{seconds:02d}',
+                          stage=stage_text, percent=percent_text_value,
+                          minutes=elapsed // 60, seconds=elapsed % 60)
+            return tr('识别中 · {stage} · {minutes:02d}:{seconds:02d}', stage=stage_text,
+                      minutes=elapsed // 60, seconds=elapsed % 60)
+        if percent_text_value:
+            return tr('{stage} · {percent}', stage=stage_text, percent=percent_text_value)
+        return stage_text
 
     def _sync_recognition_zero_state(self) -> None:
         """四十三轮：识别状态同步到"暂无字幕"卡（用户点名的主视觉位）。"""
@@ -1246,7 +1396,9 @@ class StudioMediaFlowMixin:
             "正在安全取消", "将在当前可安全停止的阶段边界退出"
         )
 
-    def set_recognition_runtime_stage(self, stage: str, detail: str = "") -> None:
+    def set_recognition_runtime_stage(self, stage: str, detail: str = "", percent=None) -> None:
+        """主窗口推送识别阶段；percent（0-100）用于在左侧显示百分比。"""
+        self._recognition_percent = percent
         self._recognition_show_status(stage or "识别中", detail)
 
     def apply_recognition_cue_delta(self, payload: Mapping[str, object]) -> None:

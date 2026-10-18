@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import queue
+import sys
 import threading
 import time
 import uuid
@@ -110,7 +111,6 @@ from .visual_runtime import (
     VisualOwner,
     VisualOwnershipStateMachine,
 )
-from .studio_export_ui import StudioExportWorkspace
 from .studio_theme import (
     build_studio_qss,
     create_studio_menu,
@@ -137,7 +137,6 @@ from .studio_helpers import (
     probe_media_identity,
     render_style_sample,
 )
-from .studio_hub import StudioHubMixin
 from .studio_sentence_refine_ui import StudioSentenceRefineMixin
 from .studio_cue_controller import StudioCueController
 from .studio_project_controller import StudioProjectController
@@ -191,7 +190,6 @@ _ORIGINAL_SAVE_AUTOSAVE = save_autosave
 
 
 class SubtitleStudioPage(
-    StudioHubMixin,
     StudioSentenceRefineMixin,
     StudioReviewMixin,
     StudioProjectFlowMixin,
@@ -484,10 +482,8 @@ class SubtitleStudioPage(
         self._ass_snapshot_ms: dict[int, float] = {}
         self.project: SubtitleProject | None = None
         self.project_path: Path | None = None
-        self._project_view_state = "hub"
+        self._project_view_state = "open"
         self._project_opening_path = ""
-        self._hub_toolbar_hidden: list[QWidget] = []
-        self._hub_card_widgets: list[QToolButton] = []
         self.selected_cue_id = ""
         self.selection_model = CueSelectionModel()
         self._selection_latency = SelectionLatencyTrace()
@@ -752,7 +748,10 @@ class SubtitleStudioPage(
         # renderer results through a lock-safe queue drained on the GUI thread.
         self._advanced_preview_publish_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._advanced_preview_publish_timer = QTimer(self)
-        self._advanced_preview_publish_timer.setInterval(16)
+        # Drains a cross-thread result queue. 60 Hz was wasteful: the queue is
+        # empty almost all the time and each wakeup costs a GUI-thread round
+        # trip. 80 ms is still imperceptible for a preview image.
+        self._advanced_preview_publish_timer.setInterval(80)
         self._advanced_preview_publish_timer.timeout.connect(
             self._drain_advanced_preview_results
         )
@@ -945,7 +944,28 @@ class SubtitleStudioPage(
         except (OSError, ValueError, TypeError):
             return {}
 
+    def _is_davinci_bridge_project(self, project=None) -> bool:
+        """工程是否来自达芬奇时间线（协同模式）。
+
+        协同模式下达芬奇时间线才是唯一真相：不做本地自动保存，也不弹自动
+        恢复选择框——那会把已经在达芬奇里的改动盖回去。字幕的实时回写由
+        ``_publish_studio_srt`` 独立完成，不依赖自动保存。
+        """
+        target = project if project is not None else getattr(self, "project", None)
+        if target is None:
+            return False
+        try:
+            from .studio_davinci_live import BRIDGE_PROJECT_ID
+        except Exception:  # noqa: BLE001
+            return False
+        return str(getattr(target, "project_id", "") or "") == BRIDGE_PROJECT_ID
+
     def _schedule_autosave(self) -> None:
+        if self._is_davinci_bridge_project():
+            # 协同模式：不落任何本地恢复文件。
+            self._autosave_timer.stop()
+            bind_text(self.save_state, translate('已保存', current_language()))
+            return
         preferences = self._studio_preferences()
         if preferences.get("autosave_enabled", True) is False:
             self._autosave_timer.stop()
@@ -1106,10 +1126,6 @@ class SubtitleStudioPage(
         if event_type == QEvent.Type.InputMethod:
             self._studio_ime_composing=bool(event.preeditString())
             return False
-        scroll = getattr(self, 'project_library_scroll', None)
-        if scroll is not None and watched is scroll.viewport() and event_type == QEvent.Type.Resize:
-            if self.project is None and hasattr(self, '_hub_card_widgets'):
-                self._refresh_studio_empty_state(rescan=False)
         if event_type not in self._FILTERED_EVENT_TYPES:
             return False
         if event_type in (QEvent.Type.MouseButtonDblClick, QEvent.Type.MouseButtonPress):
@@ -1202,7 +1218,23 @@ class SubtitleStudioPage(
             QEvent.Type.DevicePixelRatioChange,
         }:
             self.position_overlay.sync_to_video(self.video)
-            self._sync_advanced_cue_overlay()
+            # 拖动窗口时视频控件每帧都在 resize，而 _sync_advanced_cue_overlay 会
+            # 同步字幕渲染器并写可见性追踪（实测是缩放卡顿的首要阻塞栈）。
+            # 缩放期间只做廉价的几何同步，把它推迟到风暴结束后补一次。
+            #
+            # 2026-10-18（用户："感觉卡卡的巨慢"）：这里原本传的是 lambda，
+            # 而 on_settled 用 `callback not in list` 去重——lambda 每次都是新
+            # 对象，永远不相等，于是每个 resize 都堆积一个回调；settle 时全部
+            # 执行，每个又触发新的 resize，形成放大循环（实测 CANVAS_GEOMETRY_SYNC
+            # 4387 条、两种几何来回切换 4000+ 次）。改成绑定方法后可以正确去重。
+            try:
+                from .resize_activity import resize_activity, resizing
+                if resizing():
+                    resize_activity().on_settled(self._sync_advanced_cue_overlay)
+                else:
+                    self._sync_advanced_cue_overlay()
+            except Exception:  # noqa: BLE001 - 同步失败不影响缩放
+                self._sync_advanced_cue_overlay()
         if event_type == QEvent.Type.Resize and watched is getattr(self, "context_drawer", None):
             # Splitter drags resize the drawer without a page-level
             # resizeEvent; re-tier the tab labels from the drawer itself.
@@ -1590,6 +1622,117 @@ class SubtitleStudioPage(
         card_layout.addWidget(heading)
         return card, card_layout
 
+    def _sync_cue_list_density(self) -> None:
+        """左侧字幕列表随自身宽度收放内边距 / 隐藏次要文案。
+
+        2026-10-18（用户："感觉整个ui的挤挤的"）：窄窗口下列表只有 200px 上下，
+        原来固定的 18px 内边距 + 长说明文字会被截成「需要检查…」「搜索…」这类
+        残句。这里按宽度分三档：宽松 / 正常 / 紧凑（隐藏说明文字）。
+        """
+        panel = getattr(self, "cue_list_panel", None)
+        if panel is None:
+            return
+        width = int(panel.width())
+        if width >= 330:
+            mode = "wide"
+        elif width >= 240:
+            mode = "normal"
+        else:
+            mode = "tight"
+        if getattr(self, "_cue_list_density", None) == mode:
+            return
+        self._cue_list_density = mode
+        layout = getattr(self, "cue_zero_layout", None)
+        if layout is not None:
+            margin = 18 if mode == "wide" else (12 if mode == "normal" else 8)
+            layout.setContentsMargins(margin, 24 if mode == "wide" else 14, margin, 12)
+            layout.setSpacing(9 if mode == "wide" else 6)
+        note = getattr(self, "cue_zero_note", None)
+        if note is not None:
+            # 紧凑档隐藏长说明（按钮本身已说明用途），避免残句。
+            note.setVisible(mode != "tight")
+        # 紧凑档：过滤按钮用短标签，避免「需要检查…」「建议确认…」被截断。
+        filters = getattr(self, "cue_filter_buttons", None)
+        if isinstance(filters, dict):
+            short_by_key = {"all": "全", "priority": "建议", "critical": "检查"}
+            for key, button in filters.items():
+                stored = getattr(button, "_full_text", None)
+                if stored is None:
+                    stored = button.text()
+                    button._full_text = stored
+                button.setText(short_by_key.get(key, stored) if mode == "tight" else stored)
+        # 翻页按钮：紧凑档改成单字箭头。
+        for attr, full, short in (
+            ("cue_prev_button", "上一条", "‹"),
+            ("cue_next_button", "下一条", "›"),
+        ):
+            button = getattr(self, attr, None)
+            if button is None:
+                continue
+            stored = getattr(button, "_full_text", None)
+            if stored is None:
+                stored = button.text()
+                button._full_text = stored
+            button.setText(short if mode == "tight" else stored)
+        # 搜索框占位文字：紧凑档缩短，避免显示成「搜…」。
+        search = getattr(self, "cue_search", None)
+        if search is not None:
+            placeholder = getattr(search, "_full_placeholder", None)
+            if placeholder is None:
+                placeholder = search.placeholderText()
+                search._full_placeholder = placeholder
+            search.setPlaceholderText("搜索" if mode == "tight" else placeholder)
+
+    def _apply_responsive_splitter(self) -> None:
+        """按窗口宽度按比例分配三栏（字幕列表 / 预览 / 工具面板）。
+
+        2026-10-18（用户："画面增加多一点的自适应功能 感觉整个ui的挤挤的"）：
+        原来 ``upper_splitter.setSizes([320, 680, 440])`` 是固定像素，总和 1440。
+        窗口比这窄时三栏按固定值挤在一起（预览被压成细条、工具面板贴边）。
+        这里改成按比例分配，并给每栏设置随宽度收缩的下限。
+        """
+        splitter = getattr(self, "upper_splitter", None)
+        if splitter is None:
+            return
+        try:
+            total = max(0, int(splitter.width()))
+            if total <= 0:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        # 避免每个像素都重排：只有跨过档位才真正 setSizes。
+        bucket = total // 40
+        if getattr(self, "_responsive_split_bucket", None) == bucket:
+            return
+        self._responsive_split_bucket = bucket
+
+        # 比例：列表 22% / 预览 46% / 工具面板 32%（总和 100）。
+        ratios = (0.22, 0.46, 0.32)
+        # 下限随总宽度缩放，最小不低于可用空间的一半，避免某栏被压成 0。
+        min_left = max(180, min(340, int(total * 0.20)))
+        min_center = max(300, min(760, int(total * 0.42)))
+        min_context = max(280, min(560, int(total * 0.26)))
+        widths = [int(total * r) for r in ratios]
+        # 保证下限（按优先级：预览 > 工具面板 > 列表）。
+        widths[1] = max(widths[1], min_center)
+        widths[2] = max(widths[2], min_context)
+        widths[0] = max(widths[0], min_left)
+        # 若超总和，按比例回缩（多出来的从最宽的那栏扣）。
+        excess = sum(widths) - total
+        if excess > 0:
+            order = sorted(range(3), key=lambda i: widths[i], reverse=True)
+            for i in order:
+                if excess <= 0:
+                    break
+                floor = (min_left, min_center, min_context)[i]
+                take = min(excess, max(0, widths[i] - floor))
+                widths[i] -= take
+                excess -= take
+        try:
+            splitter.setSizes(widths)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _update_editor_compactness(self) -> None:
         if not hasattr(self, "center_splitter"):
             return
@@ -1643,14 +1786,13 @@ class SubtitleStudioPage(
         tabbar.setElideMode(Qt.TextElideMode.ElideNone)
         tabbar.setUsesScrollButtons(False)
         # Expanding stays on: tabs share the drawer width (centered group).
-        full = ("AI设计", "样式", "视频", "剪辑助手", "素材")
-        medium = ("AI", "样式", "视频", "剪辑", "素材")
+        # 工具面板两页：AI设计 / 样式（识别与文稿匹配都在左侧空状态按钮里）。
+        full = ("AI设计", "样式")
+        medium = ("AI", "样式")
         width = max(1, drawer.width())
         # Compact glyphs leave room for readable labels in the default drawer.
-        if width >= 460:
+        if width >= 300:
             labels, mode, icon_only = full, "full", False
-        elif width >= 370:
-            labels, mode, icon_only = medium, "medium", False
         else:
             labels, mode, icon_only = ("",) * len(full), "icon", True
         if getattr(self, "_context_tab_mode", "") == mode:
@@ -1671,6 +1813,8 @@ class SubtitleStudioPage(
         super().resizeEvent(event)
         if hasattr(self, "_studio_compact_commands"):
             self._sync_navigation_chrome()
+        self._apply_responsive_splitter()
+        self._sync_cue_list_density()
         self._update_editor_compactness()
         self._update_cue_table_layout()
         drawer = getattr(self, "context_drawer", None)
@@ -1681,14 +1825,6 @@ class SubtitleStudioPage(
             self._sync_transform_visual_overlay()
         if getattr(self, "_review_mode", False):
             QTimer.singleShot(0, self._refresh_review_summary_strip)
-        if hasattr(self, "studio_empty"):
-            # workspace_host's StackAll layout owns both page rectangles.
-            if self.project is None and not getattr(self, "_hub_refresh_pending", False):
-                self._hub_refresh_pending = True
-                def refresh_hub() -> None:
-                    self._hub_refresh_pending = False
-                    self._refresh_studio_empty_state(rescan=False)
-                QTimer.singleShot(0, refresh_hub)
 
     def _show_teach_hint(self, key: str) -> None:
         if self.project is None:
@@ -1831,6 +1967,8 @@ class SubtitleStudioPage(
         )
         if cues_changed and not _from_delta:
             self.cue_controller.model_changed()
+            # 字幕真的变了 → 立即发布 SRT，达芬奇那边随之更新
+            self._publish_studio_srt()
         elif not _from_delta:
             bind_text(self.save_state, translate('未保存', current_language()))
             self._schedule_autosave()
@@ -2213,9 +2351,41 @@ class SubtitleStudioPage(
         return self._selection_latency.snapshot()
 
     def save(self) -> None:
-        return self.project_controller.save(
+        result = self.project_controller.save(
             save_project_fn=save_project, message_box_fn=studio_message_box
         )
+        # Live link with DaVinci: every save republishes the subtitle track as
+        # SRT so the Resolve plugin can refresh its timeline.
+        self._publish_studio_srt()
+        return result
+
+    def _publish_studio_srt(self) -> None:
+        """Write the current cues as SRT to the DaVinci bridge location.
+
+        The plugin watches this file and rebuilds the Resolve subtitle track
+        whenever it changes, so an edit saved here is reflected there without
+        any manual export step.
+        """
+        try:
+            project = self.project
+            if project is None:
+                return
+            from .studio_subtitle_export import compile_srt
+            from .runtime_paths import user_data_root
+            from pathlib import Path as _Path
+
+            cues = list(getattr(project, "cues", []) or [])
+            if not cues:
+                return
+            text = compile_srt(cues)
+            target_dir = _Path(user_data_root()) / "bridge"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / "subtitles.srt"
+            tmp = target.with_suffix(".srt.tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(target)
+        except Exception:  # noqa: BLE001 - the link must never break saving
+            pass
 
     def _wait_for_autosave_worker(self, timeout: float = 2.0) -> None:
         worker = self._autosave_thread
@@ -2225,6 +2395,11 @@ class SubtitleStudioPage(
             raise TimeoutError("自动保存仍在写入；正式保存未阻塞界面，可稍后重试。")
 
     def _autosave(self) -> None:
+        if self._is_davinci_bridge_project():
+            # 协同模式：字幕改动已由 _publish_studio_srt 即时回写达芬奇，
+            # 这里不再落任何本地恢复文件。
+            self._autosave_timer.stop()
+            return
         if getattr(getattr(self, "_cue_timing_preview", None), "active", False):
             self._autosave_timer.start(100)
             return
@@ -2242,6 +2417,8 @@ class SubtitleStudioPage(
             bind_text(self.save_state, translate('正在自动保存…', current_language()))
             self.save_state.setToolTip("")
             self._start_autosave_worker(self._autosave_generation)
+            # Autosave也同步到达芬奇，让编辑即时可见
+            self._publish_studio_srt()
 
     def _start_autosave_worker(self, generation: int) -> None:
         if not self.project:
@@ -2362,8 +2539,10 @@ class SubtitleStudioPage(
                     "context_collapsed": not self.context_panel.isVisible(),
                     # Keep the legacy numeric meaning for older readers; new
                     # readers restore by stable identity after tab removal.
-                    "context_tab": self._last_context_tab + (1 if self._last_context_tab else 0),
-                    "context_tab_id": ("ai", "style", "video", "highlight", "media")[self._last_context_tab],
+                    "context_tab": self._last_context_tab,
+                    "context_tab_id": ("ai", "style")[
+                        min(self._last_context_tab, 1)
+                    ],
                     "cue_list_visible": self.cue_list_panel.isVisible(),
                     "editor_visible": self.cue_editor.isVisible(),
                     "context_visible": self.context_panel.isVisible(),
@@ -2380,6 +2559,12 @@ class SubtitleStudioPage(
     def _remember_context_tab(self, index: int) -> None:
         if index >= 0:
             self._last_context_tab = int(index)
+        # 「文稿」页：切到该页时刷新工程状态（换工程后旧预览要清掉）。
+        if index == getattr(self, "script_match_tab_index", -1):
+            api = getattr(self, "script_match_panel_api", None)
+            refresh = (api or {}).get("refresh_project") if isinstance(api, dict) else None
+            if callable(refresh):
+                refresh()
 
     def _show_context_panel(self) -> None:
         self.context_panel.show()
@@ -2578,7 +2763,6 @@ class SubtitleStudioPage(
         from .project_display_name import display_project_name
         if self.project is None:
             bind_text(self.filename, tr('2ByteASR  兔白字幕'))
-            self._refresh_studio_empty_state(rescan=False)
         else:
             user_text(self.filename).setText(display_project_name(path=self.project_path, project=self.project))
         self._context_tab_mode = ""
@@ -2821,55 +3005,31 @@ class SubtitleStudioPage(
     def _table_activated(self, index: QModelIndex) -> None:
         return self.cue_controller.table_activated(index)
 
-    def _open_render_dialog(self) -> None:
-        if not self.project or not self._preview_path:
-            return
-        self._cancel_scrub()
-        if self.export_workspace is not None:
-            self.export_workspace.release_preview()
-            self.export_workspace.deleteLater()
-        self.video_compositor.set_interaction_enabled(False)
-        self.position_overlay.hide()
-        self.export_workspace = StudioExportWorkspace(
-            self.project,
-            str(self._preview_path),
-            project_path=self.project_path,
-            parent=self,
-            preview_widget=self.video,
-        )
-        self.export_workspace.back_requested.connect(self._close_export_workspace)
-        self.export_workspace.render_succeeded.connect(lambda path: self._render_succeeded(path, False))
-        self.layout().addWidget(self.export_workspace, 1)
-        self.workspace_splitter.hide()
-        self.workspace_host.hide()
-        self.export_workspace.show()
-        self.studio_render_button.setEnabled(False)
-        self._sync_navigation_chrome()
+    def open_recognition_panel(self) -> None:
+        """打开识别入口（工具面板的「识别」页已按用户要求删除）。
 
-        from .ui_motion import settle_layout, reveal_cue
-        settle_layout(self)
-        reveal_cue(self.export_workspace)
+        2026-10-18（用户："这里的识别删除掉吧 我发现没有字幕的之后左边的菜单会
+        出现识别字幕的ui"）：工具面板不再有识别页。识别入口统一为左侧空状态里的
+        「识别字幕」按钮（cue_recognize_button → _open_recognition_sheet），
+        这里保留同名方法做兼容转发。
+        """
+        sheet = getattr(self, "_open_recognition_sheet", None)
+        if callable(sheet):
+            sheet()
 
-    def _close_export_workspace(self) -> None:
-        if self.export_workspace is not None:
-            try:
-                self.export_workspace.release_preview()
-            except Exception:
-                pass
-            self._restore_studio_video()
-            self.export_workspace.hide()
-            self.export_workspace.deleteLater()
-            self.export_workspace = None
-            self.video_compositor.set_interaction_enabled(True)
-            self.video_compositor.set_selected_clip(self.timeline.selected_video_clip_id)
-        if hasattr(self, "workspace_splitter"):
-            self.workspace_splitter.show()
-            self.workspace_host.show()
-        if hasattr(self, "studio_render_button"):
-            self.studio_render_button.setEnabled(True)
-        self._cancel_scrub()
-        self.unsetCursor()
-        self._sync_navigation_chrome()
+    def _mount_recognition_page(self) -> None:
+        """（已停用）不再把主窗口那棵 14000 行的识别页搬进工具面板。
+
+        实测两次崩溃：
+          1. ``page.setParent(None)`` 后再装 → ``_apply_ui_language()`` 把它当游离
+             顶层窗口刷新，触发 Qt 布局自激递归（栈溢出，进程直接退出）。
+          2. 改成 ``setWidget(page)`` 一步换父级 → 依旧在 ``_mount_recognition_page``
+             内部崩溃（trace 里 GUI_STALL 的栈顶就是这个函数）。
+        根因是那棵控件树自身的布局在窄容器里会自激，与 reparent 方式无关。
+        因此工具面板的「识别」页改为"重建一份等价的设置界面"（见
+        studio_workspace._recognition_panel），原识别页仅在其他入口按需显示。
+        """
+        return
 
     def _cancel_scrub(self) -> None:
         """End any Studio numeric scrub before/after a modal child dialog."""
@@ -2877,10 +3037,6 @@ class SubtitleStudioPage(
             cancel = getattr(control, "_cancel_scrub", None)
             if callable(cancel):
                 cancel()
-
-    def _render_succeeded(self, path: str, preview: bool) -> None:
-        if preview:
-            self.video.load(path, "")
 
     def hideEvent(self, event) -> None:
         self._gui_thread_handoff.release()

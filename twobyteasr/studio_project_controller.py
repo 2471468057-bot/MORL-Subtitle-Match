@@ -114,8 +114,6 @@ class StudioProjectController:
         if not skip_dirty_guard and not self.dirty_guard.confirm("关闭当前工程"):
             return False
         page._cancel_media_ingest()
-        if hasattr(page, "_close_export_workspace"):
-            page._close_export_workspace()
         page._project_view_state = "hub"
         page._project_opening_path = ""
         page._close_project_session("project_hub")
@@ -134,11 +132,8 @@ class StudioProjectController:
                 page.position_overlay.hide()
             except RuntimeError:
                 pass
-        page._set_hub_toolbar_mode(True)
-        page.hub_loading_label.hide()
-        page.studio_empty.show()
-        page.studio_empty.raise_()
-        page._refresh_studio_empty_state()
+        # 工程库已彻底移除：项目完全依附达芬奇时间线。这里只保留"清空会话"
+        # 的副作用，编辑区外观不变（不存在可返回的库页面）。
         return True
 
     def open_project_dialog(self) -> None:
@@ -440,8 +435,6 @@ class StudioProjectController:
         page._cancel_media_ingest()
         page._studio_trace("OPEN_REQUEST", project_path=str(requested_path))
         page._studio_trace("OPEN_VALIDATE", exists=requested_path.is_file(), readable=os.access(requested_path, os.R_OK))
-        if hasattr(page, "_close_export_workspace"):
-            page._close_export_workspace()
         page._project_view_state = "loading"
         page._project_opening_path = str(requested_path.resolve())
         project_id = str(requested_path.resolve())
@@ -525,11 +518,8 @@ class StudioProjectController:
                 audio_timebase=str((primary_asset.audio_metadata if primary_asset is not None else {}).get("timebase") or ""),
             )
         except Exception as exc:
-            page._project_view_state = previous_view_state if self.session.project is not None else "hub"
+            page._project_view_state = previous_view_state if self.session.project is not None else "open"
             page._project_opening_path = ""
-            page._set_hub_toolbar_mode(self.session.project is None)
-            page.studio_empty.setEnabled(True)
-            page.hub_loading_label.hide()
             page._studio_trace("OPEN_FAILED", stage=open_stage, exception_type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
             studio_message_box(page, QMessageBox.Icon.Critical, tr('无法打开项目'), str(exc))
             return
@@ -592,16 +582,28 @@ class StudioProjectController:
         page._project_view_state = "open"
         page._studio_trace("VIEW_TRANSITION", source="loading", target="open")
         page._project_opening_path = ""
-        page._set_hub_toolbar_mode(False)
-        page.studio_empty.setEnabled(True)
-        page.hub_loading_label.hide()
-        page.studio_empty.hide()
         play_res_x = max(1, int(project.render_settings.get("play_res_x", 1920)))
         play_res_y = max(1, int(project.render_settings.get("play_res_y", 1080)))
         page.position_overlay.set_video_size(
             project.media.width,
             project.media.height,
         )
+        # 画面区按工程画幅比例摆放（竖屏时间线 → 竖屏预览），并让 mpv 裁切填充，
+        # 复现达芬奇"整幅缩放并裁切"的构图。
+        aspect_host = getattr(page, "video_aspect_host", None)
+        if aspect_host is not None:
+            aspect_host.set_canvas_size(project.media.width, project.media.height)
+        video = getattr(page, "video", None)
+        canvas_fill = getattr(video, "set_canvas_fill", None)
+        if callable(canvas_fill) and project.media.width and project.media.height:
+            # 让 mpv 的视频帧 = 画幅，字幕才会画在画幅坐标系里（与达芬奇一致）。
+            canvas_fill(project.media.width, project.media.height)
+        # 合成层也要立刻拿到真实画幅：它的初始画幅是"未知"，若等到第一次播放才
+        # 更新，首帧会先按父控件铺满、随后收缩，出现两套画面叠加的残影。
+        compositor = getattr(page, "video_compositor", None)
+        sync_size = getattr(compositor, "set_video_size", None)
+        if callable(sync_size) and project.media.width and project.media.height:
+            sync_size(project.media.width, project.media.height)
         mark_hydration("project_assignment")
         page._remember_recent_project(self.session.project_path)
         owner = page.window().parentWidget() if page.window() is not None else None
@@ -1011,6 +1013,23 @@ class StudioProjectController:
         self, project_path: Path, official: SubtitleProject, *, single_shot_fn
     ) -> tuple[SubtitleProject, bool]:
         page = self.page
+        # 协同模式（工程来自达芬奇时间线）：达芬奇才是唯一真相，不问、不恢复，
+        # 顺手清掉历史遗留的恢复点。这也免去了每次启动的恢复扫描开销。
+        if page._is_davinci_bridge_project(official):
+            stale = recoverable_autosave(project_path, official=official)
+            if stale is not None:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+            page._studio_trace(
+                "RECOVERY",
+                official_path=str(project_path),
+                autosave_path=str(stale) if stale else "",
+                chosen_path=str(project_path),
+                decision="davinci_bridge_skip",
+            )
+            return official, False
         candidate = recoverable_autosave(project_path, official=official)
         page._studio_trace(
             "RECOVERY",

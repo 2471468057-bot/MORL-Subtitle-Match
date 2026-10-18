@@ -843,17 +843,16 @@ def _model_roles(model: WorkshopModel) -> tuple[str, ...]:
 
 
 def _browser_groups(model: WorkshopModel) -> tuple[str, ...]:
-    """Browse-tab membership: online API cards live only in 「在线 API」.
+    """Browse-tab membership（2026-10-17 简化）。
 
-    _model_roles keeps capability semantics (the role picker still offers
-    API models for primary/review). The browser tabs are a deployment-mode
-    grouping: API cards used to leak into 主力转写/文字复核 via capability
-    derivation while the 在线 API tab stayed empty because nothing ever
-    produced the "api" role (三十二轮用户实录）。
+    原「在线 API」独立 tab 已取消：API 卡按 adapter_bindings 实际绑定的角色
+    直接归入主力转写/文字复核 tab（如 MOSS Pro 只在主力，OpenAI 转写同时进
+    主力与复核）。用户少切一层 tab；卡片上的「在线」徽标保留部署方式区分。
     """
 
     if model.api_preset:
-        return ("api",)
+        roles = tuple(sorted({role for role, _ in model.adapter_bindings}))
+        return roles or ("primary",)
     return _model_roles(model)
 
 
@@ -4631,6 +4630,10 @@ class ModelWorkshopPage(QWidget):
         self._technical_cache: dict[str, ModelTechnicalDialog] = {}
         self._density_comfortable = None
         self._filter_signature = None
+        # 2026-10-17 简化：默认聚焦模式（只显示推荐/在用卡）+ 折叠开关状态。
+        self._focus_mode = True
+        self._focus_expanded = False
+        self._hidden_focus: list[str] = []
         self._mac_cpu_probe_running = False
         self._mac_cpu_probe_result = None
         self.mac_cpu_runtime_checked.connect(self._mac_cpu_runtime_checked)
@@ -4958,7 +4961,8 @@ class ModelWorkshopPage(QWidget):
         tabs.setSpacing(7)
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
-        for text, role in (("主力转写", "primary"), ("字幕时间轴", "timeline"), ("文字复核", "review"), ("在线 API", "api")):
+        # 2026-10-17 简化：在线 API 卡按角色并入三个 tab，不再单设 tab。
+        for text, role in (("主力转写", "primary"), ("字幕时间轴", "timeline"), ("文字复核", "review")):
             button = QPushButton(text)
             button.setObjectName("workshopTab")
             button.setCheckable(True)
@@ -5095,6 +5099,13 @@ class ModelWorkshopPage(QWidget):
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setMinimumHeight(100)
         self.card_layout.addWidget(self.empty_label)
+        # 2026-10-17 简化：聚焦模式折叠条。仅当有卡片被收起时可见。
+        self.focus_toggle = QPushButton()
+        self.focus_toggle.setObjectName("workshopSecondary")
+        self.focus_toggle.setFlat(True)
+        self.focus_toggle.clicked.connect(self._toggle_focus_mode)
+        self.focus_toggle.hide()
+        self.card_layout.addWidget(self.focus_toggle)
         self.card_layout.addStretch(1)
         scroll.setWidget(host)
         layout.addWidget(scroll, 1)
@@ -5832,19 +5843,9 @@ class ModelWorkshopPage(QWidget):
         label = getattr(self, "role_subtitle", None)
         if label is None:
             return
-        default_text = "按角色组合识别能力；每个角色都可替换、关闭或改用在线 API。"
-        if self.browser_role != "api":
-            label.setText(default_text)
-            return
-        models = self.runtime_settings.get("models", {})
-        from .ui import ASR_API_PRESETS
-        from .llm_config import read_asr_api_key
-
-        provider = str(models.get("qwen_asr_api_provider", "qwen31_filetrans") or "qwen31_filetrans")
-        preset = ASR_API_PRESETS.get(provider, {})
-        model_id = str(models.get("qwen_asr_api_model", "") or "")
-        (bind_text(label, '当前使用：{value0} · {value1}', value0=tr(preset.get('label', provider)), value1=model_id) if model_id else bind_text(label, '当前使用：{value0}', value0=tr(preset.get('label', provider))))
-        del read_asr_api_key
+        # 2026-10-17 简化：在线 API tab 已取消，subtitle 固定为角色说明；
+        # 当前 API 组合已由选中卡与徽标表达，不再重复展示。
+        label.setText("按角色组合识别能力；每个角色都可替换、关闭或改用在线 API。")
 
     def _toggle_sort_filter(self):
         if self.sort_filter_popover.isVisible():
@@ -5933,6 +5934,10 @@ class ModelWorkshopPage(QWidget):
         # Sorting only reorders. Filtering changes the visible set.
         # _apply_filter must never drop models just because a sort changed.
         needle = self.search.text().strip().casefold()
+        # 2026-10-17 简化：每轮重算收起清单；用户主动搜索/筛选时自动展开全部。
+        self._hidden_focus = []
+        if needle or self._filter_chips:
+            self._focus_expanded = True
         ordered = self._ordered_models()
         visibility = []
         for model in ordered:
@@ -5949,6 +5954,14 @@ class ModelWorkshopPage(QWidget):
                 and (not needle or needle in haystack)
                 and self._card_matches_chips(model)
             )
+            # 2026-10-17 简化：无搜索、无筛选时默认只展示推荐/在用/已安装卡，
+            # 冷门模型收进底部「显示全部」折叠，避免 24 张卡淹没新手。
+            if show and self._focus_mode and not needle and not self._filter_chips:
+                state = self._model_state(model, self.browser_role)
+                in_use = state in {"selected", "installed", "configured", "downloading"}
+                if not (model.recommended or in_use):
+                    self._hidden_focus.append(model.key)
+                    show = False
             visibility.append((model.key, show))
         signature = tuple(visibility)
         if signature == self._filter_signature:
@@ -5961,6 +5974,26 @@ class ModelWorkshopPage(QWidget):
             card.setVisible(show)
             visible += int(show)
         self.empty_label.setVisible(visible == 0)
+        self._update_focus_toggle(len(self._hidden_focus))
+
+    def _update_focus_toggle(self, hidden_count: int):
+        """聚焦折叠条：仅在无搜索/筛选且确有卡片被收起时出现。"""
+        toggle = getattr(self, "focus_toggle", None)
+        if toggle is None:
+            return
+        active = self._focus_mode and not self._focus_expanded and hidden_count > 0
+        toggle.setVisible(active)
+        if active:
+            bind_text(
+                toggle,
+                '已收起 {value0} 个非推荐模型 · 显示全部',
+                value0=hidden_count,
+            )
+
+    def _toggle_focus_mode(self):
+        self._focus_expanded = not self._focus_expanded
+        self._filter_signature = None  # 强制重算可见性
+        self._apply_filter()
 
     def _view_model(self, key: str):
         if key not in self._cards:
@@ -6622,9 +6655,16 @@ class ModelPickerPanel(QWidget):
         cards_layout.setContentsMargins(0, 0, 0, 0)
         cards_layout.setSpacing(10)  # P0-2: consistent 8-12px spacing in picker too
         by_key = {key: card.model for key, card in self.controller._cards.items()}
+        # 2026-10-17（用户反馈「不能选的放在选择框内干嘛」）：只列出真正接入
+        # 本角色管线的模型。此前 MOSS/FireRed-AED 这类仅绑定其它角色的已下载
+        # 卡也出现在弹窗里，按钮禁用为「已下载·接入中」，点击无任何反应，
+        # 用户会当成故障。以 _runtime_role_available（capability + adapter
+        # 双重判定）为准过滤；API 卡只在其 api_preset 服务商可配置时显示。
         for key in CANONICAL_MODEL_ORDER:
             model = by_key.get(key)
             if model is None or self.role not in _model_roles(model):
+                continue
+            if not _runtime_role_available(model, self.role):
                 continue
             card = ModelCard(model)
             card.selected.connect(self._select)

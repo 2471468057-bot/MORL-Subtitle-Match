@@ -1447,6 +1447,48 @@ def save_project(project: SubtitleProject, path: str | os.PathLike[str]) -> Path
     return target
 
 
+def _normalize_play_res(project: SubtitleProject) -> None:
+    """把画幅补全成工程真实画幅。
+
+    代码里约 25 处都用 ``render_settings.get("play_res_x", 1920)`` /
+    ``get("play_res_y", 1080)`` 取画幅。达芬奇桥接工程的 render_settings 是空
+    的，于是全部退回 **1920x1080（横屏）**；而时间线画幅可能是 1080x1920（竖屏）。
+    后果：ASS 的 PlayRes、字幕锚点、字号缩放、变换框全部按横屏算——竖屏工程里
+    字幕位置和大小全错，且与画面上渲染的字幕对不上。
+
+    这里在载入时按工程画布（媒体分辨率）补全，一处修好全部调用点。
+    """
+    settings = getattr(project, "render_settings", None)
+    if not isinstance(settings, dict):
+        return
+    media = getattr(project, "media", None)
+    for axis, media_attr, fallback in (("x", "width", 1920), ("y", "height", 1080)):
+        key = f"play_res_{axis}"
+        current = settings.get(key)
+        try:
+            valid = current is not None and int(current) > 0
+        except (TypeError, ValueError):
+            valid = False
+        if valid:
+            continue
+        candidate = 0
+        try:
+            candidate = int(getattr(media, media_attr, 0) or 0)
+        except (TypeError, ValueError):
+            candidate = 0
+        settings[key] = candidate if candidate > 0 else fallback
+    try:
+        from .runtime_trace import GLOBAL_STUDIO_TRACE
+        GLOBAL_STUDIO_TRACE.emit('PLAY_RES_NORMALIZED', {
+            'play_res_x': settings.get('play_res_x'),
+            'play_res_y': settings.get('play_res_y'),
+            'media_width': getattr(media, 'width', None),
+            'media_height': getattr(media, 'height', None),
+        })
+    except Exception:
+        pass
+
+
 def load_project(path: str | os.PathLike[str]) -> SubtitleProject:
     project_path = Path(path)
     try:
@@ -1457,6 +1499,7 @@ def load_project(path: str | os.PathLike[str]) -> SubtitleProject:
     try:
         expected = validate_autosave_integrity(payload)
         project = SubtitleProject.from_dict(payload)
+        _normalize_play_res(project)
         if expected is not None:
             actual = graph_counts({key: [asdict(x) for x in getattr(project, key)]
                                    for key in ("media_pool", "video_tracks", "audio_tracks", "av_track_groups")})

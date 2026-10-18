@@ -25,6 +25,8 @@ def _trace_mark(label: str, start: float | None = None) -> float:
 SETTINGS_ORG = "2ByteASR"
 SETTINGS_APP = "2ByteASR"
 _volatile_theme_keys: dict[str, str] = {}
+# theme_key() 的缓存；写入路径（save_theme_key）负责失效。见函数说明。
+_theme_key_cache: str | None = None
 
 
 _PARENT_CHANGE = QEvent.Type.ParentChange
@@ -62,7 +64,6 @@ class _ThemeRootFilter(QObject):
                 if widget.objectName() == "subtitleStudio":
                     from .studio_theme import build_studio_qss
                     widget.setStyleSheet(build_studio_qss(theme_definition(theme_key())))
-                    widget._set_hub_toolbar_mode(getattr(widget, "_project_view_state", "") == "hub")
                 refresh = getattr(widget, "refresh_theme_palette", None)
                 if callable(refresh):
                     refresh()
@@ -107,10 +108,25 @@ def _settings() -> QSettings:
 
 
 def theme_key() -> str:
+    """Active theme key, cached.
+
+    每次调用都新建 QSettings 会走一次注册表读取，而绘制路径（字幕表每个单元格
+    都要取状态色/时间轴配色）会高频调用它——实测快速缩放窗口时这里是排在最前
+    面的阻塞栈。写入统一经过 save_theme_key()，所以在那里失效即可。
+    """
+    global _theme_key_cache
+    if _theme_key_cache is not None:
+        return _theme_key_cache
     settings = _settings()
     stored = settings.value("appearance/theme")
     value = str(stored or _volatile_theme_keys.get(settings.fileName(), DEFAULT_THEME_KEY))
-    return value if value in THEMES else DEFAULT_THEME_KEY
+    _theme_key_cache = value if value in THEMES else DEFAULT_THEME_KEY
+    return _theme_key_cache
+
+
+def invalidate_theme_key() -> None:
+    global _theme_key_cache
+    _theme_key_cache = None
 
 
 def save_theme_key(key: str) -> str:
@@ -128,6 +144,7 @@ def save_theme_key(key: str) -> str:
         # active selection usable for this process without confusing another
         # QSettings backend used by tests or portable builds.
         _volatile_theme_keys[settings_id] = normalized
+    invalidate_theme_key()
     return normalized
 
 
@@ -393,10 +410,7 @@ def apply_application_theme(app: QApplication | None = None, key: str | None = N
                 sheet = build_studio_qss(theme)
                 if page.styleSheet() != sheet:
                     page.setStyleSheet(sheet)
-                hub_refresh = getattr(page, "_set_hub_toolbar_mode", None)
-                if callable(hub_refresh):
-                    hub_refresh(getattr(page, "_project_view_state", "") == "hub")
-        t = _trace_mark("studio page sheet + hub mode", t)
+        t = _trace_mark("studio page sheet", t)
         for widget in app.allWidgets():
             if getattr(widget, "_secondary_theme_surface", False) and widget.isVisible():
                 from .studio_theme import refresh_secondary_surface_theme

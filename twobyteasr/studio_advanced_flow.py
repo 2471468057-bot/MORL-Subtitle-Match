@@ -1992,6 +1992,15 @@ class StudioAdvancedFlowMixin:
         # Geometry is not a visual revision. Rebinding the cached initial
         # composite here alternated it with the animated layer composite,
         # restarting the layer pipeline and reviving an old shadow/position.
+        #
+        # 2026-10-18（用户："感觉卡卡的巨慢"）：实测 trace 里 CANVAS_GEOMETRY_SYNC
+        # 有 4387 条，且 content_rect 只在 [0,0,146,260] 与 [0,8,115,204] 之间
+        # 来回切换 4000+ 次。原因就是这个函数无条件重建渲染器：设置几何 → 触发
+        # resize → 重新算出另一个 content_rect → 再设置几何，形成乒乓。
+        # 几何真的是同一个值时不再重建渲染器。
+        if content_rect == getattr(self, "_advanced_overlay_synced_rect", None):
+            return
+        self._advanced_overlay_synced_rect = QRect(content_rect)
         self.ensure_active_subtitle_renderer(reason="overlay_sync")
 
     def _selected_cue_is_at_playhead(self, cue: StudioCue | None) -> bool:
@@ -2407,7 +2416,6 @@ class StudioAdvancedFlowMixin:
         transform = getattr(self, "position_overlay", None)
         transform_should_show = bool(
             transform is not None
-            and getattr(self, "export_workspace", None) is None
             and page_ready
             and cue_inside
             and bool(self.selected_cue_id) and cue is not None and cue.id == self.selected_cue_id
@@ -2420,6 +2428,35 @@ class StudioAdvancedFlowMixin:
             transform.setVisible(transform_should_show)
             if transform_should_show:
                 transform.sync_to_video(self.video)
+                # 一次性几何遥测：窗口/容器/视频层的真实尺寸，用于定位"画面没占满"。
+                # 仅在尺寸变化时写一行，正常运行零开销。
+                try:
+                    import os as _os
+                    if _os.environ.get('TWOBYTEASR_GEOMETRY_TRACE') == '1':
+                        aspect = getattr(self, 'video_aspect_host', None)
+                        host = getattr(self, 'video_overlay_host', None)
+                        video = getattr(self, 'video', None)
+                        snap = (
+                            tuple(aspect.geometry().getRect()) if aspect is not None else None,
+                            tuple(host.geometry().getRect()) if host is not None else None,
+                            tuple(video.geometry().getRect()) if video is not None else None,
+                            tuple(self.position_overlay.geometry().getRect()),
+                            getattr(self.position_overlay, 'play_res_x', None),
+                            getattr(self.position_overlay, 'play_res_y', None),
+                            getattr(self.position_overlay, 'video_width', None),
+                            getattr(self.position_overlay, 'video_height', None),
+                        )
+                        if getattr(self, '_geometry_trace_last', None) != snap:
+                            self._geometry_trace_last = snap
+                            self._studio_trace(
+                                'GEOMETRY',
+                                aspect_host=snap[0], overlay_host=snap[1], video=snap[2],
+                                position_overlay=snap[3], play_res=[snap[4], snap[5]],
+                                video_size=[snap[6], snap[7]],
+                                aspect_ratio=(round(snap[0][2] / max(1, snap[0][3]), 4) if snap[0] else None),
+                            )
+                except Exception:
+                    pass
                 if not hasattr(self,'_selection_geometry'):
                     from .selection_geometry import SelectionGeometryController
                     self._selection_geometry=SelectionGeometryController(self)

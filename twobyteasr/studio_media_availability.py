@@ -45,8 +45,8 @@ class StudioMediaAvailability(QObject):
         page.destroyed.connect(lambda *_: self.cancelled.set())
 
     def show_media(self):
+        # 素材页已删除：只展开工具面板，不再切换标签。
         self.page._show_context_panel()
-        self.page.context_drawer.setCurrentIndex(self.page.media_pool_tab_index)
 
     def choose_offline(self):
         from PySide6.QtWidgets import QInputDialog

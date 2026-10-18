@@ -165,7 +165,11 @@ class VideoCompositionScene(QWidget):
         self._layers: list[dict[str, Any]] = []
         self._selected_clip_id = ""
         self._interaction_enabled = True
-        self._video_aspect = 16 / 9
+        # 2026-10-18（用户："首次进入莫名其妙的会卡住这个画面"）：之前硬编码 16/9，
+        # 竖屏工程（1080x1920）首帧会先按横屏铺满、随后缩成竖屏，两套画面叠加在
+        # 一起（上层是拉伸放大的画面）。这里保持 0 表示"画幅未知"，几何同步在拿到
+        # 真实画幅前不做任何缩放/裁切，避免首帧画出错误的第二层画面。
+        self._video_aspect = 0.0
         if parent is not None:
             parent.installEventFilter(self)
         self._layer_polygons: dict[str, QPolygonF] = {}
@@ -407,18 +411,29 @@ class VideoCompositionScene(QWidget):
                           not enabled or not bool(self._selected_clip_id))
 
     def set_video_size(self, width: int, height: int) -> None:
-        self._video_aspect = max(1, int(width)) / max(1, int(height))
+        try:
+            w = int(width or 0)
+            h = int(height or 0)
+        except (TypeError, ValueError):
+            w = h = 0
+        self._video_aspect = (w / h) if (w > 0 and h > 0) else 0.0
         self._sync_viewport_geometry()
+        self.update()
 
     def _sync_viewport_geometry(self) -> None:
         owner = self.parentWidget()
         if owner is None:
             return
         width, height = owner.width(), owner.height()
-        fitted_w = min(width, height * self._video_aspect)
-        fitted_h = fitted_w / self._video_aspect
-        target = QRectF((width-fitted_w)/2, (height-fitted_h)/2,
-                        fitted_w, fitted_h).toRect()
+        if self._video_aspect <= 0.0:
+            # 画幅未知：先铺满父控件，等 set_video_size 拿到真实画幅再收缩。
+            # 这样不会出现"先画一套横屏、再画一套竖屏"的叠影。
+            target = QRectF(0, 0, width, height).toRect()
+        else:
+            fitted_w = min(width, height * self._video_aspect)
+            fitted_h = fitted_w / self._video_aspect
+            target = QRectF((width-fitted_w)/2, (height-fitted_h)/2,
+                            fitted_w, fitted_h).toRect()
         if self.geometry() != target:
             self.setGeometry(target)
 

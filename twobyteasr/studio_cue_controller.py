@@ -575,7 +575,6 @@ class StudioCueController:
                         and page.position_edit_button.isChecked()
                         and page.isVisible()
                         and bool(getattr(page.video,'_paused',True))
-                        and getattr(page, "export_workspace", None) is None
                     ):
                         page.position_overlay.show()
                         page.position_overlay.raise_()

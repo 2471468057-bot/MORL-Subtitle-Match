@@ -26,9 +26,11 @@ class SubtitleCoordinateMapper:
         viewport = QRectF(self.viewport_rect)
         if viewport.width() <= 0 or viewport.height() <= 0:
             return viewport
-        video_width = max(1, int(self.video_width))
-        video_height = max(1, int(self.video_height))
-        target_aspect = video_width / video_height
+        # 2026-10-18（用户："达芬奇里是竖屏，这里变成横屏了"）：画面框必须按
+        # **工程画幅（play_res = 达芬奇时间线分辨率）** 定比例，而不是按素材的
+        # 显示比例。竖屏时间线 + 横屏素材（1080x1920 画幅 / 1920x1080 素材）时，
+        # 用素材比例会把字幕映射到一个横着的框里，位置与大小全错。
+        target_aspect = max(1, int(self.play_res_x)) / max(1, int(self.play_res_y))
         viewport_aspect = viewport.width() / viewport.height()
         if viewport_aspect > target_aspect:
             height = viewport.height()

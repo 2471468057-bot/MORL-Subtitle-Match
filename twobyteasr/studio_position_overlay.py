@@ -548,7 +548,41 @@ class SubtitlePositionOverlay(QWidget):
                 self._measured_bounds=QRectF(bounds.center().x()-bounds.width()*ratio/2,
                     bounds.center().y()-bounds.height()*ratio/2,bounds.width()*ratio,bounds.height()*ratio)
             else:
-                self.font_size = max(8.0, min(500.0, self._origin_font_size + delta * 0.7))
+                # 2026-10-18（用户："字幕和显示的边框不一致 / 要能用边框调字幕大小"）：
+                # 原生路径原先只改 font_size、不更新已测得边界，于是拖动时"文字在变、
+                # 框不动"；而且按中心缩放与 libass 的行为不符——libass 是围绕对齐
+                # 锚点重排的（alignment 1-3 底对齐、4-6 居中、7-9 顶对齐）。
+                # 这里按比例缩放并保持锚点固定，框就和文字同步生长/收缩。
+                bounds = self._origin_bounds
+                if bounds is not None and bounds.width() > 1.0 and bounds.height() > 1.0:
+                    if self._resize_handle in {"l", "r"}:
+                        ratio = 1 + outward_x * 2 / max(1.0, bounds.width())
+                    elif self._resize_handle in {"t", "b"}:
+                        ratio = 1 + outward_y * 2 / max(1.0, bounds.height())
+                    else:
+                        ratio = 1 + 2 * (outward_x * bounds.width() + outward_y * bounds.height()) / max(
+                            1.0, bounds.width() ** 2 + bounds.height() ** 2)
+                    ratio = max(0.1, min(4.0, ratio))
+                    self.font_size = max(8.0, min(500.0, self._origin_font_size * ratio))
+                    new_w = bounds.width() * ratio
+                    new_h = bounds.height() * ratio
+                    column = (self.alignment - 1) % 3   # 0 左 / 1 中 / 2 右
+                    row = (self.alignment - 1) // 3      # 0 底 / 1 中 / 2 顶
+                    if column == 0:
+                        new_left = bounds.left()
+                    elif column == 2:
+                        new_left = bounds.right() - new_w
+                    else:
+                        new_left = bounds.center().x() - new_w / 2.0
+                    if row == 0:
+                        new_top = bounds.bottom() - new_h
+                    elif row == 2:
+                        new_top = bounds.top()
+                    else:
+                        new_top = bounds.center().y() - new_h / 2.0
+                    self._measured_bounds = QRectF(new_left, new_top, new_w, new_h)
+                else:
+                    self.font_size = max(8.0, min(500.0, self._origin_font_size + delta * 0.7))
             self.font_size_preview.emit(self.font_size)
         else:
             self._snap_enabled = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)

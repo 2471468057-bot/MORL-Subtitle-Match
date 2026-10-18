@@ -236,9 +236,11 @@ QToolButton#studioTool {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
-    min-width: 32px;
-    min-height: 32px;
-    padding: 4px;
+    /* 2026-10-18（用户："不要那么紧凑"）：32→36、内边距 4→5，图标按钮不再
+       和旁边 36px 的文字按钮高低不齐。 */
+    min-width: 36px;
+    min-height: 36px;
+    padding: 5px;
 }}
 QToolButton#studioTool:hover {{
     background: {hover};

@@ -93,9 +93,17 @@ class ResponsiveCueTableView(QTableView):
                 self.setColumnHidden(column, True)
             self.setColumnHidden(3, False)
             return
+        compact = self.viewport().width() < 370
+        # Column geometry changes run a new layout pass, which fires resizeEvent
+        # again. Reapplying identical widths each time makes the table visibly
+        # jitter while a splitter or window is dragged, so the work is skipped
+        # unless the state actually changed.
+        signature = (compact, self.viewport().width())
+        if getattr(self, "_responsive_signature", None) == signature:
+            return
+        self._responsive_signature = signature
         for column in (0, 1, 2, 3):
             self.setColumnHidden(column, False)
-        compact = self.viewport().width() < 370
         self.setColumnHidden(4, compact)
         widths = (32, 88, 52) if compact else (36, 88, 66)
         widths = tuple(max(width, self.fontMetrics().horizontalAdvance(str(self.model().headerData(column, Qt.Orientation.Horizontal))) + 14) for column, width in enumerate(widths))
@@ -107,6 +115,74 @@ class ResponsiveCueTableView(QTableView):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.apply_responsive_layout()
+
+
+class CanvasAspectHost(QWidget):
+    """把子控件按指定宽高比居中放置，并尽量占满可用空间。
+
+    达芬奇时间线是竖屏（1080x1920）而素材是横屏（1920x1080）时，视频层必须
+    显示成画幅比例，否则预览会变成横屏、字幕坐标全部错位。
+
+    实现要点（踩过的坑）：
+      · 不能用「父控件是子控件」的顺序构造 —— 父子成环会无限重排（窗口跳动）。
+      · 不能用 QGridLayout + setMaximumSize —— 布局只按 sizeHint 分配，实测
+        高度只剩 7%（画面缩成一小块）。
+      · 这里直接在 resizeEvent 里给子控件 setGeometry，尺寸完全由本控件决定。
+    """
+
+    def __init__(self, child: QWidget | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._child: QWidget | None = None
+        self._aspect = 0.0
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(1, 1)
+        if child is not None:
+            self.attach(child)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def attach(self, child: QWidget) -> None:
+        """Bind the child widget laid out inside this host."""
+        self._child = child
+        child.setParent(self)
+        child.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._relayout()
+
+    def aspect(self) -> float:
+        return self._aspect
+
+    def set_canvas_size(self, width: int, height: int) -> None:
+        """Set the 工程画幅; 0/0 restores "fill the host" behavior."""
+        try:
+            w = float(width or 0)
+            h = float(height or 0)
+        except (TypeError, ValueError):
+            w = h = 0.0
+        self._aspect = (w / h) if (w > 0 and h > 0) else 0.0
+        self.updateGeometry()
+        self._relayout()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        child = self._child
+        if child is None:
+            return
+        width = max(1, self.width())
+        height = max(1, self.height())
+        if self._aspect <= 0.0:
+            child.setGeometry(0, 0, width, height)
+            return
+        if width / height > self._aspect:
+            child_h = height
+            child_w = max(1, int(round(height * self._aspect)))
+        else:
+            child_w = width
+            child_h = max(1, int(round(width / self._aspect)))
+        left = (width - child_w) // 2
+        top = (height - child_h) // 2
+        child.setGeometry(left, top, child_w, child_h)
 
 
 class StudioWorkspaceBuilder:
@@ -159,14 +235,13 @@ class StudioWorkspaceBuilder:
         page.studio_toolbar = toolbar
         toolbar.installEventFilter(page)
         bar = QHBoxLayout(toolbar)
-        bar.setContentsMargins(12, 7, 12, 7)
-        bar.setSpacing(5)
+        # 2026-10-18（用户："不要那么紧凑"）：内边距 7→9、控件间距 5→8，
+        # 与放宽后的时间轴工具栏保持一致的呼吸感。
+        bar.setContentsMargins(16, 9, 16, 9)
+        bar.setSpacing(8)
         page._studio_command_layout = bar
-        back = page._tool_button("fa5s.arrow-left", "返回上一层", page._request_back)
-        page.studio_back_button = back
-        bar.addWidget(back)
         from .elided_label import ElidedLabel
-        page.filename = ElidedLabel("兔白字幕", minimum=120)
+        page.filename = ElidedLabel("MORL 字幕匹配", minimum=120)
         page.filename.setObjectName("studioFilename")
         page.filename.setMinimumWidth(120)
         page.filename.setMaximumWidth(420)
@@ -182,24 +257,15 @@ class StudioWorkspaceBuilder:
         bar.addWidget(page.save_state)
         page.save_state.installEventFilter(page)
         bar.addStretch(1)
-        home = page._tool_button("fa5s.home", "返回字幕识别", page._request_return_home)
-        page.studio_home_button = home
-        bar.addWidget(home)
-        library = page._tool_button("fa5s.th-large", "兔白字幕工程库", page._request_return_library)
-        library.setCheckable(True)
-        page.studio_library_button = library
-        bar.addWidget(library)
-        bar.addWidget(page._toolbar_divider())
-        open_button = page._tool_button("fa5s.folder-open", "打开已有工程", page.open_project_dialog)
-        page.studio_open_button = open_button
-        bar.addWidget(open_button)
+        divider_after_library = page._toolbar_divider()
+        # 「打开已有工程」已删除：工程完全依附达芬奇时间线，不用在本地打开工程。
         import_media = page._tool_button("fa5s.plus", "导入媒体", page.import_media_dialog)
         page.studio_import_media_button = import_media
         bar.addWidget(import_media)
-        page.studio_hub_settings_button = page._tool_button(
+        page.studio_settings_button = page._tool_button(
             "fa5s.cog", "应用设置", page._show_hub_preferences
         )
-        bar.addWidget(page.studio_hub_settings_button)
+        bar.addWidget(page.studio_settings_button)
         page.relink_button = page._tool_button("fa5s.link", "重新定位源媒体", page._relink_media)
         page.relink_button.hide()
         bar.addWidget(page.relink_button)
@@ -232,17 +298,19 @@ class StudioWorkspaceBuilder:
         page.cue_list_toggle_button.setIcon(_icon("fa5s.list", GREEN))
         page.cue_list_toggle_button.setCheckable(True)
         page.cue_list_toggle_button.setChecked(True)
-        bind_text(page.cue_list_toggle_button, '显示或收起左侧字幕列表', property='toolTip')
+        page.cue_list_toggle_button.setToolTip('显示或收起左侧字幕列表')
         page.cue_list_toggle_button.clicked.connect(
             lambda checked: page._set_major_panel_visible("cue_list", checked)
         )
         bar.addWidget(page.cue_list_toggle_button)
+        # 2026-10-18（用户："删除掉这个按钮"）：工具栏的「识别」按钮移除。
+        # 识别入口统一为左侧空状态里的「识别字幕」（cue_recognize_button）。
         page.context_expand_button = QPushButton("工具面板")
         page.context_expand_button.setObjectName("studioButton")
         page.context_expand_button.setIcon(_icon("fa5s.columns", GREEN))
         page.context_expand_button.setCheckable(True)
         page.context_expand_button.setChecked(True)
-        bind_text(page.context_expand_button, '显示或收起右侧工具面板', property='toolTip')
+        page.context_expand_button.setToolTip('显示或收起右侧工具面板')
         page.context_expand_button.clicked.connect(page._toggle_context_panel)
         bar.addWidget(page.context_expand_button)
         page.review_mode_button = QPushButton("进入审核模式")
@@ -317,8 +385,7 @@ class StudioWorkspaceBuilder:
         clip_assistant.hide()
         shortcut_entry = QPushButton("快捷键设置")
         page.studio_shortcut_entry_button = shortcut_entry
-        # One owned entry only. The old unattached icon button was later shown
-        # by _set_hub_toolbar_mode(False), becoming an orphan native window.
+        # One owned entry only: an unattached icon button used to become an orphan native window.
         page.studio_shortcut_button = shortcut_entry
         shortcut_entry.setObjectName("studioButton")
         shortcut_entry.setStyleSheet("min-width: 86px; padding: 0 4px;")
@@ -341,31 +408,59 @@ class StudioWorkspaceBuilder:
         export.setIcon(_icon("fa5s.file-export"))
         export.clicked.connect(page.export_subtitles)
         bar.addWidget(export)
-        render = QPushButton("压制成片")
-        page.studio_render_button = render
-        render.setObjectName("studioButton")
-        render.clicked.connect(page._open_render_dialog)
-        bar.addWidget(render)
+        # 「压制成片」已删除（按钮与 studio_render_ui 一并移除）：字幕只回写
+        # 达芬奇时间线，压制/成片由达芬奇负责。
         # Less frequent commands share one menu; their existing buttons retain
         # signal/shortcut ownership and are used by the menu actions.
-        page._studio_toolbar_overflow_widgets = (open_button,
-            page.bilingual_toggle_button, page.review_mode_button, clip_assistant)
-        page._studio_compact_commands = (page.speaker_manager_button, shortcut_entry, find_replace, script_match)
+        # The toolbar keeps only day-to-day controls visible; everything else is
+        # reachable from the "•••" menu so the row stays readable at any width.
+        page._studio_toolbar_overflow_widgets = (
+            page.studio_settings_button,
+            page.bilingual_toggle_button,
+            page.review_mode_button,
+            clip_assistant,
+            page.speaker_manager_button,
+            page.punctuation_button,
+            shortcut_entry,
+            find_replace,
+            script_match,
+        )
+        # Compact commands are additionally hidden below a width threshold by
+        # _sync_navigation_chrome; those that stay in the overflow menu never
+        # reappear in the bar.
+        page._studio_compact_commands = ()
+        for _hidden in page._studio_toolbar_overflow_widgets:
+            _hidden.setVisible(False)
         overflow=page._tool_button('fa5s.ellipsis-h', '更多工作区操作', lambda: None)
         overflow_menu=create_studio_menu(overflow)
+
+        # Human labels for icon-only buttons, so the overflow menu stays readable.
+        _overflow_labels = {
+            id(page.studio_settings_button): '应用设置',
+            id(page.bilingual_toggle_button): '双语',
+            id(page.review_mode_button): '审核模式',
+            id(clip_assistant): '剪辑助手',
+            id(page.speaker_manager_button): '说话人管理',
+            id(page.punctuation_button): '标点',
+            id(shortcut_entry): '快捷键设置',
+            id(find_replace): '批量替换',
+            id(script_match): '匹配文稿',
+        }
+
         def update_workspace_menu():
             overflow_menu.clear()
             sources = page._studio_toolbar_overflow_widgets
             if any(not button.isVisible() for button in page._studio_compact_commands):
                 sources += tuple(b for b in page._studio_compact_commands if not b.isVisible())
             for source in sources:
+                label = _overflow_labels.get(id(source)) or source.text() or source.toolTip()
                 if source.menu() is not None:
                     submenu = source.menu()
-                    submenu.setTitle(source.text())
+                    submenu.setTitle(label)
                     submenu.setIcon(source.icon())
                     overflow_menu.addMenu(submenu)
                     continue
-                action=overflow_menu.addAction(source.icon(), source.text() or source.toolTip())
+                action = overflow_menu.addAction(source.icon(), label)
                 action.setEnabled(source.isEnabled())
                 action.setCheckable(source.isCheckable())
                 action.setChecked(source.isChecked())
@@ -386,16 +481,21 @@ class StudioWorkspaceBuilder:
             (clip_assistant,'secondary','fa5s.film'),
             (shortcut_entry,'secondary','fa5s.keyboard'),
             (page.punctuation_button,'secondary','fa5s.paragraph'),
-            (export,'secondary','fa5s.file-export'),(render,'secondary','fa5s.file-video')):
+            (export,'secondary','fa5s.file-export')):
             button_role(button,role,icon=icon_name)
-        # 2026-10-14 (user screenshot): 「标点」 kept the old outlined combo look
-        # with a green icon and 「压制成片」 was the only filled block with a
-        # film-strip icon. Both now share the toolbar's ghost buttons; render
-        # keeps its emphasis through accent text and icon only.
+        # The three panel toggles are icon-only: their labels live in tooltips,
+        # which keeps a very wide toolbar down to one readable row.
+        for toggle, label in (
+            (page.cue_list_toggle_button, '字幕列表'),
+            (page.context_expand_button, '工具面板'),
+        ):
+            toggle.setText('')
+            toggle.setToolTip(label)
+            toggle.setFixedSize(30, 28)
+        # 2026-10-14 (user screenshot): 「标点」 kept the old outlined combo look;
+        # both shared the toolbar's ghost buttons with accent text and icon only.
         for button in (page.punctuation_button, page.bilingual_toggle_button):
             button.setProperty('hasMenu', True)
-        render.setProperty('emphasis', 'accent')
-        install_themed_icon(render, 'fa5s.file-video', 'accent')
         # The application header is intentionally removed in Studio focus
         # mode. Keep the expected desktop controls in the Studio toolbar.
         controls = QFrame()
@@ -416,17 +516,6 @@ class StudioWorkspaceBuilder:
             controls_layout.addWidget(control)
         bar.addWidget(controls)
         outer.addWidget(toolbar)
-        page._hub_toolbar_hidden = [
-            page.studio_save_button if hasattr(page, "studio_save_button") else page.save_button,
-            undo_button, redo_button, page.cue_list_toggle_button, page.context_expand_button,
-            page.speaker_manager_button, find_replace, shortcut_entry, export, render,
-            import_media,
-            # A per-project display choice; nothing to set in the library (2026-10-14).
-            page.punctuation_button, script_match,
-        ]
-        page._hub_toolbar_hidden.extend([page.relink_button])
-        page._hub_toolbar_hidden.extend(toolbar.findChildren(QFrame, "toolbarDivider"))
-        page._set_hub_toolbar_mode(True)
         page.teach_banner = QFrame()
         page.teach_banner.setObjectName("studioTeachBanner")
         page._apply_teach_banner_theme()
@@ -467,7 +556,9 @@ class StudioWorkspaceBuilder:
         page.center_splitter.setOpaqueResize(True)
         video_host = QWidget()
         video_host.setMinimumHeight(160)
-        video_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # 之前是 Preferred：QSplitter 只按 sizeHint 给高度，预览区拿不到全部空间，
+        # 画面因此上下留黑。改成 Expanding 让视频区吃满可用高度。
+        video_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         video_layout = QVBoxLayout(video_host)
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(0)
@@ -484,6 +575,41 @@ class StudioWorkspaceBuilder:
         # 十八轮：双击视频层 → AI 字幕工坊（对话式二修特效字幕）。
         page.video.workshop_requested.connect(page._open_web_theme_workshop)
         video_stack.addWidget(page.video, 0, 0)
+        # 2026-10-18（用户："达芬奇里是竖屏，这里变成横屏了"）：把视频层按工程
+        # 画幅比例居中放置。竖屏时间线（1080x1920）配横屏素材（1920x1080）时，
+        # 画面区就是一条竖屏区域，观感与达芬奇一致。
+        # 注意：aspect_host 必须在 overlay_host 的父级链上（这里把它加进
+        # video_layout），overlay_host 再作为它的子控件；父控件反过来不能是
+        # overlay_host，否则父子成环会触发无限重排（窗口持续跳动）。
+        aspect_host = CanvasAspectHost(overlay_host, video_host)
+        page.video_aspect_host = aspect_host
+        video_layout.addWidget(aspect_host, 1)
+        # 几何遥测（TWOBYTEASR_GEOMETRY_TRACE=1）：每 800ms 采样一次真实尺寸，
+        # 仅在数值变化时写一行，用于定位"画面没占满"这类布局问题。
+        import os as _os
+        if _os.environ.get('TWOBYTEASR_GEOMETRY_TRACE') == '1':
+            _geom_timer = QTimer(page)
+            _geom_timer.setInterval(800)
+
+            def _sample_geometry():
+                try:
+                    snap = (tuple(video_host.geometry().getRect()),
+                            tuple(aspect_host.geometry().getRect()),
+                            tuple(overlay_host.geometry().getRect()))
+                    last = getattr(page, '_geom_trace_last', None)
+                    if snap == last:
+                        return
+                    page._geom_trace_last = snap
+                    page._studio_trace('GEOMETRY',
+                        video_host=snap[0], aspect_host=snap[1], overlay_host=snap[2],
+                        aspect_ratio=(round(snap[1][2] / max(1, snap[1][3]), 4) if snap[1][3] else None),
+                        fill_pct=(round(100.0 * snap[2][3] / max(1, snap[0][3]), 1) if snap[0][3] else None))
+                except Exception:
+                    pass
+
+            _geom_timer.timeout.connect(_sample_geometry)
+            _geom_timer.start()
+            page._geom_trace_timer = _geom_timer
         from .video_compositor import VideoCompositionScene
         from .audio_engine import StudioAudioEngine
 
@@ -592,7 +718,10 @@ class StudioWorkspaceBuilder:
         page.subtitle_edit_input.cancel_requested.connect(page._cancel_canvas_inline_edit)
         page.subtitle_edit_input.textChanged.connect(page._queue_edit_preview)
         edit_card_layout.addWidget(page.subtitle_edit_input)
-        page.subtitle_edit_card.setMinimumWidth(680)
+        # 2026-10-18（用户："画面增加多一点的自适应功能"）：原来是硬编码 680px
+        # 下限，窗口比这窄时这张浮层卡片会溢出画面。改成跟随画面宽度（上限仍是
+        # 680，窄画面时按比例缩），由下面的 resize 同步处理。
+        page.subtitle_edit_card.setMinimumWidth(0)
         page.subtitle_edit_card.setMaximumHeight(108)
         page.subtitle_edit_card.setMaximumWidth(1100)
         video_stack.addWidget(
@@ -601,7 +730,9 @@ class StudioWorkspaceBuilder:
         )
         page.subtitle_edit_card.hide()
         page.subtitle_edit_card.raise_()
-        video_layout.addWidget(overlay_host, 1)
+        # overlay_host 已由 aspect_host 以子控件方式管理（见上面的 attach），
+        # 这里绝不能再把它加进 video_layout：两者同时管理会让它脱离比例容器，
+        # 几何变成"宽 0、跑到容器底部"，画面只剩一小块。
         page.review_summary_strip = QFrame()
         page.review_summary_strip.setObjectName("reviewSummaryStrip")
         strip_layout = QVBoxLayout(page.review_summary_strip)
@@ -768,7 +899,10 @@ class StudioWorkspaceBuilder:
 
         page.context_panel = QFrame()
         page.context_panel.setObjectName("contextPanel")
-        page.context_panel.setMinimumWidth(360)
+        # 2026-10-18（用户："画面增加多一点的自适应功能 感觉整个ui的挤挤的"）：
+        # 下限从 360 放宽到 260——360 在窄窗口里会把预览压得很细；实际宽度由
+        # _apply_responsive_splitter 按比例分配（约 26%~32%）。
+        page.context_panel.setMinimumWidth(260)
         # 2026-10-11: the splitter may widen the tool panel (clip candidates are
         # long texts); 520 left no room to drag it wider on large screens.
         page.context_panel.setMaximumWidth(760)
@@ -801,32 +935,34 @@ class StudioWorkspaceBuilder:
         page.context_drawer.setIconSize(QSize(18, 18))
         page._context_tab_mode = ""
         page.context_drawer.addTab(self._scroll_context_panel(self._ai_panel()), QIcon(), "AI设计")
+        # 2026-10-18（用户："这里的识别删除掉吧"）：工具面板不再有「识别」页。
+        # 没有字幕时左侧空状态里的「识别字幕」就是完整入口（cue_recognize_button
+        # → _open_recognition_sheet），不需要在工具面板再放一份。
+        page.recognition_tab_index = -1
+        # 2026-10-18（用户："将文稿匹配也放到左边的识别字幕下面"）：文稿匹配也改到
+        # 左侧空状态按钮，工具面板不再保留「文稿」页。
+        page.script_match_tab_index = -1
         # 二十七轮（agy 复审）：样式面板内容随特效字幕模式伸缩，常驻细滚动条
         # 明示可滚——展开快速调整时不再像"布局截断"。
         style_scroll = self._scroll_context_panel(page._style_panel_p213())
         style_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         page.context_drawer.addTab(style_scroll, QIcon(), "样式")
-        page.video_transform_tab_index = page.context_drawer.addTab(
-            self._scroll_context_panel(self._video_transform_panel()), QIcon(), "视频"
-        )
+        # 「视频」「剪辑助手」「素材」三页已从界面移除：运动/变换、剪辑候选与
+        # 媒体池都不需要——素材来自达芬奇，成片也在达芬奇里做。
+        # 面板对象仍然构造：状态同步调用遍布 50+ 处（工程切换、脏域刷新、
+        # 媒体可用性检查等），保留对象可让这些逻辑原样工作而不进入界面。
+        page.video_transform_tab_index = 0
+        page.video_transform_panel = self._scroll_context_panel(self._video_transform_panel())
         from .studio_highlight_ui import HighlightAssistantPanel
         page.highlight_panel = HighlightAssistantPanel()
-        page.highlight_tab_index = page.context_drawer.addTab(
-            self._self_scrolling_context_panel(page.highlight_panel, page.highlight_panel.settings_area),
-            QIcon(), "剪辑助手"
-        )
+        page.highlight_tab_index = 0
         from .studio_media_pool_ui import StudioMediaPoolPanel
-
         page.media_pool_panel = StudioMediaPoolPanel(page)
-        page.media_pool_tab_index = page.context_drawer.addTab(
-            self._scroll_context_panel(page.media_pool_panel), QIcon(), "素材"
-        )
-        for index, tip in enumerate(("AI设计", "样式", "视频", "剪辑助手", "素材")):
+        page.media_pool_tab_index = 0
+        for index, tip in enumerate(("AI设计", "样式")):
             page.context_drawer.setTabToolTip(index, tip)
         install_themed_tabs(page.context_drawer, [
             ("fa5s.magic", "secondary"), ("fa5s.palette", "secondary"),
-            ("fa5s.expand-arrows-alt", "secondary"), ("fa5s.cut", "secondary"),
-            ("fa5s.photo-video", "secondary"),
         ])
         page.context_drawer.currentChanged.connect(page._remember_context_tab)
         from PySide6.QtWidgets import QStackedWidget
@@ -837,6 +973,9 @@ class StudioWorkspaceBuilder:
         page.upper_splitter.setStretchFactor(0, 0)
         page.upper_splitter.setStretchFactor(1, 1)
         page.upper_splitter.setStretchFactor(2, 0)
+        # 2026-10-18（用户："画面增加多一点的自适应功能 感觉整个ui的挤挤的"）：
+        # 原来的 [320, 680, 440] 是固定像素（合计 1440），窗口窄于此就互相挤压。
+        # 首次显示后由 _apply_responsive_splitter 按比例分配（22% / 46% / 32%）。
         page.upper_splitter.setSizes([320, 680, 440])
         page.upper_splitter.splitterMoved.connect(
             lambda *_args: (
@@ -927,26 +1066,26 @@ class StudioWorkspaceBuilder:
         timeline_title = QLabel("时间轴")
         timeline_title.setObjectName("sectionTitle")
         timeline_toolbar.addWidget(timeline_title)
-        timeline_toolbar.addSpacing(10)
-        page.media_pool_button = page._tool_button(
-            "fa5s.photo-video",
-            "打开媒体池",
-            lambda: page._toggle_drawer(page.media_pool_tab_index),
-        )
-        timeline_toolbar.addWidget(page.media_pool_button)
+        timeline_toolbar.addSpacing(14)
+        # 「打开媒体池」按钮已删除（素材页不存在了）。
+        # Track-creation controls removed (user request): the timeline is a
+        # mirror of the Resolve timeline, so tracks are managed there.
         page.add_video_track_button = page._tool_button(
             "fa5s.layer-group", "新建视频轨", page._add_video_track
         )
-        timeline_toolbar.addWidget(page.add_video_track_button)
+        page.add_video_track_button.setParent(page)
+        page.add_video_track_button.hide()
         from .studio_track_delete import add_subtitle_track
         page.add_subtitle_track_button = page._tool_button(
             'fa5s.closed-captioning', '新建字幕轨 · 按 T 在此轨添加字幕', lambda: add_subtitle_track(page))
-        timeline_toolbar.addWidget(page.add_subtitle_track_button)
+        page.add_subtitle_track_button.setParent(page)
+        page.add_subtitle_track_button.hide()
         page.add_subtitle_button = page._tool_button(
             'fa5s.plus', '添加字幕 (T) · 在播放头创建字幕块', page._add_subtitle_at_playhead)
         page.add_subtitle_button.setText(tr('添加字幕'))
         page.add_subtitle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        timeline_toolbar.addWidget(page.add_subtitle_button)
+        page.add_subtitle_button.setParent(page)
+        page.add_subtitle_button.hide()
         page.selection_tool_button = page._tool_button("fa5s.mouse-pointer", "选择工具 (V)", lambda: page._set_timeline_tool("selection"))
         page.track_forward_tool_button = page._tool_button("fa5s.arrow-right", "轨道向前选择 (A) · Shift 单轨", lambda: page._set_timeline_tool("track_forward"))
         page.razor_tool_button = page._tool_button("fa5s.cut", "剃刀工具 (C)——移动鼠标预览切点与前后文字，点击切开；Esc 取消", lambda: page._set_timeline_tool("razor"))
@@ -965,12 +1104,19 @@ class StudioWorkspaceBuilder:
         page.clip_selection_count=QLabel('')
         timeline_toolbar.addWidget(page.clip_selection_count)
         timeline_toolbar.addWidget(page._toolbar_divider())
-        timeline_toolbar.addWidget(page._tool_button("fa5s.cut", "拆分当前字幕 (Ctrl+Shift+S)", page._split_current))
-        timeline_toolbar.addWidget(page._tool_button("fa5s.link", "与下一条合并 (Ctrl+Shift+M)", page._merge_next))
-        timeline_toolbar.addWidget(page._tool_button("fa5s.step-backward", "波纹向前合并 (Shift+Q)", lambda: page.cue_controller.merge_with_neighbor(-1)))
-        timeline_toolbar.addWidget(page._tool_button("fa5s.step-forward", "波纹向后合并 (Shift+W)", lambda: page.cue_controller.merge_with_neighbor(1)))
-        timeline_toolbar.addWidget(page._tool_button("fa5s.trash-alt", "删除当前字幕 (Delete)", page._delete_current))
-        timeline_toolbar.addWidget(page._toolbar_divider())
+        # Single-cue edit commands (split/merge/ripple/delete) are parked in the
+        # "更多" menu below; the bar keeps only the transport and view controls.
+        hidden_timeline = [
+            page._tool_button("fa5s.cut", "拆分当前字幕 (Ctrl+Shift+S)", page._split_current),
+            page._tool_button("fa5s.link", "与下一条合并 (Ctrl+Shift+M)", page._merge_next),
+            page._tool_button("fa5s.step-backward", "波纹向前合并 (Shift+Q)", lambda: page.cue_controller.merge_with_neighbor(-1)),
+            page._tool_button("fa5s.step-forward", "波纹向后合并 (Shift+W)", lambda: page.cue_controller.merge_with_neighbor(1)),
+            page._tool_button("fa5s.trash-alt", "删除当前字幕 (Delete)", page._delete_current),
+        ]
+        for _hidden in hidden_timeline:
+            _hidden.setParent(page)
+            _hidden.hide()
+        page._toolbar_divider()
         page.smart_align_button = page._tool_button("fa5s.magic", "智能修轴当前字幕", page._smart_align_current)
         timeline_toolbar.addWidget(page.smart_align_button)
         page.loop_cue_button = page._tool_button("fa5s.sync-alt", "循环当前字幕（前后留 250/300ms）", page._toggle_loop_current)
@@ -1043,7 +1189,6 @@ class StudioWorkspaceBuilder:
         page.waveform_toggle.setObjectName("timelineToggleChip")
         page.waveform_toggle.setChecked(True)
         bind_text(page.waveform_toggle, '显示或隐藏紧凑波形轨道', property='toolTip')
-        timeline_toolbar.addWidget(page.waveform_toggle)
         page.filmstrip_toggle = QCheckBox('缩略图')
         page.filmstrip_toggle.setObjectName("timelineToggleChip")
         page.filmstrip_toggle.setChecked(True)
@@ -1055,37 +1200,43 @@ class StudioWorkspaceBuilder:
             else: page.timeline.thumbnail_requests_enabled = True  # 重新勾选即恢复请求（2026-09-18 III：打开路径会临时禁用）
             page.timeline.update()
         page.filmstrip_toggle.toggled.connect(toggle_filmstrip)
-        timeline_toolbar.addWidget(page.filmstrip_toggle)
         page.follow_playhead_toggle = QCheckBox("跟随播放头")
         page.follow_playhead_toggle.setObjectName("timelineToggleChip")
         page.follow_playhead_toggle.setChecked(True)
         bind_text(page.follow_playhead_toggle, '开启时连续跟随；关闭时仅越界翻页，播放头左对齐。字幕选择保持不变。', property='toolTip')
         page.follow_playhead_toggle.toggled.connect(page._follow_toggle_changed)
-        timeline_toolbar.addWidget(page.follow_playhead_toggle)
         page.snap_toggle = QCheckBox("吸附")
         page.snap_toggle.setObjectName("timelineToggleChip")
         page.snap_toggle.setChecked(True)
         bind_text(page.snap_toggle, '拖动字幕时吸附到播放头、相邻边界和静音点（快捷键 S）', property='toolTip')
         page.snap_toggle.toggled.connect(page._toggle_timeline_snap)
-        timeline_toolbar.addWidget(page.snap_toggle)
+        # View toggles live in the "时间轴选项" menu instead of the bar: they are
+        # set-and-forget preferences, not per-edit actions.
+        for _toggle in (page.waveform_toggle, page.filmstrip_toggle,
+                        page.follow_playhead_toggle, page.snap_toggle):
+            _toggle.setParent(page)
+            _toggle.hide()
         for toggle, icon_name in ((page.waveform_toggle, 'fa5s.wave-square'), (page.filmstrip_toggle, 'fa5s.film'),
                                   (page.follow_playhead_toggle, 'fa5s.crosshairs'), (page.snap_toggle, 'fa5s.magnet')):
             install_themed_icon(toggle, icon_name, 'secondary')
             toggle.setIconSize(QSize(15, 15))
-        from .frame_export_ui import install_frame_button
-        install_frame_button(page, timeline_toolbar)
-        from .cover_studio import install_cover_button
-        install_cover_button(page, timeline_toolbar)
-        for button in (page.save_frame_button, page.make_cover_button):
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setIconSize(QSize(18, 18))
-        bind_text(page.make_cover_button, '制作封面：当前截图、新建封面或选择模板', property='toolTip')
+        # 「保存当前帧」与「制作封面」已删除（含 frame_export_ui / cover_studio）：
+        # 压制与成片都交给达芬奇，这里只留时间轴自身的工具。
         page.timeline_options_button = page._tool_button('fa5s.sliders-h', '时间轴选项 · 新字幕自动避让与重新排版', lambda: None)
         page.timeline_options_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         options_menu = create_studio_menu(page.timeline_options_button)
 
         def update_options_menu():
             options_menu.clear()
+            # View toggles first (waveform / thumbnails / follow / snap).
+            for toggle in (page.waveform_toggle, page.filmstrip_toggle,
+                           page.follow_playhead_toggle, page.snap_toggle):
+                action = options_menu.addAction(toggle.text())
+                action.setCheckable(True)
+                action.setChecked(toggle.isChecked())
+                action.setToolTip(toggle.toolTip())
+                action.toggled.connect(toggle.setChecked)
+            options_menu.addSeparator()
             control = page.auto_stacking_toggle
             action = options_menu.addAction(control.text())
             action.setCheckable(True)
@@ -1155,7 +1306,7 @@ class StudioWorkspaceBuilder:
         bind_text(page.follow_playhead_toggle, '跟随')
         from .studio_toolbar_layout import install_command_groups
         install_command_groups(page,timeline_layout,timeline_toolbar,transport_start,view_start,
-                               toggles_start=page.waveform_toggle, output_start=page.save_frame_button)
+                               toggles_start=page.waveform_toggle, output_start=page.timeline_options_button)
         page.timeline = WaveformTimeline()
         page.timeline.interaction_changed.connect(
             page._resource_governor.set_dragging
@@ -1202,24 +1353,7 @@ class StudioWorkspaceBuilder:
         page.timeline.video_track_swap_requested.connect(page._video_track_swap_requested)
         page.timeline.video_clip_trim_committed.connect(page._video_clip_trim_committed)
         page.timeline.candidate_clicked.connect(page._on_candidate_clicked)
-        page.highlight_panel.preview_requested.connect(lambda _flag: page._on_candidate_clicked(page.highlight_panel.current_id()))
-        page.highlight_panel.add_to_bin_requested.connect(lambda cue_id: page._set_candidate_status(cue_id, "accepted"))
-        page.highlight_panel.ignore_requested.connect(lambda cue_id: page._set_candidate_status(cue_id, "ignored"))
-        page.highlight_panel.remove_from_bin_requested.connect(page._remove_candidate_from_bin)
-        page.highlight_panel.candidate_move_requested.connect(page._move_candidate_in_bin)
-        page.highlight_panel.clear_bin_requested.connect(page._clear_candidate_bin)
-        page.highlight_panel.generate_requested.connect(page._generate_highlight_edit)
-        page.highlight_panel.restore_requested.connect(page._restore_full_sequence)
-        page.highlight_panel.analyze_requested.connect(page._analyze_highlights)
-        page.highlight_panel.cancel_requested.connect(page._cancel_highlight_analysis)
-        page.highlight_panel.xml_selected.connect(page._import_danmaku_xml)
-        page.highlight_panel.xml_unbind_requested.connect(page._unbind_danmaku_xml)
-        page.highlight_panel.add_mark_in_out_requested.connect(page._add_io_candidate)
-        # 四十四轮：自动剪口播气口。
-        page.highlight_panel.autocut_detect_requested.connect(page._detect_autocut_silence)
-        page.highlight_panel.autocut_apply_requested.connect(page._apply_autocut)
-        page.highlight_panel.autocut_cancel_requested.connect(page._cancel_autocut)
-        page.highlight_panel.autocut_preview_requested.connect(page._preview_autocut_seam)
+        # 剪辑助手面板已删除：它的事件接线一并移除。
         page.timeline.text_edit_committed.connect(page._timeline_text_edited)
         page.waveform_toggle.toggled.connect(page.timeline.set_waveform_visible)
         timeline_layout.addWidget(page.timeline, 1)
@@ -1234,320 +1368,18 @@ class StudioWorkspaceBuilder:
         workspace_layers.setStackingMode(QStackedLayout.StackingMode.StackAll)
         workspace_layers.addWidget(page.workspace_splitter)
         outer.addWidget(page.workspace_host, 1)
-        page.export_workspace = None
 
-        page.studio_empty = QFrame(page.workspace_host)
-        page.studio_empty.setObjectName("studioEmptyState")
-        empty_layout = QVBoxLayout(page.studio_empty)
-        empty_layout.setContentsMargins(0, 0, 0, 0)
-        page.project_library_scroll = QScrollArea()
-        page.project_library_scroll.setObjectName("projectLibraryScroll")
-        page.project_library_scroll.setWidgetResizable(True)
-        page.project_library_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        page.project_library_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        library_page = QWidget()
-        library_page.setObjectName("projectLibraryPage")
-        page.project_library_scroll.viewport().setObjectName("projectLibraryViewport")
-        library_layout = QVBoxLayout(library_page)
-        library_layout.setContentsMargins(42, 24, 42, 48)
-        library_layout.setSpacing(16)
-        page.project_library_scroll.setWidget(library_page)
-        empty_layout.addWidget(page.project_library_scroll)
-
-        # Brand/header area mirrors the selected Project Library reference:
-        # product identity first, then the resume action and recent projects.
-        page.project_library_header = QFrame()
-        page.project_library_header.setObjectName("projectLibraryHeader")
-        page.project_library_header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        header_layout = QVBoxLayout(page.project_library_header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(14)
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(10)
-        from .main_ui_branding import HeaderMascot
-        page.project_library_mascot = HeaderMascot(full_artwork=True)
-        page.project_library_mascot.setParent(page.project_library_header)
-        page.project_library_mascot.hide()
-        brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
-        page.project_library_brand = QLabel("工程库")
-        page.project_library_brand.setObjectName("projectLibraryBrand")
-        brand_text.addWidget(page.project_library_brand)
-        page.project_library_brand_meta = QLabel("继续编辑，或开始新的字幕创作。")
-        page.project_library_brand_meta.setObjectName("projectLibraryBrandMeta")
-        brand_text.addWidget(page.project_library_brand_meta)
-        brand_row.addLayout(brand_text, 0)
-        brand_row.addStretch(1)
-        header_actions = QWidget()
-        header_actions.setObjectName("projectLibraryHeaderActions")
-        header_actions.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        header_actions_layout = QHBoxLayout(header_actions)
-        header_actions_layout.setContentsMargins(0, 0, 0, 0)
-        header_actions_layout.setSpacing(10)
-        page.project_import_button = QPushButton("导入工程")
-        page.project_import_button.setObjectName("hubToolbarButton")
-        install_themed_icon(page.project_import_button, "fa5s.folder-open")
-        page.project_import_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_import_button.setMinimumHeight(42)
-        page.project_import_button.setMinimumWidth(118)
-        page.project_import_button.clicked.connect(page.open_project_dialog)
-        header_actions_layout.addWidget(page.project_import_button)
-        page.project_new_button = QPushButton("新建工程")
-        page.project_new_button.setObjectName("hubPrimary")
-        install_themed_icon(page.project_new_button, "fa5s.file-video", "on_accent")
-        page.project_new_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_new_button.setMinimumHeight(42)
-        page.project_new_button.setMinimumWidth(132)
-        page.project_new_button.clicked.connect(page._create_blank_studio)
-        header_actions_layout.addWidget(page.project_new_button)
-        brand_row.addWidget(header_actions, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addLayout(brand_row)
-        intro_row = QVBoxLayout()
-        intro_row.setSpacing(3)
-        page.project_library_eyebrow = QLabel("工程库")
-        page.project_library_eyebrow.setObjectName("projectLibraryEyebrow")
-        page.project_library_eyebrow.setParent(page.project_library_header)
-        page.project_library_eyebrow.hide()
-        page.project_library_title = QLabel("继续字幕编辑")
-        page.project_library_title.setObjectName("projectLibraryTitle")
-        page.project_library_title.setParent(page.project_library_header)
-        page.project_library_title.hide()
-        page.project_library_subtitle = QLabel("打开已有工程，继续编辑字幕。")
-        page.project_library_subtitle.setObjectName("projectLibrarySubtitle")
-        page.project_library_subtitle.setParent(page.project_library_header)
-        page.project_library_subtitle.hide()
-        library_layout.addWidget(page.project_library_header)
-
-        page.resume_hero = QFrame()
-        page.resume_hero.setObjectName("resumeProjectCard")
-        page.resume_hero.setMinimumHeight(280)
-        page.resume_hero.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        resume_layout = QHBoxLayout(page.resume_hero)
-        resume_layout.setContentsMargins(22, 16, 16, 16)
-        resume_layout.setSpacing(18)
-        page.resume_info = QFrame()
-        page.resume_info.setObjectName("resumeProjectInfo")
-        page.resume_info.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        page.resume_info.setMinimumWidth(260)
-        resume_info_layout = QVBoxLayout(page.resume_info)
-        resume_info_layout.setContentsMargins(8, 8, 8, 8)
-        resume_info_layout.setSpacing(12)
-        # Center the copy beside the cover instead of leaving a gap under it.
-        resume_info_layout.addStretch(1)
-        page.resume_eyebrow = QLabel("最近编辑")
-        page.resume_eyebrow.setObjectName("resumeProjectEyebrow")
-        resume_info_layout.addWidget(page.resume_eyebrow)
-        page.resume_title = QLabel("还没有打开过工程")
-        page.resume_title.setObjectName("resumeProjectTitle")
-        page.resume_title.setWordWrap(True)
-        page.resume_title.setMinimumHeight(44)
-        resume_info_layout.addWidget(page.resume_title)
-        page.resume_meta = QLabel("导入视频或打开 .2byteproj，开始你的第一批字幕。")
-        page.resume_meta.setObjectName("resumeProjectMeta")
-        page.resume_meta.setWordWrap(True)
-        resume_info_layout.addWidget(page.resume_meta)
-        # Real project state as a semantic pill; the source file stays plain text.
-        resume_status_row = QHBoxLayout()
-        resume_status_row.setSpacing(10)
-        page.resume_status_pill = QLabel("")
-        page.resume_status_pill.setObjectName("resumeProjectStatusPill")
-        page.resume_status_pill.hide()
-        resume_status_row.addWidget(page.resume_status_pill, 0, Qt.AlignmentFlag.AlignVCenter)
-        page.resume_status = QLabel("等待开始")
-        page.resume_status.setObjectName("resumeProjectStatus")
-        page.resume_status.setWordWrap(True)
-        resume_status_row.addWidget(page.resume_status, 1)
-        resume_info_layout.addLayout(resume_status_row)
-        resume_actions = QHBoxLayout()
-        resume_actions.setSpacing(8)
-        page.resume_continue_button = QPushButton("继续编辑")
-        page.resume_continue_button.setObjectName("hubPrimary")
-        install_themed_icon(page.resume_continue_button, "fa5s.play", "on_accent")
-        page.resume_continue_button.setEnabled(False)
-        page.resume_continue_button.clicked.connect(lambda: page._open_recent_project_card(getattr(page, "_resume_target", "")))
-        resume_actions.addWidget(page.resume_continue_button)
-        page.resume_details_button = QPushButton("查看详情")
-        page.resume_details_button.setObjectName("hubSecondary")
-        page.resume_details_button.setEnabled(False)
-        page.resume_details_button.clicked.connect(lambda: page._show_recent_project_details(getattr(page, "_resume_target", "")))
-        resume_actions.addWidget(page.resume_details_button)
-        resume_actions.addStretch(1)
-        resume_info_layout.addLayout(resume_actions)
-        resume_info_layout.addStretch(1)
-        resume_layout.addWidget(page.resume_info, 1)
-        page.resume_preview = QFrame()
-        page.resume_preview.setObjectName("resumeProjectPreview")
-        page.resume_preview.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        preview_grid = QGridLayout(page.resume_preview)
-        preview_grid.setContentsMargins(0, 0, 0, 0)
-        preview_grid.setSpacing(0)
-        page.resume_preview_image = CoverPreviewLabel()
-        page.resume_preview_image.setObjectName("resumeProjectPreviewImage")
-        page.resume_preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        page.resume_preview_image.set_corner_radius(10)
-        page.resume_preview_image.set_fit_mode("contain")
-        page.resume_preview_image.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        preview_grid.addWidget(page.resume_preview_image, 0, 0)
-        resume_layout.addWidget(page.resume_preview, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        library_layout.addWidget(page.resume_hero)
-
-        library_toolbar = QHBoxLayout()
-        library_toolbar.setSpacing(10)
-        page.all_projects_heading = QLabel("最近工程")
-        page.all_projects_heading.setObjectName("projectLibrarySectionTitle")
-        page.all_projects_heading.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        library_toolbar.addWidget(page.all_projects_heading)
-        library_toolbar.addStretch(1)
-        # 五十二轮：排序/搜索/视图切换统一为一个 toolbar——同高(40)、同圆角(10)、
-        # 同基线，整组不再高低不齐。
-        page.project_sort = StudioComboBox()
-        page.project_sort.setObjectName("projectSort")
-        page.project_sort.setMinimumHeight(40)
-        page.project_sort.setMinimumWidth(128)
-        page.project_sort.addItem("最近使用", "recent")
-        page.project_sort.addItem("最近创建", "created")
-        page.project_sort.addItem("名称", "name")
-        page.project_sort.currentIndexChanged.connect(lambda _index: page._refresh_studio_empty_state())
-        library_toolbar.addWidget(page.project_sort)
-        page.project_search = QLineEdit()
-        page.project_search.setObjectName("projectLibrarySearch")
-        bind_text(page.project_search, '搜索工程...', property='placeholderText')
-        page.project_search.setClearButtonEnabled(True)
-        page.project_search.setMinimumHeight(40)
-        page.project_search.setMaximumWidth(280)
-        search_action = page.project_search.addAction(_icon("fa5s.search"), QLineEdit.ActionPosition.LeadingPosition)
-        install_themed_icon(search_action, "fa5s.search", "muted")
-        page.project_search.textChanged.connect(lambda _text: page._refresh_studio_empty_state())
-        library_toolbar.addWidget(page.project_search)
-        page.project_view_group = QButtonGroup(page)
-        page.project_view_group.setExclusive(True)
-        view_switcher = QFrame()
-        view_switcher.setObjectName("projectViewSwitcher")
-        view_switcher_layout = QHBoxLayout(view_switcher)
-        view_switcher_layout.setContentsMargins(2, 2, 2, 2)
-        view_switcher_layout.setSpacing(2)
-        page.project_card_view_button = QToolButton()
-        page.project_card_view_button.setObjectName("projectViewButton")
-        # 五十二轮：视图切换图标走 themed role 注册（随主题重着色）。此前
-        # _icon() 在创建时烘焙主题色、切主题不刷新——暗色 hub 下残留深色
-        # 图标≈不可见（用户"卡片/列表切换图标几乎看不见"根因）。
-        install_themed_icon(page.project_card_view_button, "fa5s.th-large")
-        bind_text(page.project_card_view_button, '卡片视图', property='toolTip')
-        page.project_card_view_button.setCheckable(True)
-        page.project_card_view_button.clicked.connect(lambda: page._set_project_library_view("card"))
-        page.project_view_group.addButton(page.project_card_view_button)
-        view_switcher_layout.addWidget(page.project_card_view_button)
-        page.project_list_view_button = QToolButton()
-        page.project_list_view_button.setObjectName("projectViewButton")
-        install_themed_icon(page.project_list_view_button, "fa5s.list")
-        bind_text(page.project_list_view_button, '紧凑列表视图', property='toolTip')
-        page.project_list_view_button.setCheckable(True)
-        page.project_list_view_button.clicked.connect(lambda: page._set_project_library_view("list"))
-        page.project_view_group.addButton(page.project_list_view_button)
-        view_switcher_layout.addWidget(page.project_list_view_button)
-        library_toolbar.addWidget(view_switcher)
-        page.project_view_switcher = view_switcher
-        page.project_manage_button = QPushButton("管理")
-        page.project_manage_button.setObjectName("hubToolbarButton")
-        install_themed_icon(page.project_manage_button, "fa5s.tasks")
-        page.project_manage_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_manage_button.setMinimumHeight(40)
-        page.project_manage_button.setCheckable(True)
-        bind_text(page.project_manage_button, '批量选择工程，可一键清理空工程', property='toolTip')
-        page.project_manage_button.clicked.connect(
-            lambda checked=False: page._set_library_manage_mode(bool(checked))
-        )
-        library_toolbar.addWidget(page.project_manage_button)
-        library_layout.addLayout(library_toolbar)
-
-        # Batch-manage bar: visible only in selection mode. Selection is keyed
-        # by resolved project path so sort/search stays live while managing.
-        page.project_manage_bar = QFrame()
-        page.project_manage_bar.setObjectName("libraryManageBar")
-        manage_bar_layout = QHBoxLayout(page.project_manage_bar)
-        manage_bar_layout.setContentsMargins(16, 10, 16, 10)
-        manage_bar_layout.setSpacing(8)
-        page.project_manage_count_label = QLabel("已选 0 项")
-        page.project_manage_count_label.setObjectName("libraryManageCount")
-        manage_bar_layout.addWidget(page.project_manage_count_label)
-        manage_bar_layout.addStretch(1)
-        page.project_select_empty_button = QPushButton("选中空工程")
-        page.project_select_empty_button.setObjectName("libraryManageAction")
-        bind_text(page.project_select_empty_button, '选中 0 条字幕且无源媒体的工程', property='toolTip')
-        page.project_select_empty_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_select_empty_button.clicked.connect(lambda: page._library_select_empty_projects())
-        manage_bar_layout.addWidget(page.project_select_empty_button)
-        page.project_select_all_button = QPushButton("全选")
-        page.project_select_all_button.setObjectName("libraryManageAction")
-        page.project_select_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_select_all_button.clicked.connect(lambda: page._library_select_displayed(select_all=True))
-        manage_bar_layout.addWidget(page.project_select_all_button)
-        page.project_delete_button = QPushButton("删除所选")
-        page.project_delete_button.setObjectName("libraryManageDanger")
-        install_themed_icon(page.project_delete_button, "fa5s.trash-alt")
-        page.project_delete_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_delete_button.setEnabled(False)
-        page.project_delete_button.clicked.connect(lambda: page._delete_selected_library_projects())
-        manage_bar_layout.addWidget(page.project_delete_button)
-        page.project_manage_exit_button = QPushButton("完成")
-        page.project_manage_exit_button.setObjectName("libraryManageAction")
-        page.project_manage_exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        page.project_manage_exit_button.clicked.connect(lambda: page._set_library_manage_mode(False))
-        manage_bar_layout.addWidget(page.project_manage_exit_button)
-        page._library_manage_esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), page.project_manage_bar)
-        page._library_manage_esc_shortcut.activated.connect(lambda: page._set_library_manage_mode(False))
-        page.project_manage_bar.hide()
-        library_layout.addWidget(page.project_manage_bar)
-
-        page.all_projects_stack = QStackedWidget()
-        page.all_projects_stack.setObjectName("projectLibraryViewStack")
-        page.all_projects_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        page.all_projects_stack.setMinimumHeight(360)
-        page.all_projects_host = QWidget()
-        page.all_projects_host.setObjectName("projectGridHost")
-        page.all_projects_layout = QGridLayout(page.all_projects_host)
-        page.all_projects_layout.setContentsMargins(0, 0, 0, 0)
-        page.all_projects_layout.setHorizontalSpacing(24)
-        page.all_projects_layout.setVerticalSpacing(16)
-        page.all_projects_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        page.all_projects_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        page.all_projects_stack.addWidget(page.all_projects_host)
-        page.project_list_host = QWidget()
-        page.project_list_host.setObjectName("projectListHost")
-        page.project_list_layout = QVBoxLayout(page.project_list_host)
-        page.project_list_layout.setContentsMargins(0, 0, 0, 0)
-        page.project_list_layout.setSpacing(8)
-        page.project_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        page.all_projects_stack.addWidget(page.project_list_host)
-        page.all_projects_stack.setCurrentIndex(0)
-        page.project_card_view_button.setChecked(True)
-        library_layout.addWidget(page.all_projects_stack)
-        page.project_library_empty = QLabel("没有找到匹配的工程")
-        page.project_library_empty.setObjectName("projectLibrarySubtitle")
-        page.project_library_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        page.project_library_empty.hide()
-        library_layout.addWidget(page.project_library_empty)
-        page.hub_loading_label = QLabel()
-        page.hub_loading_label.setObjectName("projectLibrarySubtitle")
-        page.hub_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        page.hub_loading_label.hide()
-        library_layout.addWidget(page.hub_loading_label)
-        library_layout.addStretch(1)
-        workspace_layers.addWidget(page.studio_empty)
-        workspace_layers.setCurrentWidget(page.studio_empty)
-        page.project_library_scroll.viewport().installEventFilter(page)
-        page.studio_empty.show()
-        page.studio_empty.raise_()
-        QTimer.singleShot(0, page._refresh_studio_empty_state)
         for field, visible in page._editor_field_visibility.items():
             page._set_editor_field_visible(field, visible)
         QTimer.singleShot(0, page._update_editor_compactness)
         QTimer.singleShot(0, page._update_cue_table_layout)
-        from .design.presentation import prepare_controls, field_width
+        from .design.presentation import prepare_controls
         prepare_controls(page)
-        for editor in (page.project_search,):
-            field_width(editor, 'preferred', size='compact')
         QTimer.singleShot(0, page._update_context_tab_labels)
+        # 达芬奇实时跟随：播放头与字幕内容都跟着达芬奇时间线走。只在工程来自
+        # 达芬奇时间线时生效，普通工程下这个轮询是空转的。
+        from .studio_davinci_live import install_davinci_live_link
+        install_davinci_live_link(page)
 
     def _cue_list_panel(self) -> QFrame:
         page = self.page
@@ -1558,7 +1390,9 @@ class StudioWorkspaceBuilder:
         panel.setObjectName("cueListPanel")
         # 1920px at 175% DPI is only ~1097 logical px. Keep all three major
         # regions visible while retaining the normal 380px list width at 100%.
-        panel.setMinimumWidth(280)
+        # 2026-10-18（用户："画面增加多一点的自适应功能"）：下限 280 → 190，
+        # 让窄窗口优先保住预览画面（宽度由 _apply_responsive_splitter 分配）。
+        panel.setMinimumWidth(190)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 9, 8, 8)
         layout.setSpacing(7)
@@ -1717,6 +1551,7 @@ class StudioWorkspaceBuilder:
         zero_layout = QVBoxLayout(page.cue_zero_state)
         zero_layout.setContentsMargins(18, 24, 18, 24)
         zero_layout.setSpacing(9)
+        page.cue_zero_layout = zero_layout  # resize 时按宽度压缩边距
         zero_layout.addStretch(1)
         zero_title = QLabel("暂无字幕")
         zero_title.setObjectName("sectionTitle")
@@ -1726,12 +1561,21 @@ class StudioWorkspaceBuilder:
         zero_note.setObjectName("studioSaveState")
         zero_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
         zero_note.setWordWrap(True)
+        page.cue_zero_note = zero_note  # 窄屏时可隐藏，避免文字被截成两三个字
         zero_layout.addWidget(zero_note)
         page.cue_recognize_button = QPushButton("识别字幕")
         page.cue_recognize_button.setObjectName("studioPrimary")
         page.cue_recognize_button.setCursor(Qt.CursorShape.PointingHandCursor)
         page.cue_recognize_button.clicked.connect(page._open_recognition_sheet)
         zero_layout.addWidget(page.cue_recognize_button)
+        # 2026-10-18（用户："将文稿匹配也放到左边的识别字幕下面"）：无字幕时这里
+        # 也能直接进文稿匹配；点开弹窗输入文稿，一键生成（有字幕就替换、没字幕就生成）。
+        page.cue_script_match_button = QPushButton("文稿匹配")
+        page.cue_script_match_button.setObjectName("studioButton")
+        page.cue_script_match_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        page.cue_script_match_button.setToolTip('粘贴已断好句的完整文稿，自动替换或生成字幕')
+        page.cue_script_match_button.clicked.connect(page._open_script_match_sheet)
+        zero_layout.addWidget(page.cue_script_match_button)
         # 四十三轮：识别期间"暂无字幕"区显示运行状态（用户点名——顶部芯片
         # 太难看到）。含取消与"查看详细进度"（跳主页进度页，可返回 Studio）。
         page.recognition_zero_card = QFrame()
@@ -1788,10 +1632,12 @@ class StudioWorkspaceBuilder:
         previous = QPushButton("上一条")
         previous.setObjectName("studioButton")
         previous.clicked.connect(lambda: page._step_cue(-1))
+        page.cue_prev_button = previous  # 窄屏改为单字箭头
         footer.addWidget(previous)
         following = QPushButton("下一条")
         following.setObjectName("studioButton")
         following.clicked.connect(lambda: page._step_cue(1))
+        page.cue_next_button = following
         footer.addWidget(following)
         more = page._tool_button("fa5s.ellipsis-h", "更多字幕列表操作", page._show_cue_more_menu)
         footer.addWidget(more)

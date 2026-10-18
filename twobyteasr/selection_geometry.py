@@ -137,8 +137,18 @@ class SelectionGeometryController(QObject):
         content=self.overlay._content_rect();box=data.get('bounds')
         if box:
             width,height=data['viewport'];x,y,w,h=box
-            rect=QRectF(content.x()+x*content.width()/width,content.y()+y*content.height()/height,
-                        w*content.width()/width,h*content.height()/height)
+            if str(data.get('renderer'))=='live-raster' and width>0 and height>0:
+                # 实时画布的栅格始终是"整块画布"（等于视频控件大小），不是内缩后的
+                # content 区域（studio_live_canvas._publish_to_mpv 的约定）。
+                # 之前用 content 比例重缩放，会让框相对文字被横向压缩并偏移——
+                # 这就是"字幕和显示的边框不一致"。这里按画布尺寸还原。
+                overlay=self.overlay
+                sx=max(1,overlay.width())/float(width)
+                sy=max(1,overlay.height())/float(height)
+                rect=QRectF(x*sx,y*sy,w*sx,h*sy)
+            else:
+                rect=QRectF(content.x()+x*content.width()/width,content.y()+y*content.height()/height,
+                            w*content.width()/width,h*content.height()/height)
             self.overlay.set_measured_bounds(rect)
         diagnostic=dict(data,selected_id=p.selected_cue_id,
             content_rect=list(content.getRect()),preview_viewport=[p.video.width(),p.video.height()],
@@ -152,7 +162,23 @@ class SelectionGeometryController(QObject):
         diagnostic['theme_id']=str((p.project.style_recipes.get(cue.style_id,{})
                                     .get('webTheme') or {}).get('id',''))
         self.overlay.geometry_diagnostics=diagnostic
-        if os.environ.get('TWOBYTEASR_SELECTION_DIAGNOSTICS')=='1':
+        # 开关打开时全量记录；否则只在"实测与 Qt 估算明显不符"时留一条，
+        # 这样以后出现框与文字错位时能直接查证，平时不写文件。
+        write=os.environ.get('TWOBYTEASR_SELECTION_DIAGNOSTICS')=='1'
+        if not write and self.overlay._measured_bounds is not None:
+            try:
+                approx=self.overlay._rendered_text_rect()
+                me=self.overlay._measured_bounds
+                if approx.width()>1 and me.width()>1:
+                    dx=abs(approx.center().x()-me.center().x())/max(approx.width(),me.width())
+                    dy=abs(approx.center().y()-me.center().y())/max(approx.height(),me.height())
+                    if dx>0.25 or dy>0.25:
+                        write=True
+                        diagnostic['mismatch']=dict(dx=round(dx,3),dy=round(dy,3),
+                            approx=list(approx.getRect()),measured=list(me.getRect()))
+            except Exception:
+                pass
+        if write:
             from .studio_project import studio_data_root
             path=studio_data_root()/'logs/selection-geometry.jsonl';path.parent.mkdir(parents=True,exist_ok=True)
             with path.open('a',encoding='utf8') as f:f.write(json.dumps(diagnostic,ensure_ascii=False,default=str)+'\n')

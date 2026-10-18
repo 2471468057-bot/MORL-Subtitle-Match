@@ -1252,6 +1252,22 @@ class MpvController:
     def set_audio_enabled(self, enabled: bool) -> None:
         self._send(["set_property", "aid", "auto" if bool(enabled) else "no"])
 
+    def set_canvas_fill(self, width: int, height: int) -> None:
+        """让画面填满画幅（等比放大 + 居中裁切），用 mpv 的 panscan 实现。
+
+        2026-10-18（用户："首次进入莫名其妙的会卡住这个画面"）：这里原先设了
+        ``vf=scale=w:h:...,crop=w:h`` 滤镜。改 vf 会让 mpv 重建视频链（重新初始化
+        缩放器/输出格式），首帧期间旧画面没有被清除，新的放大画面叠上去——正是
+        用户看到的"两套人物叠在一起、播放一次才恢复"。panscan 只影响几何映射，
+        不重建视频链，也不会残留上一帧，因此改回 panscan。
+        """
+        self._send(["set_property", "vf", ""])
+        self._send(["set_property", "panscan", 1.0])
+
+    def set_video_fill(self, enabled: bool) -> None:
+        """兼容旧调用：开启即让画面填满视频区（配合画幅滤镜使用）。"""
+        self._send(["set_property", "panscan", 1.0 if enabled else 0.0])
+
     def set_speed(self, value: float) -> None:
         self._send(["set_property", "speed", min(8.0, max(0.1, float(value)))])
 

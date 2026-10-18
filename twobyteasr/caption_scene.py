@@ -479,9 +479,14 @@ class CaptionScene(QObject):
 
     def scene_token(self,cues,rect,generation):
         page=self.page;revision=page._revision_store.render
+        # 2026-10-18（用户："依旧是卡卡的"）：rect 之前以 4 个浮点直接参与 token，
+        # 布局有 1px 级抖动就判定成"新场景"→ 清空已发布画面、重新预热 12 条字幕的
+        # 光栅（trace 里 CAPTION_SCENE_RETIRED 累计 326 次）。几何只需要"量级一致"
+        # 就够：按 8px 取整并忽略亚像素偏移，避免布局微动引发整场景重建。
+        geo = tuple(int(round(v / 8.0)) for v in rect.getRect())
         return (id(self.project),revision.mapping_revision,revision.visual_revision,generation,tuple(c.id for c in cues),
                 repr((getattr(page,'_live_edit_text_overrides',{}),getattr(page,'_live_transform_overrides',{}),
-                      [(c.id,c.start_ms,c.end_ms,c.speaker_id) for c in cues])),*rect.getRect())
+                      [(c.id,c.start_ms,c.end_ms,c.speaker_id) for c in cues])),*geo)
 
     def preheat(self,milliseconds,rect,generation,width,height):
         """Prepare upcoming static active sets before their first visible tick."""

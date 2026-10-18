@@ -86,7 +86,6 @@ def show_properties(page,transition_id):
     page.transition_duration.setValue(item['duration_ms'])
     page.transition_duration.blockSignals(False)
     page._show_context_panel()
-    page.context_drawer.setCurrentIndex(page.video_transform_tab_index)
     page.timeline.update()
 
 

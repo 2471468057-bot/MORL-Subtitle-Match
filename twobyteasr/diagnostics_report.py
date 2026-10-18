@@ -44,7 +44,7 @@ def scrub(text: str) -> str:
 
 
 def collect(window=None) -> str:
-    lines = ['兔白字幕诊断信息（复制前请看一遍；不含密钥、令牌与签名参数）', '']
+    lines = ['MORL 字幕匹配诊断信息（复制前请看一遍；不含密钥、令牌与签名参数）', '']
     try:
         from .build_identity import load_build_identity
         build = load_build_identity()

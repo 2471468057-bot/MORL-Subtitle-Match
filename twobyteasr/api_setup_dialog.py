@@ -154,12 +154,18 @@ class ApiSetupDialog(SpringDialog):
             self.provider_list.addItem(item)
 
         groups = (('语音识别（生成字幕）', catalog.ASR_GUIDES), ('文字 AI（断句、校对、翻译）', catalog.TEXT_GUIDES))
+        # 2026-10-17 简化：自定义 OpenAI 兼容转写（custom-asr）是接入自架/中转
+        # 接口的主路径，一直藏在「显示进阶选项」后面导致用户找不到（用户实录：
+        # 「什么都没有啊」）。将它提前为普通可见项；其余进阶项（OpenRouter、
+        # Azure 等未实测服务）保持折叠不变。
+        always_visible = {'custom'}
         for label, guides in groups:
             header(label)
             for guide in guides:
-                if guide.advanced_only and not show_advanced:
+                if guide.advanced_only and not show_advanced and guide.key not in always_visible:
                     continue
-                item = QListWidgetItem(('   ' + tr(guide.title)) + ('（进阶）' if guide.advanced_only else ''))
+                suffix = ('（进阶）' if guide.advanced_only and guide.key not in always_visible else '')
+                item = QListWidgetItem('   ' + tr(guide.title) + suffix)
                 item.setToolTip(tr(guide.title))
                 item.setData(Qt.ItemDataRole.UserRole, (guide.kind, guide.key))
                 self.provider_list.addItem(item)

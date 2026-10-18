@@ -44,7 +44,7 @@ from .i18n import bind_text
 
 
 # Product display name. Internal modules/classes/objectNames stay unchanged.
-BRAND_DISPLAY_NAME = "兔白字幕"
+BRAND_DISPLAY_NAME = "MORL 字幕匹配"
 
 # Studio-only semantic surface roles.  Keep these local: the main application
 # still owns its existing palette and must not inherit Export/Studio changes.
@@ -749,6 +749,12 @@ QTreeWidget#mediaPoolAssets::item:selected {{ background: {GREEN_SOFT}; color: {
 QFrame#mediaPoolDivider {{ color: {BORDER}; }}
 QComboBox#mediaPoolTrackSelector {{ min-height: 34px; }}
 QFrame#contextCard {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {STUDIO_RADIUS}px; }}
+QPushButton#recognitionModelCard {{
+    background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 6px 8px; text-align: left; font-size: 11px; color: {INK};
+}}
+QPushButton#recognitionModelCard:hover {{ border-color: {GREEN}; }}
+QPushButton#recognitionModelCard:pressed {{ background: {GREEN_SOFT}; }}
 QFrame#styleSection {{ background: #fffaf2; border: 1px solid #e5ddd0; border-radius: 8px; padding: 2px; }}
 QToolButton#styleSectionHeader {{ background: transparent; border: 0; min-height: 24px; max-height: 26px; padding: 0; color: #303732; font-weight: 700; text-align: left; }}
 QToolButton#styleSectionHeader:hover {{ color: #2f7349; }}

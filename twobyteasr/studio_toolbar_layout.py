@@ -35,8 +35,8 @@ class CommandFlowLayout(QLayout):
         self.stretch_after = {0, 1}
         # Item index centred on the bar when its row has room (transport).
         self.center_index = None
-        self.setContentsMargins(12, 6, 10, 6)
-        self.setSpacing(16)
+        self.setContentsMargins(18, 10, 16, 10)
+        self.setSpacing(22)
 
     def addItem(self, item):
         self.items.append(item)
@@ -100,7 +100,7 @@ class CommandFlowLayout(QLayout):
             if self._arrange_centered(row, area, y, height, apply):
                 y += height
                 if row_number < len(rows) - 1:
-                    y += 6
+                    y += 9
                 continue
             gaps = [index for index, _, _ in row[:-1] if index in self.stretch_after]
             extra = max(0, area.width() - sum(size.width() for _, _, size in row)
@@ -116,7 +116,7 @@ class CommandFlowLayout(QLayout):
                     x += share + (1 if gaps.index(index) < remainder else 0)
             y += height
             if row_number < len(rows) - 1:
-                y += 6
+                y += 9
         return y + bottom - rect.y()
 
 
@@ -204,14 +204,16 @@ def install_command_groups(page, parent_layout, old_layout, transport_start, vie
         group.setProperty("commandGroup", names[index])
         inner = QHBoxLayout(group)
         # Same vertical inset for every group keeps one shared top edge.
-        inner.setContentsMargins(0, 3, 0, 3)
-        inner.setSpacing(12 if names[index] == "display" else 6)
+        # 2026-10-18（用户："不要那么紧凑"）：组内间距 6→10、上下 3→5，
+        # 组间 16→22，整条工具栏不再挤在一起。
+        inner.setContentsMargins(0, 5, 0, 5)
+        inner.setSpacing(16 if names[index] == "display" else 10)
         if names[index] == "transport":
             # The transport reads as one centred pill (2026-10-08).
             group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             # 6 px above and below the 32 px play circle (was 3 around 34):
             # the controls no longer touch the pill's edge (2026-10-14).
-            inner.setContentsMargins(12, 6, 12, 6)
+            inner.setContentsMargins(14, 8, 14, 8)
             flow.center_index = index
         widgets = []
         for item in items:
