@@ -1638,10 +1638,10 @@ class SubtitleStudioPage(
         if panel is None:
             return
         width = int(panel.width())
-        # 2026-10-19（用户："最小边框不要太小了 免得ui挤在一起"）：分档阈值上移，
-        # 240px 起就算 normal；<340px 时把次行控件收进「更多」菜单，
-        # 保证主行 chips 与搜索框始终完整可读。
-        if width >= 380:
+        # 2026-10-19（用户："边框最小这样 不要再小了 ui太挤了"）：面板最小 300px。
+        # ≥390 宽松；340-390 正常；<340 把次行控件收进「更多」菜单——保证主行
+        # chips（全部 59 / 建议确认 / 需要检查 / 开始审核）在这个宽度下完整可读。
+        if width >= 390:
             mode = "wide"
         elif width >= 340:
             mode = "normal"
@@ -1705,20 +1705,21 @@ class SubtitleStudioPage(
                 return
         except Exception:  # noqa: BLE001
             return
-        # 避免每个像素都重排：只有跨过档位才真正 setSizes。
-        bucket = total // 40
-        if getattr(self, "_responsive_split_bucket", None) == bucket:
-            return
-        self._responsive_split_bucket = bucket
-
-        # 比例：列表 24% / 预览 45% / 工具面板 31%（总和 100）。
-        # 2026-10-19（用户："最小边框不要太小了"）：列表从 22% 提到 24%，
-        # 下限从 180 提到 240 —— 与 cue_list_panel.setMinimumWidth(240) 一致，
-        # 保证过滤 chips 与时间码列完整显示。
-        ratios = (0.24, 0.45, 0.31)
-        min_left = max(240, min(360, int(total * 0.22)))
+        # 2026-10-19（用户："你这里依旧是ui挤在一起"）：QSplitter 会记住用户上次
+        # 拖拽/会话保存的尺寸，档位缓存（total//40）会让 1585px 窗口里左栏停在
+        # 277px——低于面板 300px 下限。改为：只要三栏里有任何一栏低于其下限，
+        # 就强制按比例重分（覆盖保存的尺寸）；全部达标时才跳过。
+        min_left = max(300, min(400, int(total * 0.24)))
         min_center = max(300, min(760, int(total * 0.42)))
         min_context = max(280, min(560, int(total * 0.26)))
+        floors = (min_left, min_center, min_context)
+        sizes = splitter.sizes()
+        if len(sizes) == 3 and all(sizes[i] >= floors[i] for i in range(3)):
+            return
+
+        # 比例：列表 26% / 预览 44% / 工具面板 30%（总和 100）。
+        # 列表从 24% 提到 26%，下限 300 —— 与 cue_list_panel.setMinimumWidth(300) 一致。
+        ratios = (0.26, 0.44, 0.30)
         widths = [int(total * r) for r in ratios]
         # 保证下限（按优先级：预览 > 工具面板 > 列表）。
         widths[1] = max(widths[1], min_center)

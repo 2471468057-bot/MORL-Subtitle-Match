@@ -1388,11 +1388,10 @@ class StudioWorkspaceBuilder:
         CueTableModel = self._cue_table_model_type
         panel = QFrame()
         panel.setObjectName("cueListPanel")
-        # 2026-10-19（用户："重新设计一下左边的菜单的ui 我想要自适应大小 还有
-        # 最小边框不要太小了 免得ui挤在一起"）：最小宽度 190 → 240。
-        # 190px 时过滤 chips 会被压成残句、时间码列被裁；240px 是三栏布局下
-        # 字幕列表仍可读的下限（工具条 chips + 时间码 + 状态徽章都能完整显示）。
-        panel.setMinimumWidth(240)
+        # 2026-10-19（用户："边框最小这样 不要再小了 ui太挤了"）：240 还是挤，
+        # 提高到 300 —— 过滤 chips（全部 59 / 建议确认 --）与时间码列在这个宽度
+        # 才有呼吸感。再窄宁可压缩预览，也不挤压列表。
+        panel.setMinimumWidth(300)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 8, 10, 8)
         layout.setSpacing(6)
@@ -1454,6 +1453,11 @@ class StudioWorkspaceBuilder:
             button.setObjectName("filterChip")
             button.setCheckable(True)
             button.setToolTip(tip)
+            # 2026-10-19（用户："你这里依旧是ui挤在一起"）：按内容给最小宽度，
+            # 面板被压窄时 chips 保持完整文字（宁可换行也不出「需要检查…」残句）。
+            button.setMinimumWidth(
+                button.fontMetrics().horizontalAdvance(caption) + 26
+            )
             button.clicked.connect(lambda _checked=False, value=key: page._set_cue_filter(value))
             page.cue_filter_group.addButton(button)
             page.cue_filter_buttons[key] = button
