@@ -1628,14 +1628,22 @@ class SubtitleStudioPage(
         2026-10-18（用户："感觉整个ui的挤挤的"）：窄窗口下列表只有 200px 上下，
         原来固定的 18px 内边距 + 长说明文字会被截成「需要检查…」「搜索…」这类
         残句。这里按宽度分三档：宽松 / 正常 / 紧凑（隐藏说明文字）。
+
+        2026-10-19 注意：**不要在这里改按钮文字**。过滤 chip 的文字由
+        _set_cue_filter 用「全部 59 / 建议确认 --」这类带计数的文案写入；
+        上一条/下一条已改为纯图标 QToolButton。改文字会互相覆盖，或把图标按钮
+        变成空白文字按钮。
         """
         panel = getattr(self, "cue_list_panel", None)
         if panel is None:
             return
         width = int(panel.width())
-        if width >= 330:
+        # 2026-10-19（用户："最小边框不要太小了 免得ui挤在一起"）：分档阈值上移，
+        # 240px 起就算 normal；<340px 时把次行控件收进「更多」菜单，
+        # 保证主行 chips 与搜索框始终完整可读。
+        if width >= 380:
             mode = "wide"
-        elif width >= 240:
+        elif width >= 340:
             mode = "normal"
         else:
             mode = "tight"
@@ -1651,37 +1659,34 @@ class SubtitleStudioPage(
         if note is not None:
             # 紧凑档隐藏长说明（按钮本身已说明用途），避免残句。
             note.setVisible(mode != "tight")
-        # 紧凑档：过滤按钮用短标签，避免「需要检查…」「建议确认…」被截断。
-        filters = getattr(self, "cue_filter_buttons", None)
-        if isinstance(filters, dict):
-            short_by_key = {"all": "全", "priority": "建议", "critical": "检查"}
-            for key, button in filters.items():
-                stored = getattr(button, "_full_text", None)
-                if stored is None:
-                    stored = button.text()
-                    button._full_text = stored
-                button.setText(short_by_key.get(key, stored) if mode == "tight" else stored)
-        # 翻页按钮：紧凑档改成单字箭头。
-        for attr, full, short in (
-            ("cue_prev_button", "上一条", "‹"),
-            ("cue_next_button", "下一条", "›"),
-        ):
-            button = getattr(self, attr, None)
-            if button is None:
-                continue
-            stored = getattr(button, "_full_text", None)
-            if stored is None:
-                stored = button.text()
-                button._full_text = stored
-            button.setText(short if mode == "tight" else stored)
-        # 搜索框占位文字：紧凑档缩短，避免显示成「搜…」。
-        search = getattr(self, "cue_search", None)
-        if search is not None:
-            placeholder = getattr(search, "_full_placeholder", None)
-            if placeholder is None:
-                placeholder = search.placeholderText()
-                search._full_placeholder = placeholder
-            search.setPlaceholderText("搜索" if mode == "tight" else placeholder)
+        self._apply_cue_secondary_overflow(mode)
+
+    def _apply_cue_secondary_overflow(self, mode: str) -> None:
+        """窄屏时把次行控件收进「更多」菜单，宽屏时还原。
+
+        2026-10-19（用户："最小边框不要太小了 免得ui挤在一起"）：
+        字幕列表面板最小 240px，此时「搜索框 + 连续审核 + 筛选 + 视图 + AI 校对」
+        单排放不下。做法：紧凑档下这些控件从布局移除（父级设为面板本体），
+        由底部「更多」菜单以 QAction 形式提供同样功能；宽屏时再放回次行。
+        """
+        widgets = getattr(self, "_cue_secondary_widgets", None) or []
+        row = getattr(self, "_cue_secondary_row", None)
+        if not widgets or row is None:
+            return
+        overflow = mode == "tight"
+        if getattr(self, "_cue_secondary_overflow", None) == overflow:
+            return
+        self._cue_secondary_overflow = overflow
+        if overflow:
+            for widget in widgets:
+                row.removeWidget(widget)
+                widget.setParent(self)
+                widget.hide()
+        else:
+            for widget in widgets:
+                widget.setParent(self)
+                widget.show()
+                row.addWidget(widget)
 
     def _apply_responsive_splitter(self) -> None:
         """按窗口宽度按比例分配三栏（字幕列表 / 预览 / 工具面板）。
@@ -1706,10 +1711,12 @@ class SubtitleStudioPage(
             return
         self._responsive_split_bucket = bucket
 
-        # 比例：列表 22% / 预览 46% / 工具面板 32%（总和 100）。
-        ratios = (0.22, 0.46, 0.32)
-        # 下限随总宽度缩放，最小不低于可用空间的一半，避免某栏被压成 0。
-        min_left = max(180, min(340, int(total * 0.20)))
+        # 比例：列表 24% / 预览 45% / 工具面板 31%（总和 100）。
+        # 2026-10-19（用户："最小边框不要太小了"）：列表从 22% 提到 24%，
+        # 下限从 180 提到 240 —— 与 cue_list_panel.setMinimumWidth(240) 一致，
+        # 保证过滤 chips 与时间码列完整显示。
+        ratios = (0.24, 0.45, 0.31)
+        min_left = max(240, min(360, int(total * 0.22)))
         min_center = max(300, min(760, int(total * 0.42)))
         min_context = max(280, min(560, int(total * 0.26)))
         widths = [int(total * r) for r in ratios]
@@ -2833,6 +2840,28 @@ class SubtitleStudioPage(
 
     def _show_cue_more_menu(self) -> None:
         menu = create_studio_menu(self)
+        # 2026-10-19（用户："最小边框不要太小了 免得ui挤在一起"）：窄屏时次行控件
+        # （连续审核 / 筛选 / 视图 / AI 校对）被收纳，这里提供同样的入口。
+        if getattr(self, "_cue_secondary_overflow", False):
+            toggle = getattr(self, "continuous_review_toggle", None)
+            if toggle is not None:
+                action = menu.addAction(_icon("fa5s.sync"), "连续审核")
+                action.setCheckable(True)
+                action.setChecked(toggle.isChecked())
+                action.triggered.connect(toggle.setChecked)
+            view = getattr(self, "cue_view_button", None)
+            if view is not None:
+                action = menu.addAction(_icon("fa5s.table"), "表格视图")
+                action.setCheckable(True)
+                action.setChecked(view.isChecked())
+                action.triggered.connect(view.setChecked)
+            proof = getattr(self, "cue_proofread_button", None)
+            if proof is not None:
+                menu.addAction(_icon("fa5s.spell-check"), "AI 校对", proof.click)
+            filter_menu = getattr(self, "_show_filter_menu", None)
+            if callable(filter_menu):
+                menu.addAction(_icon("fa5s.filter"), "筛选当前字幕列表", filter_menu)
+            menu.addSeparator()
         cue_settings = menu.addAction(_icon("fa5s.sliders-h"), "显示当前 Cue 设置")
         cue_settings.triggered.connect(self._show_current_cue_settings)
         menu.addSeparator()

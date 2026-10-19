@@ -657,7 +657,9 @@ def _configure_windows_app_identity() -> None:
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "2ByteASR.Desktop.2026"
+            # 2026-10-19（用户：“任务栏上显示的还以之前的”）：品牌改名后必须换一个
+            # AppUserModelID，否则 Windows 会沿用 2ByteASR.Desktop.2026 缓存里的旧图标。
+            "MORL.SubtitleMatch.2026"
         )
     except (AttributeError, OSError):
         pass

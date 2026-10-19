@@ -1388,25 +1388,30 @@ class StudioWorkspaceBuilder:
         CueTableModel = self._cue_table_model_type
         panel = QFrame()
         panel.setObjectName("cueListPanel")
-        # 1920px at 175% DPI is only ~1097 logical px. Keep all three major
-        # regions visible while retaining the normal 380px list width at 100%.
-        # 2026-10-18（用户："画面增加多一点的自适应功能"）：下限 280 → 190，
-        # 让窄窗口优先保住预览画面（宽度由 _apply_responsive_splitter 分配）。
-        panel.setMinimumWidth(190)
+        # 2026-10-19（用户："重新设计一下左边的菜单的ui 我想要自适应大小 还有
+        # 最小边框不要太小了 免得ui挤在一起"）：最小宽度 190 → 240。
+        # 190px 时过滤 chips 会被压成残句、时间码列被裁；240px 是三栏布局下
+        # 字幕列表仍可读的下限（工具条 chips + 时间码 + 状态徽章都能完整显示）。
+        panel.setMinimumWidth(240)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 9, 8, 8)
-        layout.setSpacing(7)
+        layout.setContentsMargins(12, 8, 10, 8)
+        layout.setSpacing(6)
         title = QLabel("字幕列表")
         title.setObjectName("sectionTitle")
         title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
         title_row.addWidget(title, 1)
+        # 2026-10-19（用户："优化一下这里的ui太急了"）：AI 校对改放到工具条，
+        # 标题行只留文字，避免右侧又挤一个宽按钮。
         page.cue_proofread_button = QPushButton("AI 校对")
-        page.cue_proofread_button.setObjectName("studioButton")
+        page.cue_proofread_button.setObjectName("filterChip")
+        page.cue_proofread_button.setCursor(Qt.CursorShape.PointingHandCursor)
         install_themed_icon(page.cue_proofread_button, "fa5s.spell-check", "secondary")
         bind_text(page.cue_proofread_button, 'AI 校对')
         bind_text(page.cue_proofread_button, '打开当前工程的 AI 词库校对，勾选建议后应用', property='toolTip')
         page.cue_proofread_button.clicked.connect(page.glossary_proofread_requested.emit)
-        title_row.addWidget(page.cue_proofread_button)
+        page._cue_proofread_chip = page.cue_proofread_button  # 由工具条挂载
         layout.addLayout(title_row)
         # 四十二轮：后台识别状态芯片——识别启动后弹窗关闭，运行/完成/失败
         # 状态与取消按钮都落在这里，用户可以继续看视频编辑工程。
@@ -1427,48 +1432,84 @@ class StudioWorkspaceBuilder:
         chip_layout.addWidget(page.recognition_cancel_button)
         page.recognition_chip.hide()
         layout.addWidget(page.recognition_chip)
-        filters = QGridLayout()
-        filters.setHorizontalSpacing(4)
-        filters.setVerticalSpacing(4)
+        # 2026-10-19（用户："重新设计一下左边的菜单的ui 我想要自适应大小 还有
+        # 最小边框不要太小了 免得ui挤在一起"）：工具条拆成两行，按使用频率分层。
+        #   主行：过滤 chips + 开始审核  —— 一眼能看到的常用动作
+        #   次行：搜索 + 连续审核 + 筛选 + 视图  —— 需要时才用
+        # 宽度不足（<340px）时次行的次要控件折叠进「更多」菜单，
+        # 由 _sync_cue_list_density 控制，避免 chips 互相压扁。
         page.cue_filter_group = QButtonGroup(page)
         page.cue_filter_group.setExclusive(True)
         page.cue_filter_buttons: dict[str, QPushButton] = {}
-        for index, (key, caption) in enumerate(
-            (("all", "全部"), ("priority", "建议确认"), ("critical", "需要检查"))
+
+        primary = QHBoxLayout()
+        primary.setContentsMargins(0, 0, 0, 0)
+        primary.setSpacing(6)
+        for key, caption, tip in (
+            ("all", "全部", "显示全部字幕"),
+            ("priority", "建议确认", "只看 AI 建议确认的条目"),
+            ("critical", "需要检查", "只看待检查的条目"),
         ):
             button = QPushButton(caption)
             button.setObjectName("filterChip")
             button.setCheckable(True)
+            button.setToolTip(tip)
             button.clicked.connect(lambda _checked=False, value=key: page._set_cue_filter(value))
             page.cue_filter_group.addButton(button)
             page.cue_filter_buttons[key] = button
-            filters.addWidget(button, index // 2, index % 2)
+            primary.addWidget(button)
         page.cue_filter_buttons["all"].setChecked(True)
-        page.review_entry_button = QPushButton("▶ 开始审核")
-        page.review_entry_button.setObjectName("reviewEntryButton")
+        primary.addStretch(1)
+        # 开始审核：主行末尾，图标+文字，比整行大按钮省一半高度。
+        page.review_entry_button = QPushButton("开始审核")
+        page.review_entry_button.setObjectName("filterChip")
+        page.review_entry_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        install_themed_icon(page.review_entry_button, "fa5s.play-circle", "secondary")
         bind_text(page.review_entry_button, '进入优先审核；快捷键 R', property='toolTip')
         page.review_entry_button.clicked.connect(lambda: page._set_review_mode(not page._review_mode))
-        filters.addWidget(page.review_entry_button, 1, 1)
-        layout.addLayout(filters)
+        primary.addWidget(page.review_entry_button)
+        # AI 校对（次频操作，放次行）
+        page.cue_proofread_button = QPushButton("AI 校对")
+        page.cue_proofread_button.setObjectName("filterChip")
+        page.cue_proofread_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        install_themed_icon(page.cue_proofread_button, "fa5s.spell-check", "secondary")
+        bind_text(page.cue_proofread_button, 'AI 校对')
+        bind_text(page.cue_proofread_button, '打开当前工程的 AI 词库校对，勾选建议后应用', property='toolTip')
+        page.cue_proofread_button.clicked.connect(page.glossary_proofread_requested.emit)
+        layout.addLayout(primary)
+
+        secondary = QHBoxLayout()
+        secondary.setContentsMargins(0, 0, 0, 0)
+        secondary.setSpacing(6)
+        page.cue_search = QLineEdit()
+        page.cue_search.setObjectName("cueSearch")
+        bind_text(page.cue_search, '搜索文本、说话人', property='placeholderText')
+        page.cue_search.setClearButtonEnabled(True)
+        page.cue_search.setMinimumWidth(90)
+        page.cue_search.textChanged.connect(lambda value: page.cue_model.set_query(value))
+        secondary.addWidget(page.cue_search, 1)
         page.continuous_review_toggle = QCheckBox("连续审核")
         bind_text(page.continuous_review_toggle, '播放当前审核字幕前后语境，并在片段结束后暂停', property='toolTip')
         page.continuous_review_toggle.toggled.connect(page._set_continuous_review)
-        layout.addWidget(page.continuous_review_toggle)
-        search_row = QHBoxLayout()
-        page.cue_search = QLineEdit()
-        page.cue_search.setObjectName("cueSearch")
-        bind_text(page.cue_search, '搜索文本、说话人...', property='placeholderText')
-        page.cue_search.setClearButtonEnabled(True)
-        page.cue_search.textChanged.connect(lambda value: page.cue_model.set_query(value))
-        search_row.addWidget(page.cue_search, 1)
-        filter_button = page._tool_button("fa5s.filter", "筛选当前字幕列表", page._show_filter_menu)
-        page.cue_filter_button = filter_button
-        search_row.addWidget(filter_button)
+        secondary.addWidget(page.continuous_review_toggle)
+        page.cue_filter_button = page._tool_button("fa5s.filter", "筛选当前字幕列表", page._show_filter_menu)
+        secondary.addWidget(page.cue_filter_button)
         page.cue_view_button = page._tool_button("fa5s.table", "表格视图 · 关闭后按双行阅读显示（时间、说话人、状态在上，句子在下）",
                                                   lambda: None)
         page.cue_view_button.setCheckable(True)
-        search_row.addWidget(page.cue_view_button)
-        layout.addLayout(search_row)
+        secondary.addWidget(page.cue_view_button)
+        # AI 校对：次频操作，放次行末尾。
+        secondary.addWidget(page.cue_proofread_button)
+        # 窄屏收纳：次行放不下时，把「连续审核 / 筛选 / 视图 / AI 校对」收进
+        # 「更多」菜单，只保留搜索框（搜索是次行里最常用的）。
+        page._cue_secondary_row = secondary
+        page._cue_secondary_widgets = [
+            page.continuous_review_toggle,
+            page.cue_filter_button,
+            page.cue_view_button,
+            page.cue_proofread_button,
+        ]
+        layout.addLayout(secondary)
 
         page.cue_table = ResponsiveCueTableView()
         page.cue_table.setObjectName("cueTable")
@@ -1487,7 +1528,7 @@ class StudioWorkspaceBuilder:
         page.cue_table.setAlternatingRowColors(True)
         page.cue_table.setShowGrid(False)
         page.cue_table.verticalHeader().hide()
-        page.cue_table.verticalHeader().setDefaultSectionSize(42)
+        page.cue_table.verticalHeader().setDefaultSectionSize(52)
         page.cue_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         badge_delegate = CueBadgeDelegate(page.cue_table)
         page.cue_table.setItemDelegateForColumn(2, badge_delegate)
@@ -1619,24 +1660,23 @@ class StudioWorkspaceBuilder:
         layout.addWidget(page.cue_empty_state, 1)
 
         footer = QHBoxLayout()
-        footer.addWidget(QLabel("跳转"))
+        footer.setSpacing(4)
         page.jump_spin = QSpinBox()
         page.jump_spin.setRange(1, 1)
-        page.jump_spin.setFixedWidth(70)
+        page.jump_spin.setFixedWidth(62)
+        page.jump_spin.setToolTip('输入序号后回车跳转')
         page.jump_spin.editingFinished.connect(page._jump_to_row)
         footer.addWidget(page.jump_spin)
         page.cue_total_label = QLabel("/ 0")
         page.cue_total_label.setObjectName("studioSaveState")
         footer.addWidget(page.cue_total_label)
         footer.addStretch(1)
-        previous = QPushButton("上一条")
-        previous.setObjectName("studioButton")
-        previous.clicked.connect(lambda: page._step_cue(-1))
-        page.cue_prev_button = previous  # 窄屏改为单字箭头
+        # 2026-10-19（用户："优化一下这里的ui太急了"）：上/下一条用图标按钮，
+        # 不再占两整行文字；「更多」并入同一行。
+        previous = page._tool_button("fa5s.chevron-up", "上一条字幕 (↑)", lambda: page._step_cue(-1))
+        page.cue_prev_button = previous
         footer.addWidget(previous)
-        following = QPushButton("下一条")
-        following.setObjectName("studioButton")
-        following.clicked.connect(lambda: page._step_cue(1))
+        following = page._tool_button("fa5s.chevron-down", "下一条字幕 (↓)", lambda: page._step_cue(1))
         page.cue_next_button = following
         footer.addWidget(following)
         more = page._tool_button("fa5s.ellipsis-h", "更多字幕列表操作", page._show_cue_more_menu)

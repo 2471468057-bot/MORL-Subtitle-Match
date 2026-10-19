@@ -158,6 +158,7 @@ QWidget#studioTimelineCommandBar QPushButton#studioButton:checked {{ background:
 QPushButton#filterChip {{
     background: transparent; color: {theme.text_secondary}; border: 1px solid {theme.border};
     border-radius: {t.control_radius}px; min-height: 32px; padding: 0 10px;
+    min-width: 46px;
     font-family: {UI_FONT_STACK}; font-size: {t.label_size}px; font-weight: 500;
 }}
 QPushButton#filterChip:hover {{ background: {theme.selected}; color: {theme.text}; border-color: {theme.border_strong}; }}

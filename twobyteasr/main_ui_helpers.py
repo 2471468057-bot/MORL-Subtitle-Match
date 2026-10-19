@@ -11,7 +11,9 @@ from PySide6.QtWidgets import QFileDialog
 from twobyteasr.runtime_paths import detect_install_root
 
 APP_ROOT = detect_install_root()
-APP_ICON_SOURCE_PATH = APP_ROOT / "assets" / "2byteasr-icon-transparent.png"
+# 2026-10-19: 任务栏/窗口图标改用**带紫底**的 MORL 图标。
+# 之前用透明版（白色 M + 金色条），在浅色任务栏(243,243,243)上白色笔画几乎不可见。
+APP_ICON_SOURCE_PATH = APP_ROOT / "assets" / "morl-icon-app.png"
 APP_ICON_FALLBACK_PATH = APP_ROOT / "assets" / "2byteasr-icon.jpg"
 APP_ICON_PATH = APP_ROOT / "assets" / "app_icon.ico"  # Dedicated Taskbar/app icon (face-zoomed)
 LAST_MEDIA_DIRECTORY_KEY = "paths/last_media_directory"
